@@ -87,13 +87,29 @@ impl Storage {
                 return Err(format!("could not read {}: {error}", self.path.display()).into());
             }
         };
-        serde_json::from_slice(&contents).map_err(|error| {
+        let invalid_file = |problem: String| {
             format!(
-                "invalid task file {}: {error}. The file has been left untouched; repair it or move it aside before restarting",
+                "invalid task file {}: {problem}. The file has been left untouched; repair it or move it aside before restarting",
                 self.path.display()
             )
-            .into()
-        })
+        };
+        let tasks: Vec<Task> =
+            serde_json::from_slice(&contents).map_err(|error| invalid_file(error.to_string()))?;
+        for (index, task) in tasks.iter().enumerate() {
+            let problem = if task.text.is_empty() {
+                Some("text is empty")
+            } else if task.text.trim() != task.text {
+                Some("text has leading or trailing whitespace")
+            } else if task.text.chars().any(char::is_control) {
+                Some("text contains a control character")
+            } else {
+                None
+            };
+            if let Some(problem) = problem {
+                return Err(invalid_file(format!("task {} {problem}", index + 1)).into());
+            }
+        }
+        Ok(tasks)
     }
 
     pub fn save(&self, tasks: &[Task]) -> Result<()> {
@@ -504,6 +520,68 @@ pub mod tests {
             assert!(fixture.storage.load().is_err());
             assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), invalid);
         }
+    }
+
+    #[test]
+    fn invalid_task_text_is_rejected_without_changing_the_file() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+        let invalid = [
+            "",
+            " ",
+            " padded",
+            "padded ",
+            "\u{2003}padded",
+            "padded\u{a0}",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .chain(
+            (0..=0x1f)
+                .chain(0x7f..=0x9f)
+                .map(|code| format!("before{}after", char::from_u32(code).unwrap())),
+        );
+        for text in invalid {
+            let tasks = vec![
+                Task {
+                    text: "valid".into(),
+                    completed: false,
+                },
+                Task {
+                    text,
+                    completed: true,
+                },
+            ];
+            let original = serde_json::to_vec_pretty(&tasks).unwrap();
+            fs::write(fixture.task_path(), &original).unwrap();
+            let error = fixture.storage.load().unwrap_err().to_string();
+            assert!(error.contains("invalid task file"));
+            assert!(error.contains("task 2 text"));
+            assert!(error.contains("left untouched"));
+            assert_eq!(fs::read(fixture.task_path()).unwrap(), original);
+            assert_eq!(
+                fs::read_dir(fixture.task_path().parent().unwrap())
+                    .unwrap()
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn valid_unicode_and_long_task_text_loads_unchanged() {
+        let fixture = Fixture::new();
+        let tasks = vec![
+            Task {
+                text: "日本語 e\u{301} 👩‍💻 👍🏽 — [punctuation!]  spaces\u{a0}inside\u{2003}text\u{2028}and\u{2029}text".into(),
+                completed: true,
+            },
+            Task { text: "long🪷".repeat(100_000), completed: false },
+        ];
+        fixture.storage.save(&tasks).unwrap();
+        let original = fs::read(fixture.task_path()).unwrap();
+        assert_eq!(fixture.storage.load().unwrap(), tasks);
+        assert_eq!(fs::read(fixture.task_path()).unwrap(), original);
     }
 
     #[test]

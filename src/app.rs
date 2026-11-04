@@ -1181,7 +1181,7 @@ mod tests {
         use KeyCode::{Char, Enter};
         let fixture = Fixture::new();
         let mut app = app_with_tasks(3);
-        app.tasks[0].text = "wrapped task ".repeat(30);
+        app.tasks[0].text = "wrapped task ".repeat(30).trim_end().to_owned();
         let mut snapshots = Vec::new();
         for keys in [
             vec![Char('a'), Char('n'), Enter],
