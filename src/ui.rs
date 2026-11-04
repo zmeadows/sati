@@ -226,7 +226,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             _ if app.tasks.is_empty() => vec![vec![("u", "Undo"), ("w", "Wrap"), ("q", "Quit")]],
             _ => vec![
                 vec![("j/k", "Navigate"), ("Space", "Toggle"), ("w", "Wrap")],
-                vec![("a", "Add"), ("e", "Edit"), ("d", "Delete"), ("u", "Undo")],
+                vec![("a/e", "Add/edit"), ("d", "Delete"), ("u", "Undo")],
                 vec![("x", "Clear done"), ("D", "Clear all"), ("q", "Quit")],
             ],
         };
@@ -235,7 +235,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         }
         let mut lines = wrap_shortcuts(&rows, width);
         // Keep at most three hint rows, dropping secondary actions first.
-        for omit in ["x", "D", "w", "u", "e", "d", "j/k"] {
+        for omit in ["x", "D", "w", "u", "d", "j/k"] {
             if lines.len() <= 3 {
                 break;
             }
@@ -283,6 +283,41 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
 
 fn wrap_shortcuts(rows: &[Vec<(&str, &str)>], width: u16) -> Vec<Line<'static>> {
     let keys = Style::default().fg(TEXT).add_modifier(Modifier::BOLD);
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if column_count == 0 {
+        return Vec::new();
+    }
+    let mut widths = vec![(0, 0); column_count];
+    for row in rows {
+        for (column, (key, label)) in row.iter().enumerate() {
+            widths[column].0 = widths[column].0.max(key.width());
+            widths[column].1 = widths[column].1.max(label.width());
+        }
+    }
+    let aligned_width = 1
+        + widths
+            .iter()
+            .map(|(key, label)| key + 1 + label)
+            .sum::<usize>()
+        + 2 * (column_count - 1);
+    if aligned_width <= usize::from(width) {
+        return rows
+            .iter()
+            .filter(|row| !row.is_empty())
+            .map(|row| {
+                let mut line = Line::raw(" ");
+                for (column, (key, label)) in row.iter().enumerate() {
+                    let (key_width, label_width) = widths[column];
+                    line.push_span(Span::styled(format!("{key:<key_width$}"), keys));
+                    line.push_span(Span::raw(format!(" {label}")));
+                    if column + 1 < row.len() {
+                        line.push_span(Span::raw(" ".repeat(label_width - label.width() + 2)));
+                    }
+                }
+                line
+            })
+            .collect();
+    }
     let mut lines = Vec::new();
     for row in rows {
         let mut line = Line::raw(" ");
@@ -432,7 +467,7 @@ mod tests {
         }
         assert_eq!(
             text(&app, 40),
-            " j/k Navigate  Space Toggle  w Wrap\n a Add  e Edit  d Delete  u Undo\n x Clear done  D Clear all  q Quit"
+            " j/k Navigate    Space Toggle     w Wrap\n a/e Add/edit    d     Delete     u Undo\n x   Clear done  D     Clear all  q Quit"
         );
         for mode in [
             Mode::Adding(String::new()),
