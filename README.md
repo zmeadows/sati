@@ -66,8 +66,9 @@ exit. Terminals without this support cannot distinguish held keys from separate
 presses, so repeat protection is unavailable there.
 
 While adding, type a task, then press `Enter` to save or `Esc` to cancel.
-`Backspace` removes a character. Surrounding whitespace is trimmed; blank tasks
-are ignored. List shortcuts are ordinary text while typing.
+`Backspace` removes a whole Unicode grapheme, including combined letters and
+joined emoji. Surrounding whitespace is trimmed; blank tasks are ignored. List
+shortcuts are ordinary text while typing.
 
 Press `e` to edit a task using the same input field, prefilled with its current
 text. `Enter` saves and `Esc` cancels. Blank edits leave the task unchanged.

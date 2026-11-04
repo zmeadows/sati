@@ -3,6 +3,7 @@ use crossterm::event::{
 };
 use ratatui::{layout::Rect, widgets::ListState};
 use serde::{Deserialize, Serialize};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::storage::{Result, Storage};
 
@@ -180,7 +181,9 @@ impl App {
             Mode::Adding(input) | Mode::Editing { input, .. } => match key.code {
                 KeyCode::Esc => self.mode = Mode::Normal,
                 KeyCode::Backspace => {
-                    input.pop();
+                    if let Some((index, _)) = input.grapheme_indices(true).next_back() {
+                        input.truncate(index);
+                    }
                 }
                 KeyCode::Char(character) if !character.is_control() => input.push(character),
                 KeyCode::Enter => {
@@ -339,6 +342,48 @@ mod tests {
             ..KeyEvent::new(code, modifiers)
         };
         assert!(!app.key(key, &fixture.storage).unwrap());
+    }
+
+    #[test]
+    fn backspace_removes_whole_graphemes_in_add_and_edit_modes() {
+        for start in [KeyCode::Char('a'), KeyCode::Char('e')] {
+            let fixture = Fixture::new();
+            let mut app = app_with_tasks(1);
+            let original = app.tasks.clone();
+            press(&mut app, &fixture, start);
+            let prefix = match &app.mode {
+                Mode::Adding(input) | Mode::Editing { input, .. } => input.clone(),
+                _ => unreachable!(),
+            };
+            for grapheme in ["e\u{301}", "👩‍💻", "👨‍👩‍👧‍👦", "👍🏽", "🇺🇳"]
+            {
+                for character in grapheme.chars() {
+                    press(&mut app, &fixture, KeyCode::Char(character));
+                }
+                press(&mut app, &fixture, KeyCode::Backspace);
+                match &app.mode {
+                    Mode::Adding(input) | Mode::Editing { input, .. } => assert_eq!(input, &prefix),
+                    _ => unreachable!(),
+                }
+            }
+            app.paste("e\u{301}👩‍💻");
+            repeat(&mut app, &fixture, KeyCode::Backspace, KeyModifiers::NONE);
+            match &app.mode {
+                Mode::Adding(input) | Mode::Editing { input, .. } => {
+                    assert_eq!(input, &format!("{prefix}e\u{301}"))
+                }
+                _ => unreachable!(),
+            }
+            for _ in 0..prefix.graphemes(true).count() + 2 {
+                repeat(&mut app, &fixture, KeyCode::Backspace, KeyModifiers::NONE);
+            }
+            match &app.mode {
+                Mode::Adding(input) | Mode::Editing { input, .. } => assert!(input.is_empty()),
+                _ => unreachable!(),
+            }
+            assert_eq!(app.tasks, original);
+            assert!(!fixture.task_path().exists());
+        }
     }
 
     #[test]

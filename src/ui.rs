@@ -223,15 +223,15 @@ fn draw_input(frame: &mut Frame, area: Rect, input: &str) {
     }
     let prefix = if area.width >= 3 { "> " } else { "" };
     let capacity = usize::from(area.width).saturating_sub(prefix.len() + 1);
-    // Show the tail without splitting UTF-8 or double-width characters.
+    // Keep whole graphemes visible and reserve one cell for the cursor.
     let mut start = input.len();
     let mut width = 0;
-    for (index, character) in input.char_indices().rev() {
-        let character_width = unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
-        if width + character_width > capacity {
+    for (index, grapheme) in input.grapheme_indices(true).rev() {
+        let grapheme_width = grapheme.width();
+        if width + grapheme_width > capacity {
             break;
         }
-        width += character_width;
+        width += grapheme_width;
         start = index;
     }
     let visible = &input[start..];
@@ -239,7 +239,7 @@ fn draw_input(frame: &mut Frame, area: Rect, input: &str) {
         Paragraph::new(format!("{prefix}{visible}")).style(Style::default().fg(TEXT)),
         area,
     );
-    let cursor = (prefix.len() + visible.width()).min(usize::from(area.width - 1));
+    let cursor = (prefix.len() + width).min(usize::from(area.width - 1));
     frame.set_cursor_position((area.x + cursor as u16, area.y));
 }
 
@@ -391,6 +391,57 @@ mod tests {
         let rendered = screen(&terminal);
         assert!(rendered.contains("[ ] next"));
         assert!(rendered.contains("界z"));
+    }
+
+    #[test]
+    fn input_tail_and_cursor_follow_graphemes_and_cell_widths() {
+        for (width, tail, cursor) in [
+            (4, "e\u{301}", 3),
+            (5, "👩‍💻", 4),
+            (5, "👨‍👩‍👧‍👦", 4),
+            (5, "👍🏽", 4),
+            (5, "🇺🇳", 4),
+            (6, "👩‍💻a", 5),
+        ] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+            let input = format!("hidden text {tail}");
+            terminal
+                .draw(|frame| draw_input(frame, frame.area(), &input))
+                .unwrap();
+            assert_eq!(screen(&terminal).trim_end(), format!("> {tail}"));
+            assert_eq!(terminal.get_cursor_position().unwrap(), (cursor, 0).into());
+            assert_eq!(terminal.backend().buffer()[(cursor, 0)].symbol(), " ");
+        }
+    }
+
+    #[test]
+    fn narrow_input_viewports_hide_glyphs_that_cannot_fit_without_splitting_them() {
+        for width in 0..=5 {
+            for height in 0..=1 {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal
+                    .draw(|frame| draw_input(frame, frame.area(), "hidden 👩‍💻"))
+                    .unwrap();
+                if width == 0 || height == 0 {
+                    continue;
+                }
+                let expected = if width == 5 {
+                    "> 👩‍💻"
+                } else if width >= 3 {
+                    ">"
+                } else {
+                    ""
+                };
+                assert_eq!(screen(&terminal).trim_end(), expected);
+                let cursor = terminal.get_cursor_position().unwrap();
+                assert!(cursor.x < width);
+                assert_eq!(cursor.y, 0);
+                assert_eq!(
+                    terminal.backend().buffer()[(cursor.x, cursor.y)].symbol(),
+                    " "
+                );
+            }
+        }
     }
 
     #[test]
