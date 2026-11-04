@@ -15,6 +15,7 @@ pub struct Task {
 pub enum Mode {
     Normal,
     Adding(String),
+    Editing { index: usize, input: String },
     ConfirmClear,
 }
 
@@ -108,8 +109,12 @@ impl App {
         {
             return Ok(false);
         }
+        let edited_task = match &self.mode {
+            Mode::Editing { index, .. } => Some(*index),
+            _ => None,
+        };
         match &mut self.mode {
-            Mode::Adding(input) => match key.code {
+            Mode::Adding(input) | Mode::Editing { input, .. } => match key.code {
                 KeyCode::Esc => self.mode = Mode::Normal,
                 KeyCode::Backspace => {
                     input.pop();
@@ -119,12 +124,19 @@ impl App {
                     let text = input.trim().to_owned();
                     if !text.is_empty() {
                         let mut tasks = self.tasks.clone();
-                        tasks.push(Task {
-                            text,
-                            completed: false,
-                        });
-                        let selected = Some(tasks.len() - 1);
-                        self.replace(tasks, selected, storage)?;
+                        if let Some(index) = edited_task {
+                            if tasks[index].text != text {
+                                tasks[index].text = text;
+                                self.replace(tasks, Some(index), storage)?;
+                            }
+                        } else {
+                            tasks.push(Task {
+                                text,
+                                completed: false,
+                            });
+                            let selected = Some(tasks.len() - 1);
+                            self.replace(tasks, selected, storage)?;
+                        }
                     }
                     self.mode = Mode::Normal;
                 }
@@ -154,6 +166,14 @@ impl App {
                 KeyCode::Char('k') | KeyCode::Up => self.navigate(false, true),
                 KeyCode::Char(' ') | KeyCode::Enter => self.toggle(storage)?,
                 KeyCode::Char('a') => self.mode = Mode::Adding(String::new()),
+                KeyCode::Char('e') => {
+                    if let Some(index) = self.list.selected() {
+                        self.mode = Mode::Editing {
+                            index,
+                            input: self.tasks[index].text.clone(),
+                        };
+                    }
+                }
                 KeyCode::Char('d') => {
                     if let Some(index) = self.list.selected() {
                         let mut tasks = self.tasks.clone();
@@ -234,6 +254,94 @@ mod tests {
     fn press(app: &mut App, fixture: &Fixture, code: KeyCode) -> bool {
         app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
             .unwrap()
+    }
+
+    #[test]
+    fn editing_prefills_text_and_saves_without_changing_order_or_completion() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        app.list.select(Some(1));
+        app.tasks[1].completed = true;
+        press(&mut app, &fixture, KeyCode::Char('e'));
+        assert_eq!(
+            app.mode,
+            Mode::Editing {
+                index: 1,
+                input: "task 1".into()
+            }
+        );
+        press(&mut app, &fixture, KeyCode::Backspace);
+        for character in "日本語🪷".chars() {
+            press(&mut app, &fixture, KeyCode::Char(character));
+        }
+        press(&mut app, &fixture, KeyCode::Backspace);
+        // List shortcuts remain text, and navigation keys cannot change the edit target.
+        for character in " qjadDeK ".chars() {
+            assert!(!press(&mut app, &fixture, KeyCode::Char(character)));
+        }
+        press(&mut app, &fixture, KeyCode::Down);
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.list.selected(), Some(1));
+        assert_eq!(app.tasks[0].text, "task 0");
+        assert_eq!(app.tasks[1].text, "task 日本語 qjadDeK");
+        assert!(app.tasks[1].completed);
+        assert_eq!(app.tasks[2].text, "task 2");
+        assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+    }
+
+    #[test]
+    fn cancelled_blank_and_unchanged_edits_do_not_write() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(1);
+        let original = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char('e'));
+        press(&mut app, &fixture, KeyCode::Char('x'));
+        press(&mut app, &fixture, KeyCode::Esc);
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.tasks, original);
+        press(&mut app, &fixture, KeyCode::Char('e'));
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert_eq!(app.mode, Mode::Normal);
+        press(&mut app, &fixture, KeyCode::Char('e'));
+        for _ in 0..original[0].text.chars().count() {
+            press(&mut app, &fixture, KeyCode::Backspace);
+        }
+        press(&mut app, &fixture, KeyCode::Char(' '));
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.tasks, original);
+        assert_eq!(app.list.selected(), Some(0));
+        assert!(!fixture.task_path().exists());
+        let mut empty = app_with_tasks(0);
+        press(&mut empty, &fixture, KeyCode::Char('e'));
+        assert_eq!(empty.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn failed_edit_save_preserves_original_and_input() {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.directory.join("data"), "blocking file").unwrap();
+        let mut app = app_with_tasks(1);
+        let original = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char('e'));
+        press(&mut app, &fixture, KeyCode::Char('x'));
+        assert!(
+            app.key(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &fixture.storage
+            )
+            .is_err()
+        );
+        assert_eq!(app.tasks, original);
+        assert_eq!(app.list.selected(), Some(0));
+        assert_eq!(
+            app.mode,
+            Mode::Editing {
+                index: 0,
+                input: "task 0x".into()
+            }
+        );
     }
 
     #[test]

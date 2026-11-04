@@ -19,7 +19,7 @@ ordered list, without projects, tags, scheduling, or other productivity features
 └────────────────────────────────────────────────┘
 
  j/k Navigate  Space Toggle  a Add    q Quit
- J/K Move      d     Delete  D Clear
+ J/K Move      d     Delete  D Clear  e Edit
 ```
 
 The selected checkbox has a muted orange accent. Completed text is dimmed and
@@ -27,7 +27,7 @@ struck through; completing a task leaves it in place.
 
 ## Features
 
-- Add and delete tasks.
+- Add, edit, and delete tasks.
 - Toggle completion.
 - Navigate with the keyboard or mouse.
 - Move tasks up or down with the keyboard.
@@ -44,6 +44,7 @@ struck through; completing a task leaves it in place.
 | `Shift+k` (`K`) / `Shift+Up` | Move the selected task up one row |
 | `Space` / `Enter` | Toggle the selected task |
 | `a` | Add a task |
+| `e` | Edit the selected task's text |
 | `d` | Delete the selected task immediately |
 | `D` (Shift+D) | Confirm clearing all tasks |
 | `Esc` | Cancel input or confirmation; no action in normal mode |
@@ -55,6 +56,10 @@ at the first or last row without wrapping.
 While adding, type a task, then press `Enter` to save or `Esc` to cancel.
 `Backspace` removes a character. Surrounding whitespace is trimmed; blank tasks
 are ignored. List shortcuts are ordinary text while typing.
+
+Press `e` to edit a task using the same input field, prefilled with its current
+text. `Enter` saves and `Esc` cancels. Blank edits leave the task unchanged.
+Editing preserves the task's position, completion state, and selection.
 
 In the clear dialog, **only `Enter` confirms**; `Esc` cancels. Other keys do nothing.
 

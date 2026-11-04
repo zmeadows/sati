@@ -18,9 +18,9 @@ const BORDER: Color = Color::Rgb(80, 73, 69);
 
 pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let area = frame.area();
-    let adding = matches!(app.mode, Mode::Adding(_));
+    let entering_text = matches!(app.mode, Mode::Adding(_) | Mode::Editing { .. });
     // Give the checklist priority when height is limited; input always gets a row.
-    let input_height = u16::from(adding && area.height > 0);
+    let input_height = u16::from(entering_text && area.height > 0);
     let legend_height = if area.height >= 6 + input_height {
         3
     } else {
@@ -40,7 +40,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
 
     draw_tasks(frame, app, rows);
 
-    if let Mode::Adding(input) = &app.mode {
+    if let Mode::Adding(input) | Mode::Editing { input, .. } = &app.mode {
         draw_input(frame, sections[1], input);
     }
     draw_shortcuts(frame, sections[2]);
@@ -189,7 +189,7 @@ fn draw_shortcuts(frame: &mut Frame, area: Rect) {
         [("j/k", "Navigate"), ("J/K", "Move")],
         [("Space", "Toggle"), ("d", "Delete")],
         [("a", "Add"), ("D", "Clear")],
-        [("q", "Quit"), ("", "")],
+        [("q", "Quit"), ("e", "Edit")],
     ];
     let mut rows = [vec![Span::raw(" ")], vec![Span::raw(" ")]];
     for column in columns {
@@ -293,6 +293,10 @@ mod tests {
                 for mode in [
                     Mode::Normal,
                     Mode::Adding("Long input 日本語 🪷".into()),
+                    Mode::Editing {
+                        index: 0,
+                        input: "Existing text 日本語 🪷".into(),
+                    },
                     Mode::ConfirmClear,
                 ] {
                     app.mode = mode;
