@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -35,9 +35,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         Constraint::Length(legend_height),
     ])
     .split(area);
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
+        .border_type(if app.rounded {
+            BorderType::Rounded
+        } else {
+            BorderType::Plain
+        })
         .border_style(Style::default().fg(BORDER));
+    // Hide the title when it cannot fit intact between the corners.
+    if app.logo && sections[0].width >= 8 {
+        block = block.title(Line::styled(" sati ", Style::default().fg(MUTED)).left_aligned());
+    }
     let rows = block.inner(sections[0]);
     frame.render_widget(block, sections[0]);
 
@@ -291,7 +300,7 @@ mod tests {
             text: "日本語 🪷".into(),
             completed: false,
         }]);
-        for width in [0, 1, 2, 3, 8, 40] {
+        for width in [0, 1, 2, 3, 4, 5, 6, 7, 8, 40] {
             for height in [0, 1, 2, 3, 6, 12] {
                 terminal.backend_mut().resize(width, height);
                 for mode in [
