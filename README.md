@@ -59,6 +59,12 @@ to show it in full, leaving more room for the checklist.
 Moving a task keeps it selected and saves the new order immediately. Moves stop
 at the first or last row without wrapping.
 
+On terminals supporting the kitty keyboard protocol (including Foot), holding
+navigation keys continues moving, and text entry repeats normally. Other actions
+ignore repeats. sati enables this protocol for its session and restores it on
+exit. Terminals without this support cannot distinguish held keys from separate
+presses, so repeat protection is unavailable there.
+
 While adding, type a task, then press `Enter` to save or `Esc` to cancel.
 `Backspace` removes a character. Surrounding whitespace is trimmed; blank tasks
 are ignored. List shortcuts are ordinary text while typing.

@@ -6,7 +6,10 @@ use std::{io, panic, process::ExitCode};
 
 use crossterm::{
     cursor::Show,
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
 };
 
@@ -14,6 +17,13 @@ use app::App;
 use storage::{Result, Storage};
 
 const USAGE: &str = "Usage: sati [--no-wrap] [--accent '#RRGGBB']";
+
+// Report repeats for plain characters and Enter too; alternate keys preserve shifted text.
+const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        .union(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
+        .union(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
+        .union(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS);
 
 #[derive(Debug, PartialEq)]
 struct Options {
@@ -49,20 +59,29 @@ fn run() -> Result<()> {
             return Err(error.into());
         }
     };
-    // Ratatui's hook restores raw mode and the alternate screen; also release the mouse.
+    // Restore keyboard reporting and mouse capture before Ratatui leaves the alternate screen.
     let previous_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
-        let _ = execute!(io::stdout(), DisableMouseCapture, Show);
+        let _ = execute!(
+            io::stdout(),
+            PopKeyboardEnhancementFlags,
+            DisableMouseCapture,
+            Show
+        );
         previous_hook(info);
     }));
 
     let result = (|| -> Result<()> {
-        execute!(io::stdout(), EnableMouseCapture)?;
+        execute!(
+            io::stdout(),
+            EnableMouseCapture,
+            PushKeyboardEnhancementFlags(KEYBOARD_FLAGS)
+        )?;
         loop {
             let mut rows = ratatui::layout::Rect::default();
             terminal.draw(|frame| rows = ui::draw(frame, &mut app))?;
             match event::read()? {
-                Event::Key(key) if key.kind != KeyEventKind::Release => {
+                Event::Key(key) => {
                     if app.key(key, &storage)? {
                         break;
                     }
@@ -73,10 +92,15 @@ fn run() -> Result<()> {
         }
         Ok(())
     })();
-    let mouse_result = execute!(io::stdout(), DisableMouseCapture, Show);
+    let input_result = execute!(
+        io::stdout(),
+        PopKeyboardEnhancementFlags,
+        DisableMouseCapture,
+        Show
+    );
     let restore_result = ratatui::try_restore();
     result?;
-    mouse_result?;
+    input_result?;
     restore_result?;
     Ok(())
 }

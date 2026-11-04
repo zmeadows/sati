@@ -1,4 +1,6 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::{layout::Rect, widgets::ListState};
 use serde::{Deserialize, Serialize};
 
@@ -145,6 +147,24 @@ impl App {
     }
 
     pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
+        let repeat_allowed = match &self.mode {
+            Mode::Normal => {
+                key.modifiers.is_empty()
+                    && matches!(
+                        key.code,
+                        KeyCode::Char('j' | 'k') | KeyCode::Up | KeyCode::Down
+                    )
+            }
+            Mode::Adding(_) | Mode::Editing { .. } => {
+                matches!(key.code, KeyCode::Char(_) | KeyCode::Backspace)
+            }
+            Mode::ConfirmClear => false,
+        };
+        if key.kind == KeyEventKind::Release
+            || (key.kind == KeyEventKind::Repeat && !repeat_allowed)
+        {
+            return Ok(false);
+        }
         // Modified shortcuts must not turn control/alt combinations into edits.
         if key
             .modifiers
@@ -299,6 +319,128 @@ mod tests {
     fn press(app: &mut App, fixture: &Fixture, code: KeyCode) -> bool {
         app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
             .unwrap()
+    }
+
+    fn repeat(app: &mut App, fixture: &Fixture, code: KeyCode, modifiers: KeyModifiers) {
+        let key = KeyEvent {
+            kind: KeyEventKind::Repeat,
+            ..KeyEvent::new(code, modifiers)
+        };
+        assert!(!app.key(key, &fixture.storage).unwrap());
+    }
+
+    #[test]
+    fn repeated_navigation_wraps_without_modifying_tasks() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        let original = app.tasks.clone();
+        for (code, selected) in [
+            (KeyCode::Char('j'), 1),
+            (KeyCode::Down, 2),
+            (KeyCode::Char('j'), 0),
+            (KeyCode::Char('k'), 2),
+            (KeyCode::Up, 1),
+        ] {
+            repeat(&mut app, &fixture, code, KeyModifiers::NONE);
+            assert_eq!(app.list.selected(), Some(selected));
+        }
+        assert_eq!(app.tasks, original);
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn repeated_actions_and_releases_preserve_tasks_selection_mode_and_undo() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        app.list.select(Some(1));
+        let original = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char(' '));
+        let changed = app.tasks.clone();
+        for code in [
+            KeyCode::Char(' '),
+            KeyCode::Enter,
+            KeyCode::Char('d'),
+            KeyCode::Char('D'),
+            KeyCode::Char('x'),
+            KeyCode::Char('u'),
+            KeyCode::Char('J'),
+            KeyCode::Char('K'),
+            KeyCode::Char('a'),
+            KeyCode::Char('e'),
+            KeyCode::Char('q'),
+        ] {
+            repeat(&mut app, &fixture, code, KeyModifiers::NONE);
+        }
+        for code in [
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Up,
+            KeyCode::Down,
+        ] {
+            repeat(&mut app, &fixture, code, KeyModifiers::SHIFT);
+        }
+        let release = KeyEvent {
+            kind: KeyEventKind::Release,
+            ..KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)
+        };
+        assert!(!app.key(release, &fixture.storage).unwrap());
+        assert_eq!(app.tasks, changed);
+        assert_eq!(app.list.selected(), Some(1));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(fixture.storage.load().unwrap(), changed);
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks, original);
+    }
+
+    #[test]
+    fn text_repeats_work_but_repeated_enter_cannot_confirm_or_toggle() {
+        let fixture = Fixture::new();
+        for start in [KeyCode::Char('a'), KeyCode::Char('e')] {
+            let mut app = app_with_tasks(1);
+            let original = app.tasks.clone();
+            press(&mut app, &fixture, start);
+            for character in "uqd日本語".chars() {
+                repeat(
+                    &mut app,
+                    &fixture,
+                    KeyCode::Char(character),
+                    KeyModifiers::NONE,
+                );
+            }
+            repeat(&mut app, &fixture, KeyCode::Backspace, KeyModifiers::NONE);
+            repeat(&mut app, &fixture, KeyCode::Enter, KeyModifiers::NONE);
+            repeat(&mut app, &fixture, KeyCode::Esc, KeyModifiers::NONE);
+            match &app.mode {
+                Mode::Adding(input) | Mode::Editing { input, .. } => {
+                    assert!(input.ends_with("uqd日本"))
+                }
+                _ => panic!("repeat must not leave text input"),
+            }
+            assert_eq!(app.tasks, original);
+            press(&mut app, &fixture, KeyCode::Enter);
+            let confirmed = app.tasks.clone();
+            repeat(&mut app, &fixture, KeyCode::Enter, KeyModifiers::NONE);
+            assert_eq!(app.tasks, confirmed);
+            assert_eq!(fixture.storage.load().unwrap(), confirmed);
+            assert!(app.tasks.iter().all(|task| !task.completed));
+            press(&mut app, &fixture, KeyCode::Char('u'));
+            assert_eq!(app.tasks, original);
+        }
+    }
+
+    #[test]
+    fn clear_dialog_requires_a_pressed_enter() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(1);
+        let original = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char('D'));
+        repeat(&mut app, &fixture, KeyCode::Enter, KeyModifiers::NONE);
+        repeat(&mut app, &fixture, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.mode, Mode::ConfirmClear);
+        assert_eq!(app.tasks, original);
+        assert!(!fixture.task_path().exists());
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert!(app.tasks.is_empty());
     }
 
     #[test]
