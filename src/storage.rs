@@ -36,6 +36,29 @@ impl Storage {
         })
     }
 
+    pub fn lock(&self) -> Result<File> {
+        let directory = self
+            .path
+            .parent()
+            .expect("task file has a parent directory");
+        fs::create_dir_all(directory)
+            .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
+        let path = directory.join("tasks.lock");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|error| format!("could not open {}: {error}", path.display()))?;
+        // Keep this file open and never unlink it: every instance must lock the same inode.
+        match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => Ok(file),
+            Err(rustix::io::Errno::WOULDBLOCK) => Err("already running".into()),
+            Err(error) => Err(format!("could not lock {}: {error}", path.display()).into()),
+        }
+    }
+
     pub fn load(&self) -> Result<Vec<Task>> {
         let contents = match fs::read(&self.path) {
             Ok(contents) => contents,
@@ -145,6 +168,85 @@ pub mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.directory);
         }
+    }
+
+    #[test]
+    fn lock_stays_exclusive_across_saves_and_is_released_without_removing_file() {
+        let fixture = Fixture::new();
+        let held = fixture.storage.lock().unwrap();
+        let path = fixture.task_path().parent().unwrap().join("tasks.lock");
+        assert!(path.is_file());
+        assert!(fixture.storage.load().unwrap().is_empty());
+        assert!(
+            fixture
+                .storage
+                .lock()
+                .unwrap_err()
+                .to_string()
+                .contains("already running")
+        );
+        let tasks = vec![Task {
+            text: "Keep me".into(),
+            completed: false,
+        }];
+        fixture.storage.save(&tasks).unwrap();
+        fixture.storage.save(&[]).unwrap();
+        assert!(
+            fixture
+                .storage
+                .lock()
+                .unwrap_err()
+                .to_string()
+                .contains("already running")
+        );
+        drop(held);
+        assert!(path.is_file());
+        let _reacquired = fixture.storage.lock().unwrap();
+    }
+
+    #[test]
+    fn independent_directories_can_be_locked_but_aliases_cannot() {
+        let first = Fixture::new();
+        let second = Fixture::new();
+        let _first_lock = first.storage.lock().unwrap();
+        let _second_lock = second.storage.lock().unwrap();
+        let alias = second.directory.join("alias");
+        std::os::unix::fs::symlink(first.task_path().parent().unwrap(), &alias).unwrap();
+        let same_directory = Storage {
+            path: alias.join("tasks.json"),
+        };
+        assert!(
+            same_directory
+                .lock()
+                .unwrap_err()
+                .to_string()
+                .contains("already running")
+        );
+    }
+
+    #[test]
+    fn lock_setup_failures_are_reported() {
+        let fixture = Fixture::new();
+        let directory = fixture.task_path().parent().unwrap();
+        fs::write(directory, "blocking file").unwrap();
+        assert!(
+            fixture
+                .storage
+                .lock()
+                .unwrap_err()
+                .to_string()
+                .contains("could not create")
+        );
+        fs::remove_file(directory).unwrap();
+        fs::create_dir_all(directory.join("tasks.lock")).unwrap();
+        assert!(
+            fixture
+                .storage
+                .lock()
+                .unwrap_err()
+                .to_string()
+                .contains("could not open")
+        );
     }
 
     #[test]

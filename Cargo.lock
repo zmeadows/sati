@@ -365,6 +365,7 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "ratatui",
+ "rustix",
  "serde",
  "serde_json",
  "unicode-segmentation",

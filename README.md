@@ -150,7 +150,7 @@ $XDG_DATA_HOME/sati/tasks.json
 
 When `XDG_DATA_HOME` is unset or empty, the path is
 `~/.local/share/sati/tasks.json`. A set `XDG_DATA_HOME` must be absolute.
-The data directory is created on the first change.
+The data directory is created at startup.
 
 Every change writes and syncs a temporary file in the same directory, then
 atomically replaces `tasks.json` and syncs the directory. If a save fails, sati
@@ -160,7 +160,14 @@ A failure to sync the directory after replacement is reported separately.
 Invalid JSON is reported at startup and left untouched. Repair it or move it
 aside before restarting.
 
-Use one running instance at a time; the data file is not locked between instances.
+Only one sati instance can use a data directory at a time. sati acquires an
+advisory lock on `tasks.lock` before reading tasks and holds it until exit.
+A second instance exits with `sati: already running`. Different data directories
+can be used independently.
+
+The kernel releases the lock even after a crash; there is no stale lock to clear.
+The empty `tasks.lock` file stays in the data directory to avoid locking races.
+Do not delete it while sati is running.
 
 ## Uninstalling
 

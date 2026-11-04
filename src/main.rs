@@ -49,6 +49,7 @@ fn run() -> Result<()> {
         return Ok(());
     };
     let storage = Storage::discover()?;
+    let _instance_lock = storage.lock()?;
     let mut app = App::new(storage.load()?);
     app.wrap = options.wrap;
     app.accent = options.accent;
