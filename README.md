@@ -1,9 +1,13 @@
 # sati
 
+[![CI](https://github.com/zmeadows/sati/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zmeadows/sati/actions/workflows/ci.yml?query=branch%3Amain) [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 > **sati** (Pāli) — mindfulness, recollection; the act of
 > remembering or keeping something in mind.
 
 sati is a minimalist, persistent terminal checklist. A quiet place for the things you need to do.
+
+Linux · macOS · Windows
 
 ## Preview
 
