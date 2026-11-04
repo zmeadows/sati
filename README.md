@@ -31,6 +31,7 @@ sati
 | --- | --- |
 | `j` / `Down`, `k` / `Up` | Select next / previous task |
 | `g` / `Home`, `G` / `End` | Select first / last task |
+| `Page Up` / `Page Down` | Select roughly one visible page up / down |
 | `J` / `Shift+Down`, `K` / `Shift+Up` | Move task down / up |
 | `Space` / `Enter` | Toggle completion |
 | `a` / `e` | Add / edit task |

@@ -43,6 +43,7 @@ pub struct App {
     pub accent: ratatui::style::Color,
     pub scroll: usize,
     pub row_tasks: Vec<usize>,
+    pub viewport_height: u16,
     pub reveal_selection: bool,
     history: VecDeque<UndoState>,
 }
@@ -62,6 +63,7 @@ impl App {
             accent: crate::ui::DEFAULT_ACCENT,
             scroll: 0,
             row_tasks: Vec::new(),
+            viewport_height: 0,
             reveal_selection: true,
             history: VecDeque::new(),
         }
@@ -82,6 +84,52 @@ impl App {
         };
         self.list.select(Some(next));
         self.reveal_selection = true;
+    }
+
+    fn page(&mut self, forward: bool) {
+        if self.tasks.is_empty() {
+            return;
+        }
+        let last = self.tasks.len() - 1;
+        let current = self.list.selected().unwrap_or(0);
+        let start = self
+            .row_tasks
+            .iter()
+            .position(|&task| task == current)
+            .unwrap_or(0);
+        // Anchor within a tall task when its beginning has scrolled offscreen.
+        let anchor = if self.row_tasks.get(self.scroll) == Some(&current) {
+            self.scroll
+        } else {
+            start
+        };
+        let height = usize::from(self.viewport_height.max(1));
+        let target = if forward {
+            anchor.saturating_add(height)
+        } else {
+            anchor.saturating_sub(height)
+        };
+        let candidate = self
+            .row_tasks
+            .get(target.min(self.row_tasks.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or(current)
+            .min(last);
+        // A page landing in the same wrapped task must still make task-level progress.
+        let next = if forward {
+            candidate.max((current + 1).min(last))
+        } else {
+            candidate.min(current.saturating_sub(1))
+        };
+        if next != current {
+            self.list.select(Some(next));
+            self.scroll = if forward {
+                self.scroll.saturating_add(height)
+            } else {
+                self.scroll.saturating_sub(height)
+            };
+            self.reveal_selection = true;
+        }
     }
 
     // Update memory only after a successful save. Any save error exits the event loop;
@@ -167,7 +215,11 @@ impl App {
                 key.modifiers.is_empty()
                     && matches!(
                         key.code,
-                        KeyCode::Char('j' | 'k') | KeyCode::Up | KeyCode::Down
+                        KeyCode::Char('j' | 'k')
+                            | KeyCode::Up
+                            | KeyCode::Down
+                            | KeyCode::PageUp
+                            | KeyCode::PageDown
                     )
             }
             Mode::Adding(_) | Mode::Editing { .. } => {
@@ -257,6 +309,8 @@ impl App {
                 }
                 KeyCode::Char('j') | KeyCode::Down => self.navigate(true),
                 KeyCode::Char('k') | KeyCode::Up => self.navigate(false),
+                KeyCode::PageUp => self.page(false),
+                KeyCode::PageDown => self.page(true),
                 KeyCode::Char('g' | 'G') | KeyCode::Home | KeyCode::End
                     if !self.tasks.is_empty() =>
                 {
@@ -509,6 +563,47 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Esc);
         press(&mut app, &fixture, KeyCode::Char('u'));
         assert_eq!(app.tasks, original);
+    }
+
+    #[test]
+    fn page_keys_are_safe_at_boundaries_and_in_input_modes() {
+        let fixture = Fixture::new();
+        for count in [0, 1, 3] {
+            let mut app = app_with_tasks(count);
+            app.row_tasks = (0..count).collect();
+            app.viewport_height = 2;
+            let original = app.tasks.clone();
+            for code in [
+                KeyCode::PageUp,
+                KeyCode::PageDown,
+                KeyCode::PageDown,
+                KeyCode::PageUp,
+            ] {
+                press(&mut app, &fixture, code);
+                assert_eq!(app.tasks, original);
+                assert!(!app.can_undo());
+                assert!(app.list.selected().is_none_or(|index| index < count));
+            }
+            for mode in [
+                Mode::Adding("input".into()),
+                Mode::Editing {
+                    index: 0,
+                    input: "input".into(),
+                },
+                Mode::ConfirmClear,
+            ] {
+                app.mode = mode;
+                let selected = app.list.selected();
+                press(&mut app, &fixture, KeyCode::PageDown);
+                press(&mut app, &fixture, KeyCode::PageUp);
+                assert_eq!(app.list.selected(), selected);
+                match &app.mode {
+                    Mode::Adding(input) | Mode::Editing { input, .. } => assert_eq!(input, "input"),
+                    mode => assert_eq!(*mode, Mode::ConfirmClear),
+                }
+            }
+        }
+        assert!(!fixture.task_path().exists());
     }
 
     #[test]

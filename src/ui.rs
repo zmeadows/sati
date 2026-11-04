@@ -68,6 +68,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
 }
 
 fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
+    app.viewport_height = area.height;
     app.row_tasks.clear();
     if app.tasks.is_empty() {
         app.scroll = 0;
@@ -587,6 +588,172 @@ mod tests {
                         })
                         .unwrap();
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn page_navigation_targets_visual_rows_in_mixed_task_heights() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut terminal = Terminal::new(TestBackend::new(18, 5)).unwrap();
+        let mut app = App::new(
+            [
+                "short",
+                "abcd abcd abcd",
+                "short",
+                "abcd abcd abcd abcd abcd",
+                "short",
+            ]
+            .map(|text| Task {
+                text: text.into(),
+                completed: false,
+            })
+            .into(),
+        );
+        app.keybinds = false;
+        let mut rows = Rect::default();
+        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        assert_eq!(rows.height, 3);
+        assert_eq!(app.row_tasks, [0, 1, 1, 2, 3, 3, 3, 4]);
+        for (code, selected) in [
+            (KeyCode::PageDown, 2),
+            (KeyCode::PageDown, 3),
+            (KeyCode::PageDown, 4),
+            (KeyCode::PageUp, 3),
+            (KeyCode::PageUp, 1),
+            (KeyCode::PageUp, 0),
+        ] {
+            app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
+                .unwrap();
+            assert_eq!(app.list.selected(), Some(selected));
+            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+            let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
+            assert!(app.row_tasks[app.scroll..end].contains(&selected));
+        }
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn page_navigation_uses_current_viewport_wrapping_and_resize() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut app = App::new(
+            (0..40)
+                .map(|index| Task {
+                    text: format!("task {index}"),
+                    completed: false,
+                })
+                .collect(),
+        );
+        // Include the real footer so page size excludes its rows as well as borders.
+        let mut rows = Rect::default();
+        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        assert_eq!(app.viewport_height, rows.height);
+        assert!(rows.height < 10);
+        let original = app.tasks.clone();
+        let mut press = |app: &mut App, code, kind| {
+            app.key(
+                KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind),
+                &fixture.storage,
+            )
+            .unwrap();
+            terminal.draw(|frame| rows = draw(frame, app)).unwrap();
+        };
+        let height = usize::from(app.viewport_height);
+        press(&mut app, KeyCode::PageDown, KeyEventKind::Press);
+        assert_eq!(app.list.selected(), Some(height));
+        assert_eq!(app.scroll, height);
+        press(&mut app, KeyCode::PageDown, KeyEventKind::Repeat);
+        assert_eq!(app.list.selected(), Some(2 * height));
+        press(&mut app, KeyCode::PageUp, KeyEventKind::Repeat);
+        assert_eq!(app.list.selected(), Some(height));
+        press(&mut app, KeyCode::PageDown, KeyEventKind::Release);
+        assert_eq!(app.list.selected(), Some(height));
+        for _ in 0..50 {
+            press(&mut app, KeyCode::PageDown, KeyEventKind::Press);
+        }
+        assert_eq!(app.list.selected(), Some(39));
+        for _ in 0..50 {
+            press(&mut app, KeyCode::PageUp, KeyEventKind::Press);
+        }
+        assert_eq!(app.list.selected(), Some(0));
+        assert_eq!(app.tasks, original);
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
+        drop(press);
+
+        app.keybinds = false;
+        app.tasks[1].text = "word ".repeat(60);
+        terminal.backend_mut().resize(18, 8);
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        let page = KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE);
+        let up = KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE);
+        app.key(page, &fixture.storage).unwrap();
+        assert_eq!(app.list.selected(), Some(1));
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        // Simulate reading partway through the oversized selected task with the mouse wheel.
+        app.scroll += 5;
+        app.reveal_selection = false;
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        app.key(page, &fixture.storage).unwrap();
+        assert_eq!(app.list.selected(), Some(2));
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        app.key(up, &fixture.storage).unwrap();
+        assert_eq!(app.list.selected(), Some(1));
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        app.key(up, &fixture.storage).unwrap();
+        assert_eq!(app.list.selected(), Some(0));
+
+        for (width, height, wrap) in [(18, 8, false), (40, 10, true), (30, 6, false), (1, 1, true)]
+        {
+            if app.wrap != wrap {
+                app.key(
+                    KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
+                    &fixture.storage,
+                )
+                .unwrap();
+            }
+            app.list.select(Some(0));
+            app.scroll = 0;
+            terminal.backend_mut().resize(width, height);
+            terminal
+                .draw(|frame| {
+                    draw(frame, &mut app);
+                })
+                .unwrap();
+            let expected = usize::from(app.viewport_height.max(1));
+            app.key(page, &fixture.storage).unwrap();
+            // Only task 1 wraps: with wrapping off, or a one-cell width, each task has one row.
+            assert_eq!(
+                app.list.selected(),
+                Some(if wrap && width > 6 { 1 } else { expected })
+            );
+            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+            if rows.height > 0 {
+                let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
+                assert!(app.row_tasks[app.scroll..end].contains(&app.list.selected().unwrap()));
             }
         }
     }
