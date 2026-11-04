@@ -76,6 +76,19 @@ impl App {
         Ok(())
     }
 
+    fn move_selected(&mut self, down: bool, storage: &Storage) -> Result<()> {
+        let Some(index) = self.list.selected() else {
+            return Ok(());
+        };
+        if (down && index == self.tasks.len() - 1) || (!down && index == 0) {
+            return Ok(());
+        }
+        let next = if down { index + 1 } else { index - 1 };
+        let mut tasks = self.tasks.clone();
+        tasks.swap(index, next);
+        self.replace(tasks, Some(next), storage)
+    }
+
     pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
         // Modified shortcuts must not turn control/alt combinations into edits.
         if key
@@ -116,6 +129,16 @@ impl App {
             },
             Mode::Normal => match key.code {
                 KeyCode::Char('q') => return Ok(true),
+                KeyCode::Char('J') => self.move_selected(true, storage)?,
+                KeyCode::Char('K') => self.move_selected(false, storage)?,
+                KeyCode::Char('j') | KeyCode::Down
+                    if key.modifiers.contains(KeyModifiers::SHIFT) =>
+                {
+                    self.move_selected(true, storage)?;
+                }
+                KeyCode::Char('k') | KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    self.move_selected(false, storage)?;
+                }
                 KeyCode::Char('j') | KeyCode::Down => self.navigate(true, true),
                 KeyCode::Char('k') | KeyCode::Up => self.navigate(false, true),
                 KeyCode::Char(' ') | KeyCode::Enter => self.toggle(storage)?,
@@ -178,6 +201,100 @@ mod tests {
     fn press(app: &mut App, fixture: &Fixture, code: KeyCode) -> bool {
         app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
             .unwrap()
+    }
+
+    #[test]
+    fn move_bindings_follow_the_task_and_save_order_and_completion() {
+        for (down, up, modifiers) in [
+            (KeyCode::Char('J'), KeyCode::Char('K'), KeyModifiers::NONE),
+            (KeyCode::Char('J'), KeyCode::Char('K'), KeyModifiers::SHIFT),
+            (KeyCode::Char('j'), KeyCode::Char('k'), KeyModifiers::SHIFT),
+            (KeyCode::Down, KeyCode::Up, KeyModifiers::SHIFT),
+        ] {
+            let fixture = Fixture::new();
+            let mut app = app_with_tasks(3);
+            app.tasks[1].completed = true;
+            app.list.select(Some(1));
+            let original = app.tasks.clone();
+            app.key(KeyEvent::new(down, modifiers), &fixture.storage)
+                .unwrap();
+            assert_eq!(app.list.selected(), Some(2));
+            assert_eq!(
+                app.tasks,
+                vec![
+                    original[0].clone(),
+                    original[2].clone(),
+                    original[1].clone()
+                ]
+            );
+            assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+            app.key(KeyEvent::new(up, modifiers), &fixture.storage)
+                .unwrap();
+            assert_eq!(app.list.selected(), Some(1));
+            assert_eq!(app.tasks, original);
+            assert_eq!(fixture.storage.load().unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn moves_at_boundaries_do_nothing_without_saving() {
+        let fixture = Fixture::new();
+        for count in [0, 1, 3] {
+            let mut app = app_with_tasks(count);
+            let original = app.tasks.clone();
+            let first = app.list.selected();
+            press(&mut app, &fixture, KeyCode::Char('K'));
+            assert_eq!(app.list.selected(), first);
+            app.list.select(count.checked_sub(1));
+            let last = app.list.selected();
+            press(&mut app, &fixture, KeyCode::Char('J'));
+            assert_eq!(app.list.selected(), last);
+            assert_eq!(app.tasks, original);
+            assert!(!fixture.task_path().exists());
+        }
+    }
+
+    #[test]
+    fn move_shortcuts_are_isolated_from_input_and_confirmation() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        app.list.select(Some(1));
+        let original = app.tasks.clone();
+        for mode in [Mode::Adding(String::new()), Mode::ConfirmClear] {
+            app.mode = mode;
+            for code in [
+                KeyCode::Char('J'),
+                KeyCode::Char('K'),
+                KeyCode::Down,
+                KeyCode::Up,
+            ] {
+                app.key(KeyEvent::new(code, KeyModifiers::SHIFT), &fixture.storage)
+                    .unwrap();
+            }
+            assert_eq!(app.tasks, original);
+            assert_eq!(app.list.selected(), Some(1));
+            assert!(!fixture.task_path().exists());
+            if let Mode::Adding(input) = &app.mode {
+                assert_eq!(input, "JK");
+            }
+        }
+    }
+
+    #[test]
+    fn failed_move_save_preserves_order_and_selection() {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.directory.join("data"), "blocking file").unwrap();
+        let mut app = app_with_tasks(3);
+        app.list.select(Some(1));
+        let original = app.tasks.clone();
+        for code in [KeyCode::Char('J'), KeyCode::Char('K')] {
+            assert!(
+                app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
+                    .is_err()
+            );
+            assert_eq!(app.tasks, original);
+            assert_eq!(app.list.selected(), Some(1));
+        }
     }
 
     #[test]

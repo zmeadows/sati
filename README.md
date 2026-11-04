@@ -19,17 +19,18 @@ ordered list, without projects, tags, scheduling, or other productivity features
 └─────────────────────────────────────────┘
 
  j/k Navigate   Space/Enter Toggle   a Add
- d Delete       D Clear All          q Quit
+ J/K Move       d Delete   D Clear   q Quit
 ```
 
 The selected checkbox has a muted orange accent. Completed text is dimmed and
-struck through; tasks stay in their original positions until deleted.
+struck through; completing a task leaves it in place.
 
 ## Features
 
 - Add and delete tasks.
 - Toggle completion.
 - Navigate with the keyboard or mouse.
+- Move tasks up or down with the keyboard.
 - Clear the list with confirmation.
 - Save every change automatically.
 
@@ -39,12 +40,17 @@ struck through; tasks stay in their original positions until deleted.
 | --- | --- |
 | `j` / `Down` | Select next task, wrapping at the end |
 | `k` / `Up` | Select previous task, wrapping at the beginning |
+| `Shift+j` (`J`) / `Shift+Down` | Move the selected task down one row |
+| `Shift+k` (`K`) / `Shift+Up` | Move the selected task up one row |
 | `Space` / `Enter` | Toggle the selected task |
 | `a` | Add a task |
 | `d` | Delete the selected task immediately |
 | `D` (Shift+D) | Confirm clearing all tasks |
 | `Esc` | Cancel input or confirmation; no action in normal mode |
 | `q` | Quit immediately in normal mode |
+
+Moving a task keeps it selected and saves the new order immediately. Moves stop
+at the first or last row without wrapping.
 
 While adding, type a task, then press `Enter` to save or `Esc` to cancel.
 `Backspace` removes a character. Surrounding whitespace is trimmed; blank tasks

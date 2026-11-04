@@ -81,7 +81,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         draw_input(frame, sections[1], input);
     }
     frame.render_widget(
-        Paragraph::new("\n j/k Navigate   Space/Enter Toggle   a Add\n d Delete       D Clear All          q Quit")
+        Paragraph::new("\n j/k Navigate   Space/Enter Toggle   a Add\n J/K Move       d Delete   D Clear   q Quit")
             .style(Style::default().fg(MUTED)),
         sections[2],
     );
