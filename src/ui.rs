@@ -266,9 +266,15 @@ mod tests {
         let buffer = terminal.backend().buffer();
         (0..buffer.area.height)
             .map(|y| {
-                (0..buffer.area.width)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
+                let mut line = String::new();
+                let mut x = 0;
+                while x < buffer.area.width {
+                    let symbol = buffer[(x, y)].symbol();
+                    line.push_str(symbol);
+                    // Wide characters occupy subsequent cells that contain placeholders.
+                    x += symbol.width().max(1) as u16;
+                }
+                line
             })
             .collect::<Vec<_>>()
             .join("\n")
