@@ -9,6 +9,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Mode};
+use crate::input::TextInput;
 
 // Gruvbox Material dark/medium; the terminal supplies the background.
 const TEXT: Color = Color::Rgb(212, 190, 152);
@@ -344,7 +345,7 @@ fn wrap_shortcuts(rows: &[Vec<(&str, &str)>], width: u16) -> Vec<Line<'static>> 
     lines
 }
 
-fn draw_input(frame: &mut Frame, area: Rect, input: &str, label: &str, accent: Color) {
+fn draw_input(frame: &mut Frame, area: Rect, input: &TextInput, label: &str, accent: Color) {
     if area.is_empty() {
         return;
     }
@@ -364,17 +365,30 @@ fn draw_input(frame: &mut Frame, area: Rect, input: &str, label: &str, accent: C
     let prefix_width = line.width();
     let capacity = usize::from(area.width).saturating_sub(prefix_width + 1);
     // Keep whole graphemes visible and reserve one cell for the cursor.
-    let mut start = input.len();
+    let text = input.text();
+    let cursor = input.cursor();
+    let before_capacity = capacity - text[cursor..].width().min(capacity / 2);
+    let mut start = cursor;
     let mut width = 0;
-    for (index, grapheme) in input.grapheme_indices(true).rev() {
+    for (index, grapheme) in text[..cursor].grapheme_indices(true).rev() {
         let grapheme_width = grapheme.width();
-        if width + grapheme_width > capacity {
+        if width + grapheme_width > before_capacity {
             break;
         }
         width += grapheme_width;
         start = index;
     }
-    let visible = &input[start..];
+    let mut end = cursor;
+    let mut visible_width = width;
+    for grapheme in text[cursor..].graphemes(true) {
+        let size = grapheme.width();
+        if prefix_width + visible_width + size > usize::from(area.width) {
+            break;
+        }
+        visible_width += size;
+        end += grapheme.len();
+    }
+    let visible = &text[start..end];
     line.push_span(Span::styled(visible, Style::default().fg(TEXT)));
     frame.render_widget(Paragraph::new(line), area);
     let cursor = (prefix_width + width).min(usize::from(area.width - 1));
@@ -471,7 +485,7 @@ mod tests {
             " j/k Navigate    Space Toggle     w Wrap\n a/e Add/edit    d     Delete     u Undo\n x   Clear done  D     Clear all  q Quit"
         );
         for mode in [
-            Mode::Adding(String::new()),
+            Mode::Adding(TextInput::default()),
             Mode::Editing {
                 index: 0,
                 input: "task".into(),
@@ -497,7 +511,7 @@ mod tests {
         assert_eq!(text(&App::new(Vec::new()), 40), " w Wrap  q Quit");
         app.keybinds = false;
         assert!(shortcut_lines(&app, 80).is_empty());
-        app.mode = Mode::Adding(String::new());
+        app.mode = Mode::Adding(TextInput::default());
         assert!(shortcut_lines(&app, 80).is_empty());
     }
 
@@ -518,7 +532,7 @@ mod tests {
         let mut heights = Vec::new();
         for mode in [
             Mode::Normal,
-            Mode::Adding(String::new()),
+            Mode::Adding(TextInput::default()),
             Mode::Editing {
                 index: 11,
                 input: "task".into(),
@@ -557,7 +571,7 @@ mod tests {
         let mut rows = Rect::default();
         terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
         assert_eq!(rows.height, 10);
-        app.mode = Mode::Adding(String::new());
+        app.mode = Mode::Adding(TextInput::default());
         terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
         assert_eq!(rows.height, 9);
     }
@@ -855,6 +869,43 @@ mod tests {
     }
 
     #[test]
+    fn input_cursor_in_the_middle_keeps_both_sides_visible() {
+        for label in ["add", "edit"] {
+            let mut input = TextInput::from("hidden text e\u{301}界👩‍💻after");
+            input.set_cursor("hidden text e\u{301}界".len());
+            for width in 0..=30 {
+                let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+                terminal
+                    .draw(|frame| draw_input(frame, frame.area(), &input, label, DEFAULT_ACCENT))
+                    .unwrap();
+                if width == 0 {
+                    continue;
+                }
+                let position = terminal.get_cursor_position().unwrap();
+                let cursor = position.x;
+                assert_eq!(position.y, 0);
+                assert!(cursor < width);
+                if width >= 16 {
+                    let rendered = screen(&terminal);
+                    assert!(rendered.contains("界👩‍💻"), "{rendered}");
+                    let before_cursor = rendered.split("👩‍💻").next().unwrap();
+                    assert_eq!(usize::from(cursor), before_cursor.width());
+                }
+            }
+            input.set_cursor(0);
+            let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
+            terminal
+                .draw(|frame| draw_input(frame, frame.area(), &input, label, DEFAULT_ACCENT))
+                .unwrap();
+            assert_eq!(
+                usize::from(terminal.get_cursor_position().unwrap().x),
+                label.width() + 3
+            );
+            assert!(screen(&terminal).contains("hidden text"));
+        }
+    }
+
+    #[test]
     fn input_tail_and_cursor_follow_graphemes_and_cell_widths() {
         for label in ["add", "edit"] {
             for tail in ["e\u{301}", "👩‍💻", "👨‍👩‍👧‍👦", "👍🏽", "🇺🇳", "👩‍💻a"]
@@ -862,7 +913,7 @@ mod tests {
                 let prefix_width = label.width() + 3;
                 let cursor = (prefix_width + tail.width()) as u16;
                 let mut terminal = Terminal::new(TestBackend::new(cursor + 1, 1)).unwrap();
-                let input = format!("hidden text {tail}");
+                let input = TextInput::from(format!("hidden text {tail}"));
                 let accent = Color::Rgb(169, 182, 101);
                 terminal
                     .draw(|frame| draw_input(frame, frame.area(), &input, label, accent))
@@ -920,7 +971,13 @@ mod tests {
                     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                     terminal
                         .draw(|frame| {
-                            draw_input(frame, frame.area(), "hidden 👩‍💻", label, DEFAULT_ACCENT)
+                            draw_input(
+                                frame,
+                                frame.area(),
+                                &TextInput::from("hidden 👩‍💻"),
+                                label,
+                                DEFAULT_ACCENT,
+                            )
                         })
                         .unwrap();
                     if width == 0 || height == 0 {
