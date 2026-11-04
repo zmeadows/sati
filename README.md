@@ -58,9 +58,15 @@ are ignored. List shortcuts are ordinary text while typing.
 
 In the clear dialog, **only `Enter` confirms**; `Esc` cancels. Other keys do nothing.
 
-Left-click a task to select it and toggle completion. The mouse wheel moves the
-selection and scrolls the list, stopping at either end. Clicks on the border or
-outside the list are ignored.
+Left-click any line of a task to select it and toggle completion. The mouse wheel
+scrolls one display row at a time, stopping at either end; selection follows when
+the selected task leaves the view. Clicks on the border or outside the list are
+ignored.
+
+Long tasks wrap at word boundaries, with continuation lines indented under the
+text. Long words split as needed without splitting Unicode grapheme clusters.
+Use the wheel to read a task taller than the window. Keyboard navigation still
+selects whole tasks. Very narrow columns display `�` for a glyph too wide to fit.
 
 ## Building
 
@@ -71,6 +77,15 @@ Cargo. Dependencies come from crates.io; no system-wide installation is needed.
 cargo build --release
 ./target/release/sati
 ```
+
+To keep long tasks on one truncated row instead, disable wrapping for that run:
+
+```bash
+./target/release/sati --no-wrap
+```
+
+`sati --help` shows the available option. Wrapping changes only the display;
+saved task text is unchanged.
 
 Run it directly from the build directory, or open a dedicated Foot window:
 

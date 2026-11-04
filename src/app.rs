@@ -22,6 +22,10 @@ pub struct App {
     pub tasks: Vec<Task>,
     pub list: ListState,
     pub mode: Mode,
+    pub wrap: bool,
+    pub scroll: usize,
+    pub row_tasks: Vec<usize>,
+    pub reveal_selection: bool,
 }
 
 impl App {
@@ -31,6 +35,10 @@ impl App {
             tasks,
             list: ListState::default().with_selected(selected),
             mode: Mode::Normal,
+            wrap: true,
+            scroll: 0,
+            row_tasks: Vec::new(),
+            reveal_selection: true,
         }
     }
 
@@ -52,6 +60,7 @@ impl App {
             current - 1
         };
         self.list.select(Some(next));
+        self.reveal_selection = true;
     }
 
     // Install the new list only after it has been saved successfully.
@@ -64,6 +73,7 @@ impl App {
         storage.save(&tasks)?;
         self.tasks = tasks;
         self.list.select(selected);
+        self.reveal_selection = true;
         Ok(())
     }
 
@@ -72,6 +82,7 @@ impl App {
             let mut tasks = self.tasks.clone();
             tasks[index].completed = !tasks[index].completed;
             self.replace(tasks, Some(index), storage)?;
+            self.reveal_selection = false;
         }
         Ok(())
     }
@@ -168,14 +179,36 @@ impl App {
         }
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                let index = self.list.offset() + usize::from(event.row - rows.y);
-                if index < self.tasks.len() {
+                if let Some(&index) = self
+                    .row_tasks
+                    .get(self.scroll + usize::from(event.row - rows.y))
+                {
                     self.list.select(Some(index));
                     self.toggle(storage)?;
                 }
             }
-            MouseEventKind::ScrollDown => self.navigate(true, false),
-            MouseEventKind::ScrollUp => self.navigate(false, false),
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                let height = usize::from(rows.height);
+                self.scroll = if event.kind == MouseEventKind::ScrollDown {
+                    self.scroll.saturating_add(1)
+                } else {
+                    self.scroll.saturating_sub(1)
+                }
+                .min(self.row_tasks.len().saturating_sub(height));
+                let end = (self.scroll + height).min(self.row_tasks.len());
+                let visible = &self.row_tasks[self.scroll..end];
+                if let Some(selected) = self.list.selected() {
+                    if !visible.contains(&selected) {
+                        self.list
+                            .select(if event.kind == MouseEventKind::ScrollDown {
+                                visible.last().copied()
+                            } else {
+                                visible.first().copied()
+                            });
+                    }
+                }
+                self.reveal_selection = false;
+            }
             _ => {}
         }
         Ok(())
@@ -424,6 +457,8 @@ mod tests {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(10);
         *app.list.offset_mut() = 5;
+        app.scroll = 5;
+        app.row_tasks = (0..10).collect();
         let rows = Rect::new(1, 1, 30, 3);
         let click = |column, row| MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -445,6 +480,7 @@ mod tests {
         assert!(app.tasks[6].completed);
         app.mode = Mode::Normal;
         app.list.select(Some(9));
+        app.scroll = 7;
         app.mouse(
             MouseEvent {
                 kind: MouseEventKind::ScrollDown,
@@ -464,7 +500,8 @@ mod tests {
             &fixture.storage,
         )
         .unwrap();
-        assert_eq!(app.list.selected(), Some(8));
+        assert_eq!(app.scroll, 6);
+        assert_eq!(app.list.selected(), Some(6));
     }
 
     #[test]

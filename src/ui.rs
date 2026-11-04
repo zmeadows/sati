@@ -3,8 +3,9 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Mode};
@@ -37,45 +38,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let rows = block.inner(sections[0]);
     frame.render_widget(block, sections[0]);
 
-    if app.tasks.is_empty() {
-        frame.render_widget(
-            Paragraph::new(" Press a to add a task").style(Style::default().fg(MUTED)),
-            rows,
-        );
-    } else {
-        let items = app.tasks.iter().enumerate().map(|(index, task)| {
-            let selected = app.list.selected() == Some(index);
-            let checkbox = if task.completed { "[x] " } else { "[ ] " };
-            let text_style = if task.completed {
-                Style::default()
-                    .fg(MUTED)
-                    .add_modifier(Modifier::DIM | Modifier::CROSSED_OUT)
-            } else {
-                Style::default().fg(TEXT)
-            };
-            // A JSON file edited by hand still renders each task on exactly one row.
-            let text: String = task
-                .text
-                .chars()
-                .map(|c| if c.is_control() { ' ' } else { c })
-                .collect();
-            ListItem::new(Line::from(vec![
-                Span::raw(" "),
-                Span::styled(
-                    checkbox,
-                    Style::default().fg(if selected {
-                        ACCENT
-                    } else if task.completed {
-                        MUTED
-                    } else {
-                        TEXT
-                    }),
-                ),
-                Span::styled(text, text_style),
-            ]))
-        });
-        frame.render_stateful_widget(List::new(items), rows, &mut app.list);
-    }
+    draw_tasks(frame, app, rows);
 
     if let Mode::Adding(input) = &app.mode {
         draw_input(frame, sections[1], input);
@@ -85,6 +48,139 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         draw_confirmation(frame, area);
     }
     rows
+}
+
+fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
+    app.row_tasks.clear();
+    if app.tasks.is_empty() {
+        app.scroll = 0;
+        frame.render_widget(
+            Paragraph::new(" Press a to add a task").style(Style::default().fg(MUTED)),
+            area,
+        );
+        return;
+    }
+    let mut lines = Vec::new();
+    let text_width = usize::from(area.width.saturating_sub(5));
+    for (index, task) in app.tasks.iter().enumerate() {
+        let text: String = task
+            .text
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        let wrapped = if app.wrap && text_width > 0 {
+            wrap_text(&text, text_width)
+        } else {
+            vec![text]
+        };
+        let text_style = if task.completed {
+            Style::default()
+                .fg(MUTED)
+                .add_modifier(Modifier::DIM | Modifier::CROSSED_OUT)
+        } else {
+            Style::default().fg(TEXT)
+        };
+        for (row, text) in wrapped.into_iter().enumerate() {
+            app.row_tasks.push(index);
+            let prefix = if row > 0 {
+                "     "
+            } else if task.completed {
+                " [x] "
+            } else {
+                " [ ] "
+            };
+            let color = if app.list.selected() == Some(index) {
+                ACCENT
+            } else if task.completed {
+                MUTED
+            } else {
+                TEXT
+            };
+            lines.push(Line::from(vec![
+                Span::styled(prefix, Style::default().fg(color)),
+                Span::styled(text, text_style),
+            ]));
+        }
+    }
+    let height = usize::from(area.height);
+    app.scroll = app.scroll.min(lines.len().saturating_sub(height));
+    if height == 0 {
+        return;
+    }
+    if let Some(selected) = app.list.selected() {
+        let start = app
+            .row_tasks
+            .iter()
+            .position(|&task| task == selected)
+            .unwrap_or(0);
+        let end = app
+            .row_tasks
+            .iter()
+            .rposition(|&task| task == selected)
+            .unwrap_or(start)
+            + 1;
+        if app.reveal_selection || end <= app.scroll || start >= app.scroll + height {
+            if end - start > height || start < app.scroll {
+                app.scroll = start;
+            } else if end > app.scroll + height {
+                app.scroll = end - height;
+            }
+        }
+    }
+    app.reveal_selection = false;
+    *app.list.offset_mut() = app.row_tasks[app.scroll];
+    frame.render_widget(
+        Paragraph::new(
+            lines
+                .into_iter()
+                .skip(app.scroll)
+                .take(height)
+                .collect::<Vec<_>>(),
+        ),
+        area,
+    );
+}
+
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        let mut used = 0;
+        let mut word_break = None;
+        let mut split = None;
+        for (index, grapheme) in remaining.grapheme_indices(true) {
+            let size = grapheme.width();
+            if used + size > width {
+                // A glyph wider than the entire text column cannot be drawn intact.
+                if index == 0 {
+                    lines.push("�".to_owned());
+                    split = Some(grapheme.len());
+                } else {
+                    let boundary = if grapheme.chars().all(char::is_whitespace) {
+                        index
+                    } else {
+                        word_break.filter(|&offset| offset > 0).unwrap_or(index)
+                    };
+                    split = Some(boundary);
+                    lines.push(remaining[..boundary].trim_end().to_owned());
+                }
+                break;
+            }
+            if grapheme.chars().all(char::is_whitespace) {
+                word_break = Some(index);
+            }
+            used += size;
+        }
+        let Some(split) = split else {
+            lines.push(remaining.to_owned());
+            break;
+        };
+        remaining = remaining[split..].trim_start();
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
 
 fn draw_shortcuts(frame: &mut Frame, area: Rect) {
@@ -264,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn long_unicode_tasks_stay_on_one_row_and_input_shows_its_tail() {
+    fn disabled_wrapping_keeps_one_row_and_input_shows_its_tail() {
         let mut terminal = Terminal::new(TestBackend::new(12, 8)).unwrap();
         let mut app = App::new(vec![
             Task {
@@ -277,6 +373,7 @@ mod tests {
             },
         ]);
         app.mode = Mode::Adding("a long input ending in 界z".into());
+        app.wrap = false;
         terminal
             .draw(|frame| {
                 draw(frame, &mut app);
@@ -285,6 +382,101 @@ mod tests {
         let rendered = screen(&terminal);
         assert!(rendered.contains("[ ] next"));
         assert!(rendered.contains("界z"));
+    }
+
+    #[test]
+    fn wrapping_preserves_words_and_unicode_clusters() {
+        assert_eq!(wrap_text("alpha beta gamma", 10), ["alpha beta", "gamma"]);
+        assert_eq!(wrap_text("abcdefgh", 3), ["abc", "def", "gh"]);
+        assert_eq!(wrap_text("日本語", 4), ["日本", "語"]);
+        assert_eq!(wrap_text("e\u{301}e\u{301}", 1), ["e\u{301}", "e\u{301}"]);
+        assert_eq!(wrap_text("👩‍💻👩‍💻", 2), ["👩‍💻", "👩‍💻"]);
+        assert_eq!(wrap_text("界a", 1), ["�", "a"]);
+        assert_eq!(wrap_text("", 4), [""]);
+    }
+
+    #[test]
+    fn continuation_clicks_toggle_the_correct_task_and_leave_other_rows_alone() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut terminal = Terminal::new(TestBackend::new(18, 9)).unwrap();
+        let mut app = App::new(vec![
+            Task {
+                text: "alpha beta gamma delta".into(),
+                completed: false,
+            },
+            Task {
+                text: "next".into(),
+                completed: false,
+            },
+        ]);
+        let mut rows = Rect::default();
+        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        assert_eq!(app.row_tasks, [0, 0, 1]);
+        assert!(screen(&terminal).contains("     gamma delta"));
+        let click = |row| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 6,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.mouse(click(2), rows, &fixture.storage).unwrap();
+        assert!(app.tasks[0].completed);
+        assert!(!app.tasks[1].completed);
+        app.mouse(click(3), rows, &fixture.storage).unwrap();
+        assert!(app.tasks[1].completed);
+        app.mouse(click(4), rows, &fixture.storage).unwrap();
+        assert!(app.tasks.iter().all(|task| task.completed));
+        assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+    }
+
+    #[test]
+    fn oversized_task_can_be_scrolled_read_and_navigated_after_resizing() {
+        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut terminal = Terminal::new(TestBackend::new(18, 8)).unwrap();
+        let mut app = App::new(vec![
+            Task {
+                text: format!("{}THE END", "word ".repeat(30)),
+                completed: false,
+            },
+            Task {
+                text: "next".into(),
+                completed: false,
+            },
+        ]);
+        let mut rows = Rect::default();
+        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        let total = app.row_tasks.len();
+        assert!(total > usize::from(rows.height));
+        let wheel = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: rows.x,
+            row: rows.y,
+            modifiers: KeyModifiers::NONE,
+        };
+        for _ in 0..total {
+            app.mouse(wheel, rows, &fixture.storage).unwrap();
+            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        }
+        assert!(screen(&terminal).contains("THE END"));
+        assert!(screen(&terminal).contains("next"));
+        app.navigate(true, true);
+        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        assert_eq!(app.list.selected(), Some(1));
+        app.navigate(false, true);
+        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        assert_eq!(app.scroll, 0);
+        assert!(screen(&terminal).contains("[ ] word"));
+        terminal.backend_mut().resize(30, 12);
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        assert!(app.row_tasks.len() < total);
+        assert!(screen(&terminal).contains("[ ] word"));
+        assert!(!fixture.task_path().exists());
     }
 
     fn screen(terminal: &Terminal<TestBackend>) -> String {
