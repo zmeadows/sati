@@ -2,16 +2,28 @@ mod app;
 mod storage;
 mod ui;
 
-use std::{io, panic, process::ExitCode};
+use std::{
+    io, panic,
+    process::ExitCode,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use crossterm::{
+    Command, QueueableCommand,
     cursor::Show,
     event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableMouseCapture, Event,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
+    terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
+
+#[cfg(unix)]
+use crossterm::event::EnableBracketedPaste;
 
 use app::App;
 use storage::{Result, Storage};
@@ -64,22 +76,27 @@ fn run() -> Result<()> {
     app.rounded = options.rounded;
     app.add_to_bottom = options.add_to_bottom;
     app.accent = options.accent;
-    let mut terminal = match ratatui::try_init() {
-        Ok(terminal) => terminal,
-        Err(error) => {
-            ratatui::restore();
-            return Err(error.into());
-        }
-    };
-    // Restore input modes before Ratatui leaves the alternate screen.
+    // Atomics let the panic hook clean up without locking state held by setup.
+    let modes = Arc::new(TerminalModes::default());
+    let panic_modes = Arc::clone(&modes);
     let previous_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
-        let _ = restore_input_modes(&mut io::stdout());
+        let _ = panic_modes.restore(&mut io::stdout());
         previous_hook(info);
     }));
 
     let result = (|| -> Result<()> {
-        enable_input_modes(&mut io::stdout())?;
+        terminal::enable_raw_mode()?;
+        modes.raw.store(true, Ordering::Relaxed);
+        // An output failure may occur after the screen-switch command was sent.
+        modes.alternate.store(true, Ordering::Relaxed);
+        execute!(io::stdout(), EnterAlternateScreen)?;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(io::stdout()))?;
+        // The capability probe retries reader errors internally; validate input first.
+        event::poll(std::time::Duration::ZERO)?;
+        let enhanced = keyboard_support(terminal::supports_keyboard_enhancement())?;
+        modes.enable_input(&mut io::stdout(), enhanced)?;
         loop {
             let mut rows = ratatui::layout::Rect::default();
             terminal.draw(|frame| rows = ui::draw(frame, &mut app))?;
@@ -96,31 +113,121 @@ fn run() -> Result<()> {
         }
         Ok(())
     })();
-    let input_result = restore_input_modes(&mut io::stdout());
-    let restore_result = ratatui::try_restore();
-    result?;
-    input_result?;
-    restore_result?;
+    let restore_result = modes.restore(&mut io::stdout());
+    match (result, restore_result) {
+        (Err(error), Err(restore)) => {
+            Err(format!("{error}; could not restore terminal: {restore}").into())
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(format!("could not restore terminal: {error}").into()),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+#[derive(Default)]
+struct TerminalModes {
+    raw: AtomicBool,
+    alternate: AtomicBool,
+    mouse: AtomicBool,
+    paste: AtomicBool,
+    keyboard: AtomicBool,
+}
+
+impl TerminalModes {
+    fn enable_input(&self, output: &mut impl io::Write, enhanced: bool) -> io::Result<()> {
+        enable_optional(output, &self.mouse, EnableMouseCapture)?;
+        // Crossterm 0.28's Windows console reader does not emit Paste events.
+        #[cfg(unix)]
+        enable_optional(output, &self.paste, EnableBracketedPaste)?;
+        if enhanced {
+            enable_optional(
+                output,
+                &self.keyboard,
+                PushKeyboardEnhancementFlags(KEYBOARD_FLAGS),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn restore(&self, output: &mut impl io::Write) -> io::Result<()> {
+        let active = self.raw.load(Ordering::Relaxed) || self.alternate.load(Ordering::Relaxed);
+        let keyboard = if self.keyboard.swap(false, Ordering::Relaxed) {
+            execute!(output, PopKeyboardEnhancementFlags)
+        } else {
+            Ok(())
+        };
+        let paste = if self.paste.swap(false, Ordering::Relaxed) {
+            execute!(output, DisableBracketedPaste)
+        } else {
+            Ok(())
+        };
+        // On Windows this restores the console mode captured after raw mode was enabled.
+        let mouse = if self.mouse.swap(false, Ordering::Relaxed) {
+            execute!(output, DisableMouseCapture)
+        } else {
+            Ok(())
+        };
+        let cursor = if active {
+            execute!(output, Show)
+        } else {
+            Ok(())
+        };
+        let raw = if self.raw.swap(false, Ordering::Relaxed) {
+            terminal::disable_raw_mode()
+        } else {
+            Ok(())
+        };
+        let alternate = if self.alternate.swap(false, Ordering::Relaxed) {
+            execute!(output, LeaveAlternateScreen)
+        } else {
+            Ok(())
+        };
+        // Evaluate every cleanup step before returning the first failure.
+        keyboard
+            .and(paste)
+            .and(mouse)
+            .and(cursor)
+            .and(raw)
+            .and(alternate)
+    }
+}
+
+fn enable_optional(
+    output: &mut impl io::Write,
+    enabled: &AtomicBool,
+    command: impl Command,
+) -> io::Result<()> {
+    let supported = optional_mode(output.queue(command).map(|_| ()))?;
+    // Remember a fully queued command even if flushing subsequently fails.
+    enabled.store(supported, Ordering::Relaxed);
+    if supported {
+        output.flush()?;
+    }
     Ok(())
 }
 
-fn enable_input_modes(output: &mut impl io::Write) -> io::Result<()> {
-    execute!(
-        output,
-        EnableMouseCapture,
-        EnableBracketedPaste,
-        PushKeyboardEnhancementFlags(KEYBOARD_FLAGS)
-    )
+fn optional_mode(result: io::Result<()>) -> io::Result<bool> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
-fn restore_input_modes(output: &mut impl io::Write) -> io::Result<()> {
-    execute!(
-        output,
-        DisableBracketedPaste,
-        PopKeyboardEnhancementFlags,
-        DisableMouseCapture,
-        Show
-    )
+fn keyboard_support(result: io::Result<bool>) -> io::Result<bool> {
+    match result {
+        // Crossterm 0.28 reports its unanswered-query timeout as Other.
+        Err(error)
+            if error.kind() == io::ErrorKind::Unsupported
+                || error.kind() == io::ErrorKind::TimedOut
+                || (error.kind() == io::ErrorKind::Other
+                    && error.to_string()
+                        == "The keyboard enhancement status could not be read within a normal duration") =>
+        {
+            Ok(false)
+        }
+        result => result,
+    }
 }
 
 fn parse_arguments(
@@ -188,10 +295,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terminal_modes_request_repeat_and_paste_reporting_and_restore_them() {
-        let mut output = Vec::new();
-        enable_input_modes(&mut output).unwrap();
-        let enabled = String::from_utf8(output).unwrap();
+    fn terminal_commands_encode_repeat_and_paste_reporting_and_restoration() {
+        use crossterm::{Command, event::EnableBracketedPaste};
+
+        // Check ANSI encoding without assuming the running terminal supports it.
+        let mut enabled = String::new();
+        EnableBracketedPaste.write_ansi(&mut enabled).unwrap();
+        PushKeyboardEnhancementFlags(KEYBOARD_FLAGS)
+            .write_ansi(&mut enabled)
+            .unwrap();
         assert!(enabled.contains("\x1b[?2004h"));
         let flags: u8 = enabled
             .split("\x1b[>")
@@ -205,13 +317,140 @@ mod tests {
         // Protocol bits: disambiguation, event types, shifted keys, and all keys (including Enter).
         assert_eq!(flags & 0b1111, 0b1111);
 
-        let mut output = Vec::new();
-        restore_input_modes(&mut output).unwrap();
-        let restored = String::from_utf8(output).unwrap();
+        let mut restored = String::new();
+        PopKeyboardEnhancementFlags
+            .write_ansi(&mut restored)
+            .unwrap();
+        DisableBracketedPaste.write_ansi(&mut restored).unwrap();
+        DisableMouseCapture.write_ansi(&mut restored).unwrap();
+        Show.write_ansi(&mut restored).unwrap();
         assert!(restored.contains("\x1b[?2004l"));
         assert!(restored.contains("\x1b[<1u"));
         assert!(restored.contains("\x1b[?1006l"));
         assert!(restored.ends_with("\x1b[?25h"));
+    }
+
+    #[test]
+    fn optional_features_only_fall_back_for_unsupported_modes_or_query_timeouts() {
+        assert!(optional_mode(Ok(())).unwrap());
+        assert!(!optional_mode(Err(io::ErrorKind::Unsupported.into())).unwrap());
+        assert!(keyboard_support(Ok(true)).unwrap());
+        assert!(!keyboard_support(Ok(false)).unwrap());
+        for kind in [io::ErrorKind::Unsupported, io::ErrorKind::TimedOut] {
+            assert!(!keyboard_support(Err(kind.into())).unwrap());
+        }
+        assert!(
+            !keyboard_support(Err(io::Error::other(
+                "The keyboard enhancement status could not be read within a normal duration"
+            )))
+            .unwrap()
+        );
+        for kind in [
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::Other,
+        ] {
+            assert_eq!(optional_mode(Err(kind.into())).unwrap_err().kind(), kind);
+            assert_eq!(keyboard_support(Err(kind.into())).unwrap_err().kind(), kind);
+        }
+    }
+
+    #[test]
+    fn cleanup_without_enabled_modes_sends_nothing() {
+        let modes = TerminalModes::default();
+        let mut output = Vec::new();
+        modes.restore(&mut output).unwrap();
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_backend_does_not_enable_kitty_protocol() {
+        assert!(!terminal::supports_keyboard_enhancement().unwrap());
+        let modes = TerminalModes::default();
+        assert!(!modes.keyboard.load(Ordering::Relaxed));
+        assert!(!modes.paste.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn partial_setup_and_cleanup_failures_do_not_leave_other_modes_enabled() {
+        struct FailOnce {
+            bytes: Vec<u8>,
+            remaining: usize,
+        }
+        impl io::Write for FailOnce {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if self.remaining == 0 {
+                    self.remaining = usize::MAX;
+                    return Err(io::ErrorKind::BrokenPipe.into());
+                }
+                let count = bytes.len().min(self.remaining);
+                self.bytes.extend_from_slice(&bytes[..count]);
+                self.remaining -= count;
+                Ok(count)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut mouse = String::new();
+        EnableMouseCapture.write_ansi(&mut mouse).unwrap();
+        let modes = TerminalModes::default();
+        let mut output = FailOnce {
+            bytes: Vec::new(),
+            remaining: mouse.len(),
+        };
+        assert_eq!(
+            modes.enable_input(&mut output, true).unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        modes.restore(&mut output).unwrap();
+        let restored = String::from_utf8(output.bytes).unwrap();
+        assert!(restored.contains("\x1b[?1006l"));
+        assert!(!restored.contains("\x1b[?2004l"));
+        assert!(!restored.contains("\x1b[<1u"));
+
+        let modes = TerminalModes::default();
+        modes.enable_input(&mut Vec::new(), true).unwrap();
+        let mut output = FailOnce {
+            bytes: Vec::new(),
+            remaining: 0,
+        };
+        assert_eq!(
+            modes.restore(&mut output).unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        let restored = String::from_utf8(output.bytes).unwrap();
+        assert!(restored.contains("\x1b[?2004l"));
+        assert!(restored.contains("\x1b[?1006l"));
+        let mut repeated = Vec::new();
+        modes.restore(&mut repeated).unwrap();
+        assert!(repeated.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn input_cleanup_matches_enabled_modes_and_is_not_repeated() {
+        for enhanced in [false, true] {
+            let modes = TerminalModes::default();
+            let mut output = Vec::new();
+            modes.enable_input(&mut output, enhanced).unwrap();
+            let enabled = String::from_utf8(output).unwrap();
+            assert!(enabled.contains("\x1b[?1006h"));
+            assert!(enabled.contains("\x1b[?2004h"));
+            assert_eq!(enabled.contains("\x1b[>15u"), enhanced);
+            let mut restored = Vec::new();
+            modes.restore(&mut restored).unwrap();
+            let restored = String::from_utf8(restored).unwrap();
+            assert!(restored.contains("\x1b[?2004l"));
+            assert!(restored.contains("\x1b[?1006l"));
+            assert_eq!(restored.contains("\x1b[<1u"), enhanced);
+            let mut repeated = Vec::new();
+            modes.restore(&mut repeated).unwrap();
+            assert!(repeated.is_empty());
+        }
     }
 
     #[test]
