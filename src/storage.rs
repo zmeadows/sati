@@ -52,7 +52,7 @@ impl Storage {
             return Err("data directory must be an absolute path".into());
         }
         Ok(Self {
-            path: base.join("sati/tasks.json"),
+            path: base.join("sati").join("tasks.json"),
         })
     }
 
