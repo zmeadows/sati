@@ -5,8 +5,7 @@
 
 A quiet place for the things you need to do.
 
-sati is a minimalist terminal checklist written in Rust. It keeps one persistent,
-ordered list, without projects, tags, scheduling, or other productivity features.
+sati is a minimalist, persistent terminal checklist written in Rust.
 
 ## Preview
 
@@ -22,170 +21,45 @@ ordered list, without projects, tags, scheduling, or other productivity features
  J/K Move      d     Delete  D Clear  e Edit  x Clear done
 ```
 
-The selected checkbox has a muted orange accent. Completed text is dimmed and
-struck through; completing a task leaves it in place.
-The shortcut legend hides automatically when the window is too narrow or short
-to show it in full, leaving more room for the checklist.
+## Installation
 
-## Features
+Requires Linux and Rust 1.85 or newer. From a repository checkout:
 
-- Add, edit, and delete tasks.
-- Toggle completion.
-- Navigate with the keyboard or mouse.
-- Move tasks up or down with the keyboard.
-- Clear the list with confirmation.
-- Clear completed tasks immediately, keeping incomplete tasks.
-- Undo the last change during the current session.
-- Save every change automatically.
+```bash
+cargo install --path . --locked
+```
 
-## Keybindings
+## Usage
+
+```bash
+sati
+```
 
 | Key | Action |
 | --- | --- |
-| `j` / `Down` | Select next task, wrapping at the end |
-| `k` / `Up` | Select previous task, wrapping at the beginning |
-| `Shift+j` (`J`) / `Shift+Down` | Move the selected task down one row |
-| `Shift+k` (`K`) / `Shift+Up` | Move the selected task up one row |
-| `Space` / `Enter` | Toggle the selected task |
-| `a` | Add a task |
-| `e` | Edit the selected task's text |
-| `d` | Delete the selected task immediately |
-| `D` (Shift+D) | Confirm clearing all tasks |
-| `x` | Clear completed tasks immediately |
-| `u` | Undo the most recent change, restoring the list and selection |
-| `Esc` | Cancel input or confirmation; no action in normal mode |
-| `q` | Quit immediately in normal mode |
+| `j` / `Down`, `k` / `Up` | Select next / previous task |
+| `J` / `Shift+Down`, `K` / `Shift+Up` | Move task down / up |
+| `Space` / `Enter` | Toggle completion |
+| `a` / `e` | Add / edit task |
+| `d` | Delete task |
+| `x` | Clear completed tasks |
+| `D` | Clear all tasks |
+| `u` | Undo last change |
+| `q` | Quit |
 
-Moving a task keeps it selected and saves the new order immediately. Moves stop
-at the first or last row without wrapping.
+When adding, editing, or clearing all tasks, `Enter` confirms and `Esc` cancels.
 
-On terminals supporting the kitty keyboard protocol (including Foot), holding
-navigation keys continues moving, and text entry repeats normally. Other actions
-ignore repeats. sati enables this protocol for its session and restores it on
-exit. Terminals without this support cannot distinguish held keys from separate
-presses, so repeat protection is unavailable there.
-
-While adding, type a task, then press `Enter` to save or `Esc` to cancel.
-`Backspace` removes a whole Unicode grapheme, including combined letters and
-joined emoji. Surrounding whitespace is trimmed; blank tasks are ignored. List
-shortcuts are ordinary text while typing.
-
-Press `e` to edit a task using the same input field, prefilled with its current
-text. `Enter` saves and `Esc` cancels. Blank edits leave the task unchanged.
-Editing preserves the task's position, completion state, and selection.
-
-Pasting is accepted only while adding or editing. Line breaks and control
-characters become spaces; pasted text never activates shortcuts or submits the
-entry. Press `Enter` to save or `Esc` to cancel as usual.
-
-Undo covers adding, editing, deletion, completion toggling, reordering, and
-clearing. It saves the restored list immediately, then discards the undo buffer.
-Only the most recent change can be undone; there is no redo or undo stack.
-Navigation and cancelled or unchanged input leave the buffer intact. Undo history
-is held only in memory and disappears when sati exits.
-
-In the clear dialog, **only `Enter` confirms**; `Esc` cancels. Other keys do nothing.
-
-`x` removes only completed tasks, without confirmation. Incomplete tasks keep
-their order. Selection stays on the same task if it survives; otherwise it moves
-to the next remaining task, or the previous one at the end. Press `u` to recover
-the removed tasks and original selection. If nothing is completed, `x` does
-nothing and preserves the undo buffer.
-
-Left-click any line of a task to select it and toggle completion. The mouse wheel
-scrolls one display row at a time, stopping at either end; selection follows when
-the selected task leaves the view. Clicks on the border or outside the list are
-ignored.
-
-Long tasks wrap at word boundaries, with continuation lines indented under the
-text. Long words split as needed without splitting Unicode grapheme clusters.
-Use the wheel to read a task taller than the window. Keyboard navigation still
-selects whole tasks. Very narrow columns display `�` for a glyph too wide to fit.
-
-## Building
-
-Use a stable Rust toolchain supporting edition 2024 (Rust 1.85 or newer), with
-Cargo. Dependencies come from crates.io; no system-wide installation is needed.
+## Options
 
 ```bash
-cargo build --release
-./target/release/sati
+sati --no-wrap             # Keep long tasks on one row
+sati --accent '#a9b665'    # Set the selection accent
 ```
 
-To keep long tasks on one truncated row instead, disable wrapping for that run:
+## Data
 
-```bash
-./target/release/sati --no-wrap
-```
-
-Set the selected task's accent color with a quoted `#RRGGBB` value:
-
-```bash
-./target/release/sati --accent '#a9b665'
-./target/release/sati --no-wrap --accent '#d8a657'
-```
-
-The default accent is orange (`#e78a4e`). Other colors and styles stay unchanged.
-The option applies only to the current run and is not saved. Invalid colors are
-reported before entering the terminal UI.
-
-`sati --help` shows the available options. These options affect only the display;
-saved task text is unchanged.
-
-Run it directly from the build directory, or open a dedicated Foot window:
-
-```bash
-foot --app-id=sati /absolute/path/to/sati/target/release/sati
-```
-
-sati works well as a small floating terminal under Sway. It does not change your
-terminal or desktop configuration.
-
-## Data storage
-
-Tasks are saved automatically as a human-readable JSON array at:
-
-```text
-$XDG_DATA_HOME/sati/tasks.json
-```
-
-When `XDG_DATA_HOME` is unset or empty, the path is
-`~/.local/share/sati/tasks.json`. A set `XDG_DATA_HOME` must be absolute.
-The data directory is created at startup.
-
-New sati directories use `0700` permissions; new temporary JSON files and lock
-files use `0600` (or stricter permissions under your umask). Existing paths are
-not chmodded, and parent directory permissions are left unchanged. Atomic saves
-replace `tasks.json` with the private `0600` temporary file.
-
-Every change writes and syncs a temporary file in the same directory, then
-atomically replaces `tasks.json` and syncs the directory. Any save error exits
-sati after restoring the terminal and reporting the error. The original file is
-preserved on any failure before replacement. The error identifies any remaining
-temporary file. After a write or temporary-file sync failure, that file may contain
-incomplete JSON and must be checked before attempting recovery. If only replacement
-fails, the fully written temporary file remains.
-If directory synchronization fails after replacement, the new list is already
-visible, but its durability after a crash or power loss is uncertain. The error
-states this explicitly. sati does not roll back the replacement or retry using
-its old in-memory list; the next run reloads the task file from disk.
-Invalid JSON is reported at startup and left untouched. Repair it or move it
-aside before restarting.
-
-Only one sati instance can use a data directory at a time. sati acquires an
-advisory lock on `tasks.lock` before reading tasks and holds it until exit.
-A second instance exits with `sati: already running`. Different data directories
-can be used independently.
-
-The kernel releases the lock even after a crash; there is no stale lock to clear.
-The empty `tasks.lock` file stays in the data directory to avoid locking races.
-Do not delete it while sati is running.
-
-## Uninstalling
-
-Delete the project directory. To remove saved tasks too, delete
-`$XDG_DATA_HOME/sati/`, or `~/.local/share/sati/` when using the fallback path.
-There are no services or other application files to remove.
+Tasks are saved automatically to `$XDG_DATA_HOME/sati/tasks.json`, defaulting to
+`~/.local/share/sati/tasks.json`.
 
 ## License
 
