@@ -9,17 +9,9 @@ sati is a minimalist, persistent terminal checklist written in Rust.
 
 ## Preview
 
-```text
-┌────────────────────────────────────────────────────────┐
-│ [ ] Finish reviewing code                              │
-│ [x] Clean up Sway configuration                        │
-│ [ ] Read for 30 minutes                                │
-│                                                        │
-└────────────────────────────────────────────────────────┘
-
- j/k Navigate  Space Toggle  a Add    q Quit  u Undo
- J/K Move      d     Delete  D Clear  e Edit  x Clear done
-```
+<p align="center">
+  <img src="sati_screenshot.png" alt="sati showing a checklist and keyboard shortcuts">
+</p>
 
 ## Installation
 
