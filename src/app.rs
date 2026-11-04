@@ -122,6 +122,26 @@ impl App {
         self.replace(tasks, Some(next), storage)
     }
 
+    fn clear_completed(&mut self, storage: &Storage) -> Result<()> {
+        if !self.tasks.iter().any(|task| task.completed) {
+            return Ok(());
+        }
+        // Keep the selected task if it survives, otherwise choose the next survivor
+        // or the previous one when there are no survivors after the selection.
+        let before = self.tasks[..self.list.selected().unwrap_or(0)]
+            .iter()
+            .filter(|task| !task.completed)
+            .count();
+        let mut tasks = self.tasks.clone();
+        tasks.retain(|task| !task.completed);
+        let selected = if tasks.is_empty() {
+            None
+        } else {
+            Some(before.min(tasks.len() - 1))
+        };
+        self.replace(tasks, selected, storage)
+    }
+
     pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
         // Modified shortcuts must not turn control/alt combinations into edits.
         if key
@@ -174,6 +194,7 @@ impl App {
             Mode::Normal => match key.code {
                 KeyCode::Char('q') => return Ok(true),
                 KeyCode::Char('u') => self.undo(storage)?,
+                KeyCode::Char('x') => self.clear_completed(storage)?,
                 KeyCode::Char('J') => self.move_selected(true, storage)?,
                 KeyCode::Char('K') => self.move_selected(false, storage)?,
                 KeyCode::Char('j') | KeyCode::Down
@@ -279,10 +300,91 @@ mod tests {
     }
 
     #[test]
+    fn clearing_completed_preserves_order_and_selects_the_nearest_survivor() {
+        for (completed, selected, expected_selection) in [
+            (vec![1, 3], 0, Some(0)),
+            (vec![1, 3], 1, Some(1)),
+            (vec![1, 3], 2, Some(1)),
+            (vec![1, 3], 3, Some(2)),
+            (vec![1, 3], 4, Some(2)),
+            (vec![0, 2, 4], 4, Some(1)),
+            (vec![0, 1, 2, 3, 4], 2, None),
+        ] {
+            let fixture = Fixture::new();
+            let mut app = app_with_tasks(5);
+            for index in completed {
+                app.tasks[index].completed = true;
+            }
+            app.list.select(Some(selected));
+            let original = app.tasks.clone();
+            let expected: Vec<_> = original
+                .iter()
+                .filter(|task| !task.completed)
+                .cloned()
+                .collect();
+            press(&mut app, &fixture, KeyCode::Char('x'));
+            assert_eq!(app.mode, Mode::Normal);
+            assert_eq!(app.tasks, expected);
+            assert_eq!(app.list.selected(), expected_selection);
+            assert_eq!(fixture.storage.load().unwrap(), expected);
+            press(&mut app, &fixture, KeyCode::Char('u'));
+            assert_eq!(app.tasks, original);
+            assert_eq!(app.list.selected(), Some(selected));
+            assert_eq!(fixture.storage.load().unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn clearing_without_completed_tasks_is_a_no_op_and_preserves_undo() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(0);
+        press(&mut app, &fixture, KeyCode::Char('x'));
+        assert!(!fixture.task_path().exists());
+        assert!(app.previous.is_none());
+        press(&mut app, &fixture, KeyCode::Char('a'));
+        press(&mut app, &fixture, KeyCode::Char('x'));
+        press(&mut app, &fixture, KeyCode::Enter);
+        press(&mut app, &fixture, KeyCode::Char('x'));
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[0].text, "x");
+        assert_eq!(app.list.selected(), Some(0));
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert!(app.tasks.is_empty());
+        assert_eq!(app.list.selected(), None);
+        assert!(fixture.storage.load().unwrap().is_empty());
+    }
+
+    #[test]
+    fn clear_completed_does_not_activate_in_input_or_confirmation_modes() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(1);
+        app.tasks[0].completed = true;
+        let original = app.tasks.clone();
+        for mode in [
+            Mode::Adding(String::new()),
+            Mode::Editing {
+                index: 0,
+                input: "task 0".into(),
+            },
+            Mode::ConfirmClear,
+        ] {
+            app.mode = mode;
+            press(&mut app, &fixture, KeyCode::Char('x'));
+            assert_eq!(app.tasks, original);
+            match &app.mode {
+                Mode::Adding(input) | Mode::Editing { input, .. } => assert!(input.ends_with('x')),
+                mode => assert_eq!(*mode, Mode::ConfirmClear),
+            }
+            assert!(!fixture.task_path().exists());
+        }
+    }
+
+    #[test]
     fn undo_restores_list_and_selection_for_every_modification() {
         use KeyCode::{Char, Enter};
         for keys in [
             vec![Char('d')],
+            vec![Char('x')],
             vec![Char(' ')],
             vec![Char('J')],
             vec![Char('K')],
@@ -376,7 +478,7 @@ mod tests {
         let backup = fixture.directory.join("backup");
         std::fs::rename(&data, &backup).unwrap();
         std::fs::write(&data, "blocking file").unwrap();
-        for code in [KeyCode::Char('d'), KeyCode::Char('u')] {
+        for code in [KeyCode::Char('d'), KeyCode::Char('x'), KeyCode::Char('u')] {
             assert!(
                 app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
                     .is_err()

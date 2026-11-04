@@ -11,15 +11,15 @@ ordered list, without projects, tags, scheduling, or other productivity features
 ## Preview
 
 ```text
-┌────────────────────────────────────────────────┐
-│ [ ] Finish reviewing code                      │
-│ [x] Clean up Sway configuration                │
-│ [ ] Read for 30 minutes                        │
-│                                                │
-└────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│ [ ] Finish reviewing code                              │
+│ [x] Clean up Sway configuration                        │
+│ [ ] Read for 30 minutes                                │
+│                                                        │
+└────────────────────────────────────────────────────────┘
 
  j/k Navigate  Space Toggle  a Add    q Quit  u Undo
- J/K Move      d     Delete  D Clear  e Edit
+ J/K Move      d     Delete  D Clear  e Edit  x Clear done
 ```
 
 The selected checkbox has a muted orange accent. Completed text is dimmed and
@@ -32,6 +32,7 @@ struck through; completing a task leaves it in place.
 - Navigate with the keyboard or mouse.
 - Move tasks up or down with the keyboard.
 - Clear the list with confirmation.
+- Clear completed tasks immediately, keeping incomplete tasks.
 - Undo the last change during the current session.
 - Save every change automatically.
 
@@ -48,6 +49,7 @@ struck through; completing a task leaves it in place.
 | `e` | Edit the selected task's text |
 | `d` | Delete the selected task immediately |
 | `D` (Shift+D) | Confirm clearing all tasks |
+| `x` | Clear completed tasks immediately |
 | `u` | Undo the most recent change, restoring the list and selection |
 | `Esc` | Cancel input or confirmation; no action in normal mode |
 | `q` | Quit immediately in normal mode |
@@ -70,6 +72,12 @@ Navigation and cancelled or unchanged input leave the buffer intact. Undo histor
 is held only in memory and disappears when sati exits.
 
 In the clear dialog, **only `Enter` confirms**; `Esc` cancels. Other keys do nothing.
+
+`x` removes only completed tasks, without confirmation. Incomplete tasks keep
+their order. Selection stays on the same task if it survives; otherwise it moves
+to the next remaining task, or the previous one at the end. Press `u` to recover
+the removed tasks and original selection. If nothing is completed, `x` does
+nothing and preserves the undo buffer.
 
 Left-click any line of a task to select it and toggle completion. The mouse wheel
 scrolls one display row at a time, stopping at either end; selection follows when

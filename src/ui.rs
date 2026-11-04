@@ -190,7 +190,7 @@ fn draw_shortcuts(frame: &mut Frame, area: Rect) {
         [("Space", "Toggle"), ("d", "Delete")],
         [("a", "Add"), ("D", "Clear")],
         [("q", "Quit"), ("e", "Edit")],
-        [("u", "Undo"), ("", "")],
+        [("u", "Undo"), ("x", "Clear done")],
     ];
     let mut rows = [vec![Span::raw(" ")], vec![Span::raw(" ")]];
     for column in columns {
