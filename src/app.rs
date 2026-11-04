@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crossterm::event::{
+use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::{layout::Rect, widgets::ListState};

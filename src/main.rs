@@ -12,7 +12,7 @@ use std::{
     },
 };
 
-use crossterm::{
+use ratatui::crossterm::{
     Command, QueueableCommand,
     cursor::Show,
     event::{
@@ -24,7 +24,7 @@ use crossterm::{
 };
 
 #[cfg(unix)]
-use crossterm::event::EnableBracketedPaste;
+use ratatui::crossterm::event::EnableBracketedPaste;
 
 use app::App;
 use storage::{Result, Storage};
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn terminal_commands_encode_repeat_and_paste_reporting_and_restoration() {
-        use crossterm::{Command, event::EnableBracketedPaste};
+        use ratatui::crossterm::{Command, event::EnableBracketedPaste};
 
         // Check ANSI encoding without assuming the running terminal supports it.
         let mut enabled = String::new();

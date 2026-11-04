@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn legends_follow_mode_availability_and_terminal_width() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = App::new(vec![Task {
             text: "task".into(),
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn changing_footer_height_preserves_selection_and_mouse_mapping() {
-        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = App::new(
             (0..12)
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn page_navigation_targets_visual_rows_in_mixed_task_heights() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
         let mut terminal = Terminal::new(TestBackend::new(18, 5)).unwrap();
         let mut app = App::new(
@@ -650,7 +650,7 @@ mod tests {
 
     #[test]
     fn page_navigation_uses_current_viewport_wrapping_and_resize() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
         let mut app = App::new(
@@ -830,7 +830,7 @@ mod tests {
 
     #[test]
     fn disabled_wrapping_keeps_one_row_and_input_shows_its_tail() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
         let mut terminal = Terminal::new(TestBackend::new(12, 8)).unwrap();
         let mut app = App::new(vec![
@@ -870,7 +870,7 @@ mod tests {
 
     #[test]
     fn editing_navigation_keeps_cursor_visible_through_long_unicode_input() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
         let text = format!("start {}end", "e\u{301}界👩‍💻 ".repeat(8));
         for edit in [false, true] {
@@ -1063,7 +1063,7 @@ mod tests {
 
     #[test]
     fn continuation_clicks_toggle_the_correct_task_and_leave_other_rows_alone() {
-        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let fixture = crate::storage::tests::Fixture::new();
         let mut terminal = Terminal::new(TestBackend::new(18, 12)).unwrap();
         let mut app = App::new(vec![
@@ -1104,7 +1104,7 @@ mod tests {
 
     #[test]
     fn oversized_task_can_be_scrolled_read_and_navigated_after_resizing() {
-        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+        use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
         let fixture = crate::storage::tests::Fixture::new();
         let mut terminal = Terminal::new(TestBackend::new(18, 8)).unwrap();
         let mut app = App::new(vec![
