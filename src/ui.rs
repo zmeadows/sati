@@ -52,8 +52,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
 
     draw_tasks(frame, app, rows);
 
-    if let Mode::Adding(input) | Mode::Editing { input, .. } = &app.mode {
-        draw_input(frame, sections[1], input);
+    match &app.mode {
+        Mode::Adding(input) => draw_input(frame, sections[1], input, "add", app.accent),
+        Mode::Editing { input, .. } => draw_input(frame, sections[1], input, "edit", app.accent),
+        _ => {}
     }
     frame.render_widget(
         Paragraph::new(shortcuts).style(Style::default().fg(MUTED)),
@@ -233,12 +235,25 @@ fn shortcut_lines() -> Vec<Line<'static>> {
     vec![Line::raw(""), Line::from(first), Line::from(second)]
 }
 
-fn draw_input(frame: &mut Frame, area: Rect, input: &str) {
+fn draw_input(frame: &mut Frame, area: Rect, input: &str, label: &str, accent: Color) {
     if area.is_empty() {
         return;
     }
-    let prefix = if area.width >= 3 { "> " } else { "" };
-    let capacity = usize::from(area.width).saturating_sub(prefix.len() + 1);
+    let mut line = Line::from(vec![
+        Span::styled(label, Style::default().fg(MUTED)),
+        Span::raw(" "),
+        Span::styled("› ", Style::default().fg(accent)),
+    ]);
+    // Use a compact prompt when the full label would leave no cursor cell.
+    if usize::from(area.width) <= line.width() {
+        line = if area.width >= 3 {
+            Line::from(Span::styled("› ", Style::default().fg(accent)))
+        } else {
+            Line::default()
+        };
+    }
+    let prefix_width = line.width();
+    let capacity = usize::from(area.width).saturating_sub(prefix_width + 1);
     // Keep whole graphemes visible and reserve one cell for the cursor.
     let mut start = input.len();
     let mut width = 0;
@@ -251,11 +266,9 @@ fn draw_input(frame: &mut Frame, area: Rect, input: &str) {
         start = index;
     }
     let visible = &input[start..];
-    frame.render_widget(
-        Paragraph::new(format!("{prefix}{visible}")).style(Style::default().fg(TEXT)),
-        area,
-    );
-    let cursor = (prefix.len() + width).min(usize::from(area.width - 1));
+    line.push_span(Span::styled(visible, Style::default().fg(TEXT)));
+    frame.render_widget(Paragraph::new(line), area);
+    let cursor = (prefix_width + width).min(usize::from(area.width - 1));
     frame.set_cursor_position((area.x + cursor as u16, area.y));
 }
 
@@ -414,51 +427,85 @@ mod tests {
 
     #[test]
     fn input_tail_and_cursor_follow_graphemes_and_cell_widths() {
-        for (width, tail, cursor) in [
-            (4, "e\u{301}", 3),
-            (5, "👩‍💻", 4),
-            (5, "👨‍👩‍👧‍👦", 4),
-            (5, "👍🏽", 4),
-            (5, "🇺🇳", 4),
-            (6, "👩‍💻a", 5),
-        ] {
-            let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
-            let input = format!("hidden text {tail}");
-            terminal
-                .draw(|frame| draw_input(frame, frame.area(), &input))
-                .unwrap();
-            assert_eq!(screen(&terminal).trim_end(), format!("> {tail}"));
-            assert_eq!(terminal.get_cursor_position().unwrap(), (cursor, 0).into());
-            assert_eq!(terminal.backend().buffer()[(cursor, 0)].symbol(), " ");
+        for label in ["add", "edit"] {
+            for tail in ["e\u{301}", "👩‍💻", "👨‍👩‍👧‍👦", "👍🏽", "🇺🇳", "👩‍💻a"]
+            {
+                let prefix_width = label.width() + 3;
+                let cursor = (prefix_width + tail.width()) as u16;
+                let mut terminal = Terminal::new(TestBackend::new(cursor + 1, 1)).unwrap();
+                let input = format!("hidden text {tail}");
+                let accent = Color::Rgb(169, 182, 101);
+                terminal
+                    .draw(|frame| draw_input(frame, frame.area(), &input, label, accent))
+                    .unwrap();
+                assert_eq!(screen(&terminal).trim_end(), format!("{label} › {tail}"));
+                assert_eq!(terminal.get_cursor_position().unwrap(), (cursor, 0).into());
+                let buffer = terminal.backend().buffer();
+                assert_eq!(buffer[(cursor, 0)].symbol(), " ");
+                assert_eq!(buffer[(0, 0)].fg, MUTED);
+                assert_eq!(buffer[((label.width() + 1) as u16, 0)].fg, accent);
+                assert_eq!(buffer[(prefix_width as u16, 0)].fg, TEXT);
+            }
         }
     }
 
     #[test]
     fn narrow_input_viewports_hide_glyphs_that_cannot_fit_without_splitting_them() {
-        for width in 0..=5 {
-            for height in 0..=1 {
-                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-                terminal
-                    .draw(|frame| draw_input(frame, frame.area(), "hidden 👩‍💻"))
-                    .unwrap();
-                if width == 0 || height == 0 {
-                    continue;
+        for (label, expected_rows) in [
+            (
+                "add",
+                [
+                    "",
+                    "",
+                    "",
+                    "›",
+                    "›",
+                    "› 👩‍💻",
+                    "›  👩‍💻",
+                    "add ›",
+                    "add ›",
+                    "add › 👩‍💻",
+                    "add ›  👩‍💻",
+                ],
+            ),
+            (
+                "edit",
+                [
+                    "",
+                    "",
+                    "",
+                    "›",
+                    "›",
+                    "› 👩‍💻",
+                    "›  👩‍💻",
+                    "› n 👩‍💻",
+                    "edit ›",
+                    "edit ›",
+                    "edit › 👩‍💻",
+                ],
+            ),
+        ] {
+            for (width, expected) in expected_rows.into_iter().enumerate() {
+                let width = width as u16;
+                for height in 0..=1 {
+                    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                    terminal
+                        .draw(|frame| {
+                            draw_input(frame, frame.area(), "hidden 👩‍💻", label, DEFAULT_ACCENT)
+                        })
+                        .unwrap();
+                    if width == 0 || height == 0 {
+                        continue;
+                    }
+                    assert_eq!(screen(&terminal).trim_end(), expected);
+                    let cursor = terminal.get_cursor_position().unwrap();
+                    assert!(cursor.x < width);
+                    assert_eq!(cursor.y, 0);
+                    assert_eq!(
+                        terminal.backend().buffer()[(cursor.x, cursor.y)].symbol(),
+                        " "
+                    );
                 }
-                let expected = if width == 5 {
-                    "> 👩‍💻"
-                } else if width >= 3 {
-                    ">"
-                } else {
-                    ""
-                };
-                assert_eq!(screen(&terminal).trim_end(), expected);
-                let cursor = terminal.get_cursor_position().unwrap();
-                assert!(cursor.x < width);
-                assert_eq!(cursor.y, 0);
-                assert_eq!(
-                    terminal.backend().buffer()[(cursor.x, cursor.y)].symbol(),
-                    " "
-                );
             }
         }
     }
