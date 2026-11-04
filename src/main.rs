@@ -28,7 +28,7 @@ use crossterm::event::EnableBracketedPaste;
 use app::App;
 use storage::{Result, Storage};
 
-const USAGE: &str = "Usage: sati [--no-wrap] [--no-logo] [--round-corners] [--add-to-bottom] [--accent '#RRGGBB'] [--version]";
+const USAGE: &str = "Usage: sati [--no-wrap] [--no-logo] [--no-keybinds] [--round-corners] [--add-to-bottom] [--accent '#RRGGBB'] [--version]";
 
 // Report repeats for plain characters and Enter too; alternate keys preserve shifted text.
 const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
@@ -41,6 +41,7 @@ const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
 struct Options {
     wrap: bool,
     logo: bool,
+    keybinds: bool,
     rounded: bool,
     add_to_bottom: bool,
     accent: ratatui::style::Color,
@@ -60,7 +61,7 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let Some(options) = parse_arguments(std::env::args_os().skip(1))? else {
         println!(
-            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--round-corners    Use rounded checklist corners (default: sharp).\n--add-to-bottom    Add new tasks at the bottom (default: below selection).\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e).\n--version          Print the version.\n--help, -h         Show this help."
+            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--no-keybinds      Hide the keybind list.\n--round-corners    Use rounded checklist corners (default: sharp).\n--add-to-bottom    Add new tasks at the bottom (default: below selection).\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e).\n--version          Print the version.\n--help, -h         Show this help."
         );
         return Ok(());
     };
@@ -73,6 +74,7 @@ fn run() -> Result<()> {
     let mut app = App::new(storage.load()?);
     app.wrap = options.wrap;
     app.logo = options.logo;
+    app.keybinds = options.keybinds;
     app.rounded = options.rounded;
     app.add_to_bottom = options.add_to_bottom;
     app.accent = options.accent;
@@ -236,6 +238,7 @@ fn parse_arguments(
     let mut options = Options {
         wrap: true,
         logo: true,
+        keybinds: true,
         rounded: false,
         add_to_bottom: false,
         accent: ui::DEFAULT_ACCENT,
@@ -248,6 +251,8 @@ fn parse_arguments(
             options.wrap = false;
         } else if argument == "--no-logo" {
             options.logo = false;
+        } else if argument == "--no-keybinds" {
+            options.keybinds = false;
         } else if argument == "--round-corners" {
             options.rounded = true;
         } else if argument == "--add-to-bottom" {
@@ -458,11 +463,18 @@ mod tests {
         let defaults = parse_arguments([]).unwrap().unwrap();
         assert!(defaults.wrap);
         assert!(defaults.logo);
+        assert!(defaults.keybinds);
         assert!(!defaults.rounded);
         assert!(!defaults.add_to_bottom);
         assert_eq!(defaults.accent, ui::DEFAULT_ACCENT);
         assert!(!defaults.print_version);
         assert!(!parse_arguments(["--no-wrap".into()]).unwrap().unwrap().wrap);
+        assert!(
+            !parse_arguments(["--no-keybinds".into()])
+                .unwrap()
+                .unwrap()
+                .keybinds
+        );
         let options = parse_arguments(["--no-logo", "--round-corners"].map(Into::into))
             .unwrap()
             .unwrap();

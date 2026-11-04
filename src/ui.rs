@@ -24,7 +24,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let shortcuts = shortcut_lines();
     let legend_width = shortcuts.iter().map(Line::width).max().unwrap_or(0);
     let legend_height = shortcuts.len() as u16;
-    let legend_height = if area.height >= 3 + legend_height + input_height
+    let legend_height = if app.keybinds
+        && area.height >= 3 + legend_height + input_height
         && usize::from(area.width) >= legend_width
     {
         legend_height

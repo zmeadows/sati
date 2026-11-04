@@ -52,6 +52,7 @@ terminal and platform support; unbracketed paste is treated as ordinary keystrok
 ```bash
 sati --no-wrap             # Keep long tasks on one row
 sati --no-logo             # Hide the sati border title
+sati --no-keybinds         # Hide the keybind list
 sati --round-corners       # Use rounded checklist corners (default: sharp)
 sati --add-to-bottom       # Add new tasks at the bottom instead of below selection
 sati --accent '#a9b665'     # Set the selection accent
