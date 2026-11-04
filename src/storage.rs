@@ -446,6 +446,39 @@ pub mod tests {
     }
 
     #[test]
+    fn directory_sync_failure_reports_visible_replacement_and_uncertain_durability() {
+        let fixture = Fixture::new();
+        fixture
+            .storage
+            .save(&[Task {
+                text: "Old list".into(),
+                completed: false,
+            }])
+            .unwrap();
+        let directory = fixture.task_path().parent().unwrap();
+        // Write/search permission permits replacement, but opening the directory for sync fails.
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o300)).unwrap();
+        if File::open(directory).is_ok() {
+            // Root/capability-enabled test runners can bypass these permissions.
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+        let replacement = vec![Task {
+            text: "New list".into(),
+            completed: true,
+        }];
+        let result = fixture.storage.save(&replacement);
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("replaced "));
+        assert!(error.contains("already visible"));
+        assert!(error.contains("uncertain"));
+        assert!(!error.contains("unchanged"));
+        assert_eq!(fixture.storage.load().unwrap(), replacement);
+        assert_eq!(fs::read_dir(directory).unwrap().count(), 1);
+    }
+
+    #[test]
     fn directory_creation_failure_is_reported_without_changing_existing_data() {
         let fixture = Fixture::new();
         fs::write(fixture.directory.join("data"), "existing file").unwrap();

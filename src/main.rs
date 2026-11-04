@@ -63,23 +63,12 @@ fn run() -> Result<()> {
     // Restore input modes before Ratatui leaves the alternate screen.
     let previous_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
-        let _ = execute!(
-            io::stdout(),
-            DisableBracketedPaste,
-            PopKeyboardEnhancementFlags,
-            DisableMouseCapture,
-            Show
-        );
+        let _ = restore_input_modes(&mut io::stdout());
         previous_hook(info);
     }));
 
     let result = (|| -> Result<()> {
-        execute!(
-            io::stdout(),
-            EnableMouseCapture,
-            EnableBracketedPaste,
-            PushKeyboardEnhancementFlags(KEYBOARD_FLAGS)
-        )?;
+        enable_input_modes(&mut io::stdout())?;
         loop {
             let mut rows = ratatui::layout::Rect::default();
             terminal.draw(|frame| rows = ui::draw(frame, &mut app))?;
@@ -96,18 +85,31 @@ fn run() -> Result<()> {
         }
         Ok(())
     })();
-    let input_result = execute!(
-        io::stdout(),
-        DisableBracketedPaste,
-        PopKeyboardEnhancementFlags,
-        DisableMouseCapture,
-        Show
-    );
+    let input_result = restore_input_modes(&mut io::stdout());
     let restore_result = ratatui::try_restore();
     result?;
     input_result?;
     restore_result?;
     Ok(())
+}
+
+fn enable_input_modes(output: &mut impl io::Write) -> io::Result<()> {
+    execute!(
+        output,
+        EnableMouseCapture,
+        EnableBracketedPaste,
+        PushKeyboardEnhancementFlags(KEYBOARD_FLAGS)
+    )
+}
+
+fn restore_input_modes(output: &mut impl io::Write) -> io::Result<()> {
+    execute!(
+        output,
+        DisableBracketedPaste,
+        PopKeyboardEnhancementFlags,
+        DisableMouseCapture,
+        Show
+    )
 }
 
 fn parse_arguments(
@@ -161,6 +163,33 @@ fn parse_accent(value: &std::ffi::OsStr) -> Result<ratatui::style::Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_modes_request_repeat_and_paste_reporting_and_restore_them() {
+        let mut output = Vec::new();
+        enable_input_modes(&mut output).unwrap();
+        let enabled = String::from_utf8(output).unwrap();
+        assert!(enabled.contains("\x1b[?2004h"));
+        let flags: u8 = enabled
+            .split("\x1b[>")
+            .nth(1)
+            .unwrap()
+            .split('u')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        // Protocol bits: disambiguation, event types, shifted keys, and all keys (including Enter).
+        assert_eq!(flags & 0b1111, 0b1111);
+
+        let mut output = Vec::new();
+        restore_input_modes(&mut output).unwrap();
+        let restored = String::from_utf8(output).unwrap();
+        assert!(restored.contains("\x1b[?2004l"));
+        assert!(restored.contains("\x1b[<1u"));
+        assert!(restored.contains("\x1b[?1006l"));
+        assert!(restored.ends_with("\x1b[?25h"));
+    }
 
     #[test]
     fn wrapping_is_enabled_by_default_and_can_be_disabled() {

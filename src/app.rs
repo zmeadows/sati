@@ -55,20 +55,16 @@ impl App {
         }
     }
 
-    pub fn navigate(&mut self, forward: bool, wrap: bool) {
+    pub fn navigate(&mut self, forward: bool) {
         if self.tasks.is_empty() {
             return;
         }
         let last = self.tasks.len() - 1;
         let current = self.list.selected().unwrap_or(0);
         let next = if forward {
-            if current == last {
-                if wrap { 0 } else { last }
-            } else {
-                current + 1
-            }
+            if current == last { 0 } else { current + 1 }
         } else if current == 0 {
-            if wrap { last } else { 0 }
+            last
         } else {
             current - 1
         };
@@ -229,8 +225,8 @@ impl App {
                 KeyCode::Char('k') | KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
                     self.move_selected(false, storage)?;
                 }
-                KeyCode::Char('j') | KeyCode::Down => self.navigate(true, true),
-                KeyCode::Char('k') | KeyCode::Up => self.navigate(false, true),
+                KeyCode::Char('j') | KeyCode::Down => self.navigate(true),
+                KeyCode::Char('k') | KeyCode::Up => self.navigate(false),
                 KeyCode::Char(' ') | KeyCode::Enter => {
                     if let Some(index) = self.list.selected() {
                         self.toggle(index, storage)?;
@@ -691,7 +687,7 @@ mod tests {
                 press(&mut app, &fixture, key);
             }
             assert_ne!(app.tasks, original);
-            app.navigate(true, true);
+            app.navigate(true);
             press(&mut app, &fixture, Char('u'));
             assert_eq!(app.tasks, original);
             assert_eq!(app.list.selected(), Some(1));
@@ -1162,7 +1158,6 @@ mod tests {
     fn mouse_uses_visible_rows_and_ignores_borders_and_modal_input() {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(10);
-        *app.list.offset_mut() = 5;
         app.scroll = 5;
         app.row_tasks = (0..10).collect();
         let rows = Rect::new(1, 1, 30, 3);

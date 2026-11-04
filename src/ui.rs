@@ -134,7 +134,6 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
     app.reveal_selection = false;
-    *app.list.offset_mut() = app.row_tasks[app.scroll];
     frame.render_widget(
         Paragraph::new(
             lines
@@ -326,21 +325,21 @@ mod tests {
                 })
                 .collect(),
         );
-        app.navigate(false, true);
+        app.navigate(false);
         terminal
             .draw(|frame| {
                 draw(frame, &mut app);
             })
             .unwrap();
-        assert!(app.list.offset() > 0);
+        assert!(app.scroll > 0);
         assert!(screen(&terminal).contains("task 999"));
-        app.navigate(true, true);
+        app.navigate(true);
         terminal
             .draw(|frame| {
                 draw(frame, &mut app);
             })
             .unwrap();
-        assert_eq!(app.list.offset(), 0);
+        assert_eq!(app.scroll, 0);
         assert!(screen(&terminal).contains("task 0"));
     }
 
@@ -521,10 +520,10 @@ mod tests {
         }
         assert!(screen(&terminal).contains("THE END"));
         assert!(screen(&terminal).contains("next"));
-        app.navigate(true, true);
+        app.navigate(true);
         terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
         assert_eq!(app.list.selected(), Some(1));
-        app.navigate(false, true);
+        app.navigate(false);
         terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
         assert_eq!(app.scroll, 0);
         assert!(screen(&terminal).contains("[ ] word"));
