@@ -40,7 +40,7 @@ jobs:
         run: cargo build --release --locked
       - name: Install Rust 1.85
         if: matrix.os == 'ubuntu-latest'
-        uses: dtolnay/rust-toolchain@1.85.0
+        uses: dtolnay/rust-toolchain@1.120.0
       - name: Check Rust 1.85 compatibility
         if: matrix.os == 'ubuntu-latest'
         run: cargo +1.85.0 check --locked --all-targets
