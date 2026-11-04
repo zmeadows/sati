@@ -72,9 +72,9 @@ impl Storage {
             .open(&path)
             .map_err(|error| format!("could not open {}: {error}", path.display()))?;
         // Keep this file open and never unlink it: every instance must lock the same inode.
-        match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+        match fs4::FileExt::try_lock(&file) {
             Ok(()) => Ok(file),
-            Err(rustix::io::Errno::WOULDBLOCK) => Err("already running".into()),
+            Err(fs4::TryLockError::WouldBlock) => Err("already running".into()),
             Err(error) => Err(format!("could not lock {}: {error}", path.display()).into()),
         }
     }
@@ -144,9 +144,13 @@ fn create_data_directory(directory: &Path) -> io::Result<()> {
         fs::create_dir_all(parent)?;
     }
     // Apply private permissions only when creating sati's own directory.
-    let mut builder = DirBuilder::new();
+    let builder = DirBuilder::new();
     #[cfg(unix)]
-    builder.mode(0o700);
+    let builder = {
+        let mut builder = builder;
+        builder.mode(0o700);
+        builder
+    };
     match builder.create(directory) {
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists && directory.is_dir() => Ok(()),
         result => result,
@@ -358,7 +362,18 @@ pub mod tests {
         let _first_lock = first.storage.lock().unwrap();
         let _second_lock = second.storage.lock().unwrap();
         let alias = second.directory.join("alias");
+        #[cfg(unix)]
         std::os::unix::fs::symlink(first.task_path().parent().unwrap(), &alias).unwrap();
+        #[cfg(windows)]
+        {
+            fs::create_dir(&alias).unwrap();
+            // A hard link tests file identity without requiring symlink privileges.
+            fs::hard_link(
+                first.task_path().parent().unwrap().join("tasks.lock"),
+                alias.join("tasks.lock"),
+            )
+            .unwrap();
+        }
         let same_directory = Storage {
             path: alias.join("tasks.json"),
         };

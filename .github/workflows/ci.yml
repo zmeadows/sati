@@ -33,6 +33,10 @@ jobs:
       - name: Test
         if: ${{ !cancelled() }}
         run: cargo test --locked
+      # Storage/terminal unit failures must not prevent Windows locking coverage.
+      - name: Verify Windows process locking
+        if: ${{ !cancelled() && matrix.os == 'windows-latest' }}
+        run: cargo test --locked --test locking
       - name: Build release
         if: ${{ !cancelled() }}
         run: cargo build --release --locked
