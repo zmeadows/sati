@@ -54,6 +54,7 @@ When adding, editing, or clearing all tasks, `Enter` confirms and `Esc` cancels.
 ```bash
 sati --no-wrap             # Keep long tasks on one row
 sati --accent '#a9b665'    # Set the selection accent
+sati --version            # Show the version
 ```
 
 ## Data

@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.85"
 description = "A quiet, persistent terminal checklist"
 license = "MIT"
+readme = "README.md"
 
 [dependencies]
 crossterm = "0.28.1"

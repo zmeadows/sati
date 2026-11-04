@@ -16,7 +16,7 @@ use crossterm::{
 use app::App;
 use storage::{Result, Storage};
 
-const USAGE: &str = "Usage: sati [--no-wrap] [--accent '#RRGGBB']";
+const USAGE: &str = "Usage: sati [--no-wrap] [--accent '#RRGGBB'] [--version]";
 
 // Report repeats for plain characters and Enter too; alternate keys preserve shifted text.
 const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
@@ -29,6 +29,7 @@ const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
 struct Options {
     wrap: bool,
     accent: ratatui::style::Color,
+    print_version: bool,
 }
 
 fn main() -> ExitCode {
@@ -44,10 +45,14 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let Some(options) = parse_arguments(std::env::args_os().skip(1))? else {
         println!(
-            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e)."
+            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e).\n--version          Print the version.\n--help, -h         Show this help."
         );
         return Ok(());
     };
+    if options.print_version {
+        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let storage = Storage::discover()?;
     let _instance_lock = storage.lock()?;
     let mut app = App::new(storage.load()?);
@@ -118,12 +123,15 @@ fn parse_arguments(
     let mut options = Options {
         wrap: true,
         accent: ui::DEFAULT_ACCENT,
+        print_version: false,
     };
     let mut help = false;
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         if argument == "--no-wrap" {
             options.wrap = false;
+        } else if argument == "--version" {
+            options.print_version = true;
         } else if argument == "--accent" {
             let value = arguments
                 .next()
@@ -196,9 +204,27 @@ mod tests {
         let defaults = parse_arguments([]).unwrap().unwrap();
         assert!(defaults.wrap);
         assert_eq!(defaults.accent, ui::DEFAULT_ACCENT);
+        assert!(!defaults.print_version);
         assert!(!parse_arguments(["--no-wrap".into()]).unwrap().unwrap().wrap);
         assert_eq!(parse_arguments(["--help".into()]).unwrap(), None);
         assert!(parse_arguments(["--unknown".into()]).is_err());
+    }
+
+    #[test]
+    fn version_preserves_option_parsing_and_argument_validation() {
+        let options =
+            parse_arguments(["--version", "--no-wrap", "--accent", "#a9b665"].map(Into::into))
+                .unwrap()
+                .unwrap();
+        assert!(options.print_version);
+        assert!(!options.wrap);
+        assert_eq!(options.accent, ratatui::style::Color::Rgb(169, 182, 101));
+        assert_eq!(
+            parse_arguments(["--version", "--help"].map(Into::into)).unwrap(),
+            None
+        );
+        assert!(parse_arguments(["--version", "--unknown"].map(Into::into)).is_err());
+        assert!(parse_arguments(["--version", "--accent"].map(Into::into)).is_err());
     }
 
     #[test]
