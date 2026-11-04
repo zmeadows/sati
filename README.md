@@ -3,9 +3,7 @@
 > **sati** (Pāli) — mindfulness, recollection; the act of
 > remembering or keeping something in mind.
 
-A quiet place for the things you need to do.
-
-sati is a minimalist, persistent terminal checklist written in Rust.
+sati is a minimalist, persistent terminal checklist. A quiet place for the things you need to do.
 
 ## Preview
 
