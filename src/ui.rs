@@ -21,11 +21,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let entering_text = matches!(app.mode, Mode::Adding(_) | Mode::Editing { .. });
     // Give the checklist priority when height is limited; input always gets a row.
     let input_height = u16::from(entering_text && area.height > 0);
-    let legend_height = if area.height >= 6 + input_height {
-        3
-    } else {
-        0
-    };
+    let shortcuts = shortcut_lines();
+    let legend_width = shortcuts.iter().map(Line::width).max().unwrap_or(0);
+    let legend_height =
+        if area.height >= 6 + input_height && usize::from(area.width) >= legend_width {
+            3
+        } else {
+            0
+        };
     let sections = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(input_height),
@@ -43,7 +46,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     if let Mode::Adding(input) | Mode::Editing { input, .. } = &app.mode {
         draw_input(frame, sections[1], input);
     }
-    draw_shortcuts(frame, sections[2]);
+    frame.render_widget(
+        Paragraph::new(shortcuts).style(Style::default().fg(MUTED)),
+        sections[2],
+    );
     if app.mode == Mode::ConfirmClear {
         draw_confirmation(frame, area);
     }
@@ -183,7 +189,7 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-fn draw_shortcuts(frame: &mut Frame, area: Rect) {
+fn shortcut_lines() -> Vec<Line<'static>> {
     let keys = Style::default().fg(TEXT).add_modifier(Modifier::BOLD);
     let columns = [
         [("j/k", "Navigate"), ("J/K", "Move")],
@@ -193,7 +199,9 @@ fn draw_shortcuts(frame: &mut Frame, area: Rect) {
         [("u", "Undo"), ("x", "Clear done")],
     ];
     let mut rows = [vec![Span::raw(" ")], vec![Span::raw(" ")]];
-    for column in columns {
+    let column_count = columns.len();
+    for (index, column) in columns.into_iter().enumerate() {
+        let gap = if index + 1 == column_count { "" } else { "  " };
         let key_width = column.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
         let label_width = column
             .iter()
@@ -202,15 +210,11 @@ fn draw_shortcuts(frame: &mut Frame, area: Rect) {
             .unwrap_or(0);
         for (row, (key, label)) in rows.iter_mut().zip(column) {
             row.push(Span::styled(format!("{key:<key_width$}"), keys));
-            row.push(Span::raw(format!(" {label:<label_width$}  ")));
+            row.push(Span::raw(format!(" {label:<label_width$}{gap}")));
         }
     }
     let [first, second] = rows;
-    frame.render_widget(
-        Paragraph::new(vec![Line::raw(""), Line::from(first), Line::from(second)])
-            .style(Style::default().fg(MUTED)),
-        area,
-    );
+    vec![Line::raw(""), Line::from(first), Line::from(second)]
 }
 
 fn draw_input(frame: &mut Frame, area: Rect, input: &str) {

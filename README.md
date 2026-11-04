@@ -24,6 +24,8 @@ ordered list, without projects, tags, scheduling, or other productivity features
 
 The selected checkbox has a muted orange accent. Completed text is dimmed and
 struck through; completing a task leaves it in place.
+The shortcut legend hides automatically when the window is too narrow or short
+to show it in full, leaving more room for the checklist.
 
 ## Features
 
