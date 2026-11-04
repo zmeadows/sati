@@ -13,6 +13,14 @@ use crossterm::{
 use app::App;
 use storage::{Result, Storage};
 
+const USAGE: &str = "Usage: sati [--no-wrap] [--accent '#RRGGBB']";
+
+#[derive(Debug, PartialEq)]
+struct Options {
+    wrap: bool,
+    accent: ratatui::style::Color,
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -24,15 +32,16 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
-    let Some(wrap) = parse_arguments(std::env::args_os().skip(1))? else {
+    let Some(options) = parse_arguments(std::env::args_os().skip(1))? else {
         println!(
-            "Usage: sati [--no-wrap]\n\nLong tasks wrap by default. --no-wrap keeps one row per task."
+            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e)."
         );
         return Ok(());
     };
     let storage = Storage::discover()?;
     let mut app = App::new(storage.load()?);
-    app.wrap = wrap;
+    app.wrap = options.wrap;
+    app.accent = options.accent;
     let mut terminal = match ratatui::try_init() {
         Ok(terminal) => terminal,
         Err(error) => {
@@ -74,23 +83,50 @@ fn run() -> Result<()> {
 
 fn parse_arguments(
     arguments: impl IntoIterator<Item = std::ffi::OsString>,
-) -> Result<Option<bool>> {
-    let mut wrap = true;
+) -> Result<Option<Options>> {
+    let mut options = Options {
+        wrap: true,
+        accent: ui::DEFAULT_ACCENT,
+    };
     let mut help = false;
-    for argument in arguments {
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
         if argument == "--no-wrap" {
-            wrap = false;
+            options.wrap = false;
+        } else if argument == "--accent" {
+            let value = arguments
+                .next()
+                .ok_or("--accent requires a color in #RRGGBB format")?;
+            options.accent = parse_accent(&value)?;
         } else if argument == "--help" || argument == "-h" {
             help = true;
         } else {
-            return Err(format!(
-                "unknown argument: {}. Usage: sati [--no-wrap]",
-                argument.to_string_lossy()
-            )
-            .into());
+            return Err(
+                format!("unknown argument: {}. {USAGE}", argument.to_string_lossy()).into(),
+            );
         }
     }
-    Ok((!help).then_some(wrap))
+    Ok((!help).then_some(options))
+}
+
+fn parse_accent(value: &std::ffi::OsStr) -> Result<ratatui::style::Color> {
+    let text = value.to_str().unwrap_or("");
+    if text.len() != 7
+        || !text.starts_with('#')
+        || !text[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(format!(
+            "invalid accent color: {}. Expected #RRGGBB",
+            value.to_string_lossy()
+        )
+        .into());
+    }
+    let rgb = u32::from_str_radix(&text[1..], 16)?;
+    Ok(ratatui::style::Color::Rgb(
+        (rgb >> 16) as u8,
+        (rgb >> 8) as u8,
+        rgb as u8,
+    ))
 }
 
 #[cfg(test)]
@@ -99,9 +135,46 @@ mod tests {
 
     #[test]
     fn wrapping_is_enabled_by_default_and_can_be_disabled() {
-        assert_eq!(parse_arguments([]).unwrap(), Some(true));
-        assert_eq!(parse_arguments(["--no-wrap".into()]).unwrap(), Some(false));
+        let defaults = parse_arguments([]).unwrap().unwrap();
+        assert!(defaults.wrap);
+        assert_eq!(defaults.accent, ui::DEFAULT_ACCENT);
+        assert!(!parse_arguments(["--no-wrap".into()]).unwrap().unwrap().wrap);
         assert_eq!(parse_arguments(["--help".into()]).unwrap(), None);
         assert!(parse_arguments(["--unknown".into()]).is_err());
+    }
+
+    #[test]
+    fn accent_accepts_hex_colors_and_combines_with_no_wrap() {
+        for values in [
+            ["--accent", "#a9B665", "--no-wrap"],
+            ["--no-wrap", "--accent", "#A9b665"],
+        ] {
+            let options = parse_arguments(values.map(Into::into)).unwrap().unwrap();
+            assert!(!options.wrap);
+            assert_eq!(options.accent, ratatui::style::Color::Rgb(169, 182, 101));
+        }
+        for color in ["#000000", "#ffffff"] {
+            assert!(parse_accent(std::ffi::OsStr::new(color)).is_ok());
+        }
+    }
+
+    #[test]
+    fn accent_rejects_missing_or_invalid_values() {
+        assert!(parse_arguments(["--accent".into()]).is_err());
+        for color in [
+            "",
+            "orange",
+            "e78a4e",
+            "#abc",
+            "#12345678",
+            "#zzzzzz",
+            "#é1234",
+            "--no-wrap",
+        ] {
+            assert!(
+                parse_arguments(["--accent".into(), color.into()]).is_err(),
+                "accepted {color}"
+            );
+        }
     }
 }

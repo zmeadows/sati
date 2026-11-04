@@ -107,7 +107,18 @@ To keep long tasks on one truncated row instead, disable wrapping for that run:
 ./target/release/sati --no-wrap
 ```
 
-`sati --help` shows the available option. Wrapping changes only the display;
+Set the selected task's accent color with a quoted `#RRGGBB` value:
+
+```bash
+./target/release/sati --accent '#a9b665'
+./target/release/sati --no-wrap --accent '#d8a657'
+```
+
+The default accent is orange (`#e78a4e`). Other colors and styles stay unchanged.
+The option applies only to the current run and is not saved. Invalid colors are
+reported before entering the terminal UI.
+
+`sati --help` shows the available options. These options affect only the display;
 saved task text is unchanged.
 
 Run it directly from the build directory, or open a dedicated Foot window:

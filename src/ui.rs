@@ -13,7 +13,7 @@ use crate::app::{App, Mode};
 // Gruvbox Material dark/medium; the terminal supplies the background.
 const TEXT: Color = Color::Rgb(212, 190, 152);
 const MUTED: Color = Color::Rgb(146, 131, 116);
-const ACCENT: Color = Color::Rgb(231, 138, 78);
+pub const DEFAULT_ACCENT: Color = Color::Rgb(231, 138, 78);
 const BORDER: Color = Color::Rgb(80, 73, 69);
 
 pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
@@ -96,7 +96,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
                 " [ ] "
             };
             let color = if app.list.selected() == Some(index) {
-                ACCENT
+                app.accent
             } else if task.completed {
                 MUTED
             } else {
@@ -359,7 +359,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let checkbox = &buffer[(2, 1)];
         let text = &buffer[(6, 1)];
-        assert_eq!(checkbox.fg, ACCENT);
+        assert_eq!(checkbox.fg, DEFAULT_ACCENT);
         assert_eq!(text.fg, MUTED);
         assert!(
             text.modifier
