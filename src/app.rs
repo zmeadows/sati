@@ -78,7 +78,7 @@ impl App {
         self.reveal_selection = true;
     }
 
-    // Update memory only after a fully synced save. Any save error exits the event loop;
+    // Update memory only after a successful save. Any save error exits the event loop;
     // after a post-replacement error, the next run reloads the file already on disk.
     fn replace(
         &mut self,

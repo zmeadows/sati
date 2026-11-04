@@ -13,10 +13,12 @@ sati is a minimalist, persistent terminal checklist. A quiet place for the thing
 
 ## Installation
 
-Requires Linux and Rust 1.85 or newer. From a repository checkout:
+Supports Linux, macOS, and Windows. Requires Rust 1.85 or newer.
+CI builds and tests all three platforms. Local terminal checks used a Linux
+pseudo-terminal.
 
 ```bash
-cargo install --path . --locked
+cargo install --git https://github.com/zmeadows/sati --locked
 ```
 
 ## Usage
@@ -40,6 +42,9 @@ sati
 When adding, editing, or clearing all tasks, `Enter` confirms and `Esc` cancels.
 New tasks are inserted below the focused task and become selected.
 
+Enhanced keyboard reporting, mouse interaction, and bracketed paste depend on
+terminal and platform support; unbracketed paste is treated as ordinary keystrokes.
+
 ## Options
 
 ```bash
@@ -47,18 +52,19 @@ sati --no-wrap             # Keep long tasks on one row
 sati --no-logo             # Hide the sati border title
 sati --round-corners       # Use rounded checklist corners (default: sharp)
 sati --add-to-bottom       # Add new tasks at the bottom instead of below selection
-sati --accent '#a9b665'    # Set the selection accent
-sati --version            # Show the version
+sati --accent '#a9b665'     # Set the selection accent
+sati --version             # Show the version
 ```
 
 ## Data
 
 Tasks are saved automatically to:
 
-- Linux: `$XDG_DATA_HOME/sati/tasks.json`, defaulting to
-  `~/.local/share/sati/tasks.json`.
-- macOS: `~/Library/Application Support/sati/tasks.json`.
-- Windows: `%APPDATA%\sati\tasks.json`.
+| Platform | Location |
+| --- | --- |
+| Linux | `~/.local/share/sati/tasks.json` (honors `XDG_DATA_HOME`) |
+| macOS | `~/Library/Application Support/sati/tasks.json` |
+| Windows | `%APPDATA%\sati\tasks.json` |
 
 ## License
 
