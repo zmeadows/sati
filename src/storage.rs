@@ -118,6 +118,8 @@ impl Storage {
                 )
             })?;
         drop(file);
+        // Same-directory rename replaces an existing file on Unix and Windows;
+        // never delete the destination first or fall back to copying.
         fs::rename(&temporary, &self.path).map_err(|error| {
             format!(
                 "could not replace {}: {error}. Original tasks are unchanged; fully written temporary file remains at {}",
@@ -126,6 +128,7 @@ impl Storage {
             )
         })?;
         // Replacement is now visible. A directory-sync failure cannot roll it back.
+        #[cfg(unix)]
         File::open(directory)
             .and_then(|file| file.sync_all())
             .map_err(|error| {
@@ -135,6 +138,9 @@ impl Storage {
                     directory.display()
                 )
             })?;
+        // On Windows the temporary file was synced, but there is no portable
+        // directory sync. Success means replacement is visible, not that the
+        // directory entry is guaranteed to survive a crash or power loss.
         Ok(())
     }
 }
@@ -430,6 +436,14 @@ pub mod tests {
         let json = fs::read_to_string(fixture.task_path()).unwrap();
         assert!(json.starts_with("[\n"));
         assert!(json.ends_with('\n'));
+        let mut replacement = tasks.clone();
+        replacement.reverse();
+        replacement[0].completed = false;
+        replacement[1].text.push_str(" updated");
+        for list in [&replacement, &tasks, &replacement] {
+            fixture.storage.save(list).unwrap();
+            assert_eq!(fixture.storage.load().unwrap(), *list);
+        }
         fixture.storage.save(&[]).unwrap();
         assert!(fixture.storage.load().unwrap().is_empty());
         assert_eq!(
@@ -438,6 +452,41 @@ pub mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn temporary_collisions_preserve_existing_files_and_live_data() {
+        let fixture = Fixture::new();
+        let tasks = vec![Task {
+            text: "Keep the original".into(),
+            completed: true,
+        }];
+        fixture.storage.save(&tasks).unwrap();
+        let original = fs::read(fixture.task_path()).unwrap();
+        let directory = fixture.task_path().parent().unwrap();
+        let collision = directory.join(format!(".tasks.json.{}.0.tmp", std::process::id()));
+        fs::write(&collision, "old recovery data").unwrap();
+        let (temporary, file) = create_temporary(directory).unwrap();
+        assert_eq!(temporary.parent(), Some(directory));
+        assert_ne!(temporary, collision);
+        assert_eq!(fs::read_to_string(&collision).unwrap(), "old recovery data");
+        drop(file);
+        fs::remove_file(temporary).unwrap();
+
+        // Exhaust the bounded namespace: a real creation failure independent
+        // of runner privileges, permissions, or available disk space.
+        for sequence in 1..1000 {
+            fs::write(
+                directory.join(format!(".tasks.json.{}.{sequence}.tmp", std::process::id())),
+                "old recovery data",
+            )
+            .unwrap();
+        }
+        let error = fixture.storage.save(&[]).unwrap_err().to_string();
+        assert!(error.contains("too many temporary files"), "{error}");
+        assert_eq!(fs::read(fixture.task_path()).unwrap(), original);
+        assert_eq!(fixture.storage.load().unwrap(), tasks);
+        assert_eq!(fs::read_to_string(collision).unwrap(), "old recovery data");
     }
 
     #[test]
@@ -481,6 +530,50 @@ pub mod tests {
         assert_eq!(
             serde_json::from_slice::<Vec<Task>>(&fs::read(temporary).unwrap()).unwrap(),
             tasks
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn replacement_denied_by_open_file_preserves_original_and_recovery_data() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let fixture = Fixture::new();
+        fixture
+            .storage
+            .save(&[Task {
+                text: "Original tasks".into(),
+                completed: true,
+            }])
+            .unwrap();
+        let original = fs::read(fixture.task_path()).unwrap();
+        // Denying delete sharing prevents replacement even on privileged runners.
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(fixture.task_path())
+            .unwrap();
+        let replacement = vec![Task {
+            text: "Recover me".into(),
+            completed: false,
+        }];
+        let error = fixture.storage.save(&replacement).unwrap_err().to_string();
+        drop(held);
+        assert!(error.contains("could not replace"), "{error}");
+        assert!(error.contains("Original tasks are unchanged"), "{error}");
+        assert!(
+            error.contains("fully written temporary file remains"),
+            "{error}"
+        );
+        assert_eq!(fs::read(fixture.task_path()).unwrap(), original);
+        let temporary = fs::read_dir(fixture.task_path().parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|extension| extension == "tmp"))
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Vec<Task>>(&fs::read(temporary).unwrap()).unwrap(),
+            replacement
         );
     }
 
