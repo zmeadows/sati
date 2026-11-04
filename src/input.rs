@@ -32,6 +32,57 @@ impl TextInput {
         self.snap_forward();
     }
 
+    pub fn move_left(&mut self) {
+        if let Some((start, _)) = self.text[..self.cursor].grapheme_indices(true).next_back() {
+            self.cursor = start;
+        }
+    }
+
+    pub fn move_right(&mut self) {
+        if let Some(grapheme) = self.text[self.cursor..].graphemes(true).next() {
+            self.cursor += grapheme.len();
+        }
+    }
+
+    fn previous_word_start(&self) -> usize {
+        let mut start = self.cursor;
+        let mut found_word = false;
+        for (index, grapheme) in self.text[..self.cursor].grapheme_indices(true).rev() {
+            let whitespace = grapheme.chars().all(char::is_whitespace);
+            if found_word && whitespace {
+                break;
+            }
+            start = index;
+            found_word |= !whitespace;
+        }
+        start
+    }
+
+    pub fn move_word_left(&mut self) {
+        self.cursor = self.previous_word_start();
+    }
+
+    pub fn move_word_right(&mut self) {
+        let mut found_whitespace = false;
+        let mut next = self.text.len();
+        for (offset, grapheme) in self.text[self.cursor..].grapheme_indices(true) {
+            let whitespace = grapheme.chars().all(char::is_whitespace);
+            if found_whitespace && !whitespace {
+                next = self.cursor + offset;
+                break;
+            }
+            found_whitespace |= whitespace;
+        }
+        self.cursor = next;
+    }
+
+    pub fn delete_word_before(&mut self) {
+        let start = self.previous_word_start();
+        self.text.replace_range(start..self.cursor, "");
+        self.cursor = start;
+        self.snap_forward();
+    }
+
     pub fn delete_before(&mut self) {
         if let Some((start, _)) = self.text[..self.cursor].grapheme_indices(true).next_back() {
             self.set_cursor(start);
@@ -86,6 +137,59 @@ mod tests {
                 .chain(std::iter::once(input.text().len()))
                 .any(|index| index == input.cursor())
         );
+    }
+
+    #[test]
+    fn cursor_navigation_clamps_and_treats_non_whitespace_as_words() {
+        let text = "  e\u{301}界,👍🏽  👩‍💻\u{2003}last  ";
+        let mut input = TextInput::from(text);
+        let boundaries: Vec<_> = text
+            .grapheme_indices(true)
+            .map(|(i, _)| i)
+            .chain(std::iter::once(text.len()))
+            .collect();
+        for &expected in boundaries.iter().rev().skip(1) {
+            input.move_left();
+            assert_eq!(input.cursor(), expected);
+        }
+        input.move_left();
+        assert_eq!(input.cursor(), 0);
+        for &expected in boundaries.iter().skip(1) {
+            input.move_right();
+            assert_eq!(input.cursor(), expected);
+        }
+        input.move_right();
+        assert_eq!(input.cursor(), text.len());
+        for expected in [
+            "  e\u{301}界,👍🏽  👩‍💻\u{2003}".len(),
+            "  e\u{301}界,👍🏽  ".len(),
+            2,
+            0,
+            0,
+        ] {
+            let mut deleted = input.clone();
+            deleted.delete_word_before();
+            input.move_word_left();
+            assert_eq!(input.cursor(), expected);
+            assert_eq!(deleted.cursor(), expected);
+            assert_boundary(&deleted);
+        }
+        for expected in [
+            2,
+            "  e\u{301}界,👍🏽  ".len(),
+            "  e\u{301}界,👍🏽  👩‍💻\u{2003}".len(),
+            text.len(),
+            text.len(),
+        ] {
+            input.move_word_right();
+            assert_eq!(input.cursor(), expected);
+            assert_boundary(&input);
+        }
+        let mut input = TextInput::from("one  two  ");
+        input.delete_word_before();
+        assert_eq!(input.text(), "one  ");
+        input.delete_word_before();
+        assert_eq!(input.text(), "");
     }
 
     #[test]

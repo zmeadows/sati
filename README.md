@@ -45,6 +45,11 @@ sati
 When adding, editing, or clearing all tasks, `Enter` confirms and `Esc` cancels.
 New tasks are inserted below the focused task and become selected.
 
+While adding or editing, use Left/Right to move by character, Home/End or
+Ctrl+A/E to reach either end, and Ctrl+Left/Right to move by word.
+Backspace/Delete remove the character before/after the cursor; Ctrl+Backspace
+deletes back to the previous word boundary. Words are separated by whitespace.
+
 Enhanced keyboard reporting, mouse interaction, and bracketed paste depend on
 terminal and platform support; unbracketed paste is treated as ordinary keystrokes.
 

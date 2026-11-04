@@ -869,6 +869,60 @@ mod tests {
     }
 
     #[test]
+    fn editing_navigation_keeps_cursor_visible_through_long_unicode_input() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        let fixture = crate::storage::tests::Fixture::new();
+        let text = format!("start {}end", "e\u{301}界👩‍💻 ".repeat(8));
+        for edit in [false, true] {
+            for width in [1, 2, 8, 16, 40] {
+                let mut app = App::new(vec![Task {
+                    text: text.clone(),
+                    completed: false,
+                }]);
+                app.mode = if edit {
+                    Mode::Editing {
+                        index: 0,
+                        input: text.clone().into(),
+                    }
+                } else {
+                    Mode::Adding(text.clone().into())
+                };
+                let mut terminal = Terminal::new(TestBackend::new(width, 5)).unwrap();
+                for code in std::iter::repeat_n(KeyCode::Left, text.graphemes(true).count() + 2)
+                    .chain(std::iter::repeat_n(
+                        KeyCode::Right,
+                        text.graphemes(true).count() + 2,
+                    ))
+                    .chain([KeyCode::Home, KeyCode::End])
+                {
+                    app.key(
+                        KeyEvent::new_with_kind(code, KeyModifiers::NONE, KeyEventKind::Repeat),
+                        &fixture.storage,
+                    )
+                    .unwrap();
+                    terminal
+                        .draw(|frame| {
+                            draw(frame, &mut app);
+                        })
+                        .unwrap();
+                    let cursor = terminal.get_cursor_position().unwrap();
+                    assert!(cursor.x < width);
+                    assert!(cursor.y < 5);
+                    if width >= 16 && code == KeyCode::Home {
+                        assert!(screen(&terminal).contains("start"));
+                    }
+                    if width >= 16 && code == KeyCode::End {
+                        assert!(screen(&terminal).contains("end"));
+                    }
+                }
+                assert_eq!(app.tasks[0].text, text);
+                assert!(!app.can_undo());
+            }
+        }
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
     fn input_cursor_in_the_middle_keeps_both_sides_visible() {
         for label in ["add", "edit"] {
             let mut input = TextInput::from("hidden text e\u{301}界👩‍💻after");

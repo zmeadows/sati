@@ -223,7 +223,16 @@ impl App {
                     )
             }
             Mode::Adding(_) | Mode::Editing { .. } => {
-                matches!(key.code, KeyCode::Char(_) | KeyCode::Backspace)
+                matches!(
+                    key.code,
+                    KeyCode::Char(_)
+                        | KeyCode::Backspace
+                        | KeyCode::Delete
+                        | KeyCode::Left
+                        | KeyCode::Right
+                        | KeyCode::Home
+                        | KeyCode::End
+                )
             }
             Mode::ConfirmClear => false,
         };
@@ -232,11 +241,26 @@ impl App {
         {
             return Ok(false);
         }
-        // Modified shortcuts must not turn control/alt combinations into edits.
+        // Only the explicitly supported input shortcuts may consume Control events.
         if key
             .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+            .intersects(KeyModifiers::ALT | KeyModifiers::SUPER)
         {
+            return Ok(false);
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if key.modifiers == KeyModifiers::CONTROL {
+                if let Mode::Adding(input) | Mode::Editing { input, .. } = &mut self.mode {
+                    match key.code {
+                        KeyCode::Char('a' | 'A') => input.set_cursor(0),
+                        KeyCode::Char('e' | 'E') => input.set_cursor(input.text().len()),
+                        KeyCode::Left => input.move_word_left(),
+                        KeyCode::Right => input.move_word_right(),
+                        KeyCode::Backspace => input.delete_word_before(),
+                        _ => {}
+                    }
+                }
+            }
             return Ok(false);
         }
         let edited_task = match &self.mode {
@@ -247,6 +271,11 @@ impl App {
             Mode::Adding(input) | Mode::Editing { input, .. } => match key.code {
                 KeyCode::Esc => self.mode = Mode::Normal,
                 KeyCode::Backspace => input.delete_before(),
+                KeyCode::Delete => input.delete_after(),
+                KeyCode::Left => input.move_left(),
+                KeyCode::Right => input.move_right(),
+                KeyCode::Home => input.set_cursor(0),
+                KeyCode::End => input.set_cursor(input.text().len()),
                 KeyCode::Char(character) if !character.is_control() => {
                     input.insert(character.encode_utf8(&mut [0; 4]))
                 }
@@ -438,6 +467,156 @@ mod tests {
             ..KeyEvent::new(code, modifiers)
         };
         assert!(!app.key(key, &fixture.storage).unwrap());
+    }
+
+    #[test]
+    fn input_shortcuts_dispatch_without_leaking_modified_characters() {
+        let fixture = Fixture::new();
+        let text = "one  e\u{301}界  👩‍💻 end";
+        let end_word = "one  e\u{301}界  👩‍💻 ".len();
+        for edit in [false, true] {
+            for kind in [KeyEventKind::Press, KeyEventKind::Repeat] {
+                for (code, modifiers, start, expected_cursor, expected_text) in [
+                    (
+                        KeyCode::Left,
+                        KeyModifiers::NONE,
+                        text.len(),
+                        text.len() - 1,
+                        text,
+                    ),
+                    (KeyCode::Right, KeyModifiers::NONE, 0, 1, text),
+                    (KeyCode::Home, KeyModifiers::NONE, text.len(), 0, text),
+                    (KeyCode::End, KeyModifiers::NONE, 0, text.len(), text),
+                    (
+                        KeyCode::Char('a'),
+                        KeyModifiers::CONTROL,
+                        text.len(),
+                        0,
+                        text,
+                    ),
+                    (
+                        KeyCode::Char('A'),
+                        KeyModifiers::CONTROL,
+                        text.len(),
+                        0,
+                        text,
+                    ),
+                    (
+                        KeyCode::Char('e'),
+                        KeyModifiers::CONTROL,
+                        0,
+                        text.len(),
+                        text,
+                    ),
+                    (
+                        KeyCode::Left,
+                        KeyModifiers::CONTROL,
+                        text.len(),
+                        end_word,
+                        text,
+                    ),
+                    (KeyCode::Right, KeyModifiers::CONTROL, 0, 5, text),
+                    (
+                        KeyCode::Backspace,
+                        KeyModifiers::CONTROL,
+                        text.len(),
+                        end_word,
+                        &text[..end_word],
+                    ),
+                    (
+                        KeyCode::Backspace,
+                        KeyModifiers::NONE,
+                        3,
+                        2,
+                        "on  e\u{301}界  👩‍💻 end",
+                    ),
+                    (KeyCode::Delete, KeyModifiers::NONE, 5, 5, "one  界  👩‍💻 end"),
+                    (
+                        KeyCode::Char('Z'),
+                        KeyModifiers::SHIFT,
+                        0,
+                        1,
+                        "Zone  e\u{301}界  👩‍💻 end",
+                    ),
+                ] {
+                    let mut app = app_with_tasks(1);
+                    let original = app.tasks.clone();
+                    let mut input = TextInput::from(text);
+                    input.set_cursor(start);
+                    app.mode = if edit {
+                        Mode::Editing { index: 0, input }
+                    } else {
+                        Mode::Adding(input)
+                    };
+                    app.key(
+                        KeyEvent::new_with_kind(code, modifiers, kind),
+                        &fixture.storage,
+                    )
+                    .unwrap();
+                    let input = match &app.mode {
+                        Mode::Adding(input) | Mode::Editing { input, .. } => input,
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(input.cursor(), expected_cursor, "{code:?} {modifiers:?}");
+                    assert_eq!(input.text(), expected_text);
+                    assert_eq!(app.tasks, original);
+                    assert!(!app.can_undo());
+                }
+            }
+            let mut app = app_with_tasks(1);
+            app.mode = if edit {
+                Mode::Editing {
+                    index: 0,
+                    input: text.into(),
+                }
+            } else {
+                Mode::Adding(text.into())
+            };
+            let original_mode = format!("{:?}", app.mode);
+            for (code, modifiers) in [
+                (KeyCode::Delete, KeyModifiers::CONTROL),
+                (KeyCode::Char('u'), KeyModifiers::CONTROL),
+                (
+                    KeyCode::Char('a'),
+                    KeyModifiers::CONTROL | KeyModifiers::ALT,
+                ),
+                (
+                    KeyCode::Char('e'),
+                    KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                ),
+                (KeyCode::Left, KeyModifiers::ALT),
+                (KeyCode::Char('Q'), KeyModifiers::SUPER),
+            ] {
+                app.key(KeyEvent::new(code, modifiers), &fixture.storage)
+                    .unwrap();
+                assert_eq!(format!("{:?}", app.mode), original_mode);
+            }
+            app.key(
+                KeyEvent::new_with_kind(KeyCode::Home, KeyModifiers::NONE, KeyEventKind::Release),
+                &fixture.storage,
+            )
+            .unwrap();
+            assert_eq!(format!("{:?}", app.mode), original_mode);
+        }
+        for mode in [Mode::Normal, Mode::ConfirmClear] {
+            let mut app = app_with_tasks(1);
+            app.mode = mode;
+            let original_mode = format!("{:?}", app.mode);
+            for code in [
+                KeyCode::Char('a'),
+                KeyCode::Char('e'),
+                KeyCode::Left,
+                KeyCode::Right,
+                KeyCode::Backspace,
+            ] {
+                app.key(KeyEvent::new(code, KeyModifiers::CONTROL), &fixture.storage)
+                    .unwrap();
+                assert_eq!(format!("{:?}", app.mode), original_mode);
+                assert_eq!(app.tasks.len(), 1);
+                assert!(!app.can_undo());
+            }
+        }
+        assert!(!fixture.task_path().exists());
     }
 
     #[test]
