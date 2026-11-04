@@ -104,13 +104,11 @@ impl App {
         Ok(())
     }
 
-    fn toggle(&mut self, storage: &Storage) -> Result<()> {
-        if let Some(index) = self.list.selected() {
-            let mut tasks = self.tasks.clone();
-            tasks[index].completed = !tasks[index].completed;
-            self.replace(tasks, Some(index), storage)?;
-            self.reveal_selection = false;
-        }
+    fn toggle(&mut self, index: usize, storage: &Storage) -> Result<()> {
+        let mut tasks = self.tasks.clone();
+        tasks[index].completed = !tasks[index].completed;
+        self.replace(tasks, Some(index), storage)?;
+        self.reveal_selection = false;
         Ok(())
     }
 
@@ -232,7 +230,11 @@ impl App {
                 }
                 KeyCode::Char('j') | KeyCode::Down => self.navigate(true, true),
                 KeyCode::Char('k') | KeyCode::Up => self.navigate(false, true),
-                KeyCode::Char(' ') | KeyCode::Enter => self.toggle(storage)?,
+                KeyCode::Char(' ') | KeyCode::Enter => {
+                    if let Some(index) = self.list.selected() {
+                        self.toggle(index, storage)?;
+                    }
+                }
                 KeyCode::Char('a') => self.mode = Mode::Adding(String::new()),
                 KeyCode::Char('e') => {
                     if let Some(index) = self.list.selected() {
@@ -283,8 +285,7 @@ impl App {
                     .row_tasks
                     .get(self.scroll + usize::from(event.row - rows.y))
                 {
-                    self.list.select(Some(index));
-                    self.toggle(storage)?;
+                    self.toggle(index, storage)?;
                 }
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
@@ -1085,6 +1086,75 @@ mod tests {
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.list.selected(), None);
         assert!(fixture.storage.load().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mouse_toggle_undo_restores_the_selection_before_the_click() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        app.row_tasks = vec![0, 1, 2];
+        let original = app.tasks.clone();
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.mouse(click, Rect::new(1, 1, 30, 3), &fixture.storage)
+            .unwrap();
+        assert_eq!(app.list.selected(), Some(2));
+        assert!(app.tasks[2].completed);
+        assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks, original);
+        assert_eq!(app.list.selected(), Some(0));
+        assert_eq!(fixture.storage.load().unwrap(), original);
+        assert!(app.previous.is_none());
+    }
+
+    #[test]
+    fn mouse_toggle_failure_preserves_selection_and_existing_undo() {
+        for has_previous in [false, true] {
+            let fixture = Fixture::new();
+            let mut app = app_with_tasks(3);
+            app.row_tasks = vec![0, 1, 2];
+            let original = app.tasks.clone();
+            if has_previous {
+                press(&mut app, &fixture, KeyCode::Char(' '));
+            }
+            press(&mut app, &fixture, KeyCode::Char('j'));
+            let before_click = app.tasks.clone();
+            let data = fixture.directory.join("data");
+            let backup = fixture.directory.join("backup");
+            if has_previous {
+                std::fs::rename(&data, &backup).unwrap();
+            }
+            std::fs::write(&data, "blocking file").unwrap();
+            let click = MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 1,
+                row: 3,
+                modifiers: KeyModifiers::NONE,
+            };
+            assert!(
+                app.mouse(click, Rect::new(1, 1, 30, 3), &fixture.storage)
+                    .is_err()
+            );
+            assert_eq!(app.tasks, before_click);
+            assert_eq!(app.list.selected(), Some(1));
+            assert_eq!(app.previous.is_some(), has_previous);
+            if let Some(previous) = &app.previous {
+                assert_eq!(previous.tasks, original);
+                assert_eq!(previous.selected, Some(0));
+            }
+            std::fs::remove_file(&data).unwrap();
+            if has_previous {
+                std::fs::rename(&backup, &data).unwrap();
+            }
+            press(&mut app, &fixture, KeyCode::Char('u'));
+            assert_eq!(app.tasks, original);
+            assert_eq!(app.list.selected(), Some(if has_previous { 0 } else { 1 }));
+        }
     }
 
     #[test]
