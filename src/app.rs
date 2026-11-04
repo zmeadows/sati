@@ -258,6 +258,18 @@ impl App {
         Ok(false)
     }
 
+    pub fn paste(&mut self, text: &str) {
+        if let Mode::Adding(input) | Mode::Editing { input, .. } = &mut self.mode {
+            input.extend(text.replace("\r\n", "\n").chars().map(|character| {
+                if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
+                    ' '
+                } else {
+                    character
+                }
+            }));
+        }
+    }
+
     pub fn mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
         if self.mode != Mode::Normal || !rows.contains((event.column, event.row).into()) {
             return Ok(());
@@ -327,6 +339,93 @@ mod tests {
             ..KeyEvent::new(code, modifiers)
         };
         assert!(!app.key(key, &fixture.storage).unwrap());
+    }
+
+    #[test]
+    fn pasted_multiline_text_is_literal_and_requires_explicit_confirmation() {
+        for ending in [KeyCode::Enter, KeyCode::Esc] {
+            let fixture = Fixture::new();
+            let mut app = app_with_tasks(1);
+            let original = app.tasks.clone();
+            press(&mut app, &fixture, KeyCode::Char('a'));
+            app.paste("Start ");
+            app.paste("日本語\r\nq\nD\rd\tx\0u\u{0008}\u{001b}[13u\u{0085}👩‍💻\u{2028}e\u{2029}end");
+            let expected = "Start 日本語 q D d x u  [13u 👩‍💻 e end";
+            assert_eq!(app.mode, Mode::Adding(expected.into()));
+            assert_eq!(app.tasks, original);
+            assert_eq!(app.list.selected(), Some(0));
+            assert!(!fixture.task_path().exists());
+            press(&mut app, &fixture, ending);
+            assert_eq!(app.mode, Mode::Normal);
+            if ending == KeyCode::Enter {
+                assert_eq!(app.tasks.len(), 2);
+                assert_eq!(app.tasks[1].text, expected);
+                assert!(!app.tasks[1].completed);
+                assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+            } else {
+                assert_eq!(app.tasks, original);
+                assert!(!fixture.task_path().exists());
+            }
+        }
+    }
+
+    #[test]
+    fn paste_appends_to_edit_input_and_preserves_completion_order_and_undo() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        app.list.select(Some(1));
+        app.tasks[1].completed = true;
+        let original = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char('e'));
+        app.paste(" \r\nD\nd q日本語");
+        assert_eq!(
+            app.mode,
+            Mode::Editing {
+                index: 1,
+                input: "task 1  D d q日本語".into()
+            }
+        );
+        assert_eq!(app.tasks, original);
+        assert!(!fixture.task_path().exists());
+        press(&mut app, &fixture, KeyCode::Enter);
+        let mut expected = original.clone();
+        expected[1].text = "task 1  D d q日本語".into();
+        assert_eq!(app.tasks, expected);
+        assert_eq!(app.list.selected(), Some(1));
+        assert_eq!(fixture.storage.load().unwrap(), expected);
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks, original);
+    }
+
+    #[test]
+    fn paste_in_normal_or_confirmation_mode_cannot_act_or_consume_undo() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        app.list.select(Some(1));
+        let original = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char(' '));
+        let modified = app.tasks.clone();
+        for confirm in [false, true] {
+            if confirm {
+                press(&mut app, &fixture, KeyCode::Char('D'));
+            }
+            app.paste("q\r\nD\r\nd\ra\nx u\u{001b}日本語");
+            app.paste("");
+            assert_eq!(app.tasks, modified);
+            assert_eq!(app.list.selected(), Some(1));
+            assert_eq!(
+                app.mode,
+                if confirm {
+                    Mode::ConfirmClear
+                } else {
+                    Mode::Normal
+                }
+            );
+            assert_eq!(fixture.storage.load().unwrap(), modified);
+        }
+        press(&mut app, &fixture, KeyCode::Esc);
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks, original);
     }
 
     #[test]

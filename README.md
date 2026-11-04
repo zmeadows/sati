@@ -73,6 +73,10 @@ Press `e` to edit a task using the same input field, prefilled with its current
 text. `Enter` saves and `Esc` cancels. Blank edits leave the task unchanged.
 Editing preserves the task's position, completion state, and selection.
 
+Pasting is accepted only while adding or editing. Line breaks and control
+characters become spaces; pasted text never activates shortcuts or submits the
+entry. Press `Enter` to save or `Esc` to cancel as usual.
+
 Undo covers adding, editing, deletion, completion toggling, reordering, and
 clearing. It saves the restored list immediately, then discards the undo buffer.
 Only the most recent change can be undone; there is no redo or undo stack.

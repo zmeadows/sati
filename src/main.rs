@@ -7,8 +7,8 @@ use std::{io, panic, process::ExitCode};
 use crossterm::{
     cursor::Show,
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyboardEnhancementFlags,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
 };
@@ -59,11 +59,12 @@ fn run() -> Result<()> {
             return Err(error.into());
         }
     };
-    // Restore keyboard reporting and mouse capture before Ratatui leaves the alternate screen.
+    // Restore input modes before Ratatui leaves the alternate screen.
     let previous_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
         let _ = execute!(
             io::stdout(),
+            DisableBracketedPaste,
             PopKeyboardEnhancementFlags,
             DisableMouseCapture,
             Show
@@ -75,6 +76,7 @@ fn run() -> Result<()> {
         execute!(
             io::stdout(),
             EnableMouseCapture,
+            EnableBracketedPaste,
             PushKeyboardEnhancementFlags(KEYBOARD_FLAGS)
         )?;
         loop {
@@ -87,6 +89,7 @@ fn run() -> Result<()> {
                     }
                 }
                 Event::Mouse(mouse) => app.mouse(mouse, rows, &storage)?,
+                Event::Paste(text) => app.paste(&text),
                 _ => {}
             }
         }
@@ -94,6 +97,7 @@ fn run() -> Result<()> {
     })();
     let input_result = execute!(
         io::stdout(),
+        DisableBracketedPaste,
         PopKeyboardEnhancementFlags,
         DisableMouseCapture,
         Show
