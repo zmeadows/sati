@@ -23,12 +23,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let input_height = u16::from(entering_text && area.height > 0);
     let shortcuts = shortcut_lines();
     let legend_width = shortcuts.iter().map(Line::width).max().unwrap_or(0);
-    let legend_height =
-        if area.height >= 6 + input_height && usize::from(area.width) >= legend_width {
-            3
-        } else {
-            0
-        };
+    let legend_height = shortcuts.len() as u16;
+    let legend_height = if area.height >= 3 + legend_height + input_height
+        && usize::from(area.width) >= legend_width
+    {
+        legend_height
+    } else {
+        0
+    };
     let sections = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(input_height),
@@ -210,13 +212,16 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 fn shortcut_lines() -> Vec<Line<'static>> {
     let keys = Style::default().fg(TEXT).add_modifier(Modifier::BOLD);
     let columns = [
-        [("j/k", "Navigate"), ("J/K", "Move")],
-        [("Space", "Toggle"), ("d", "Delete")],
-        [("a", "Add"), ("D", "Clear")],
-        [("q", "Quit"), ("e", "Edit")],
-        [("u", "Undo"), ("x", "Clear done")],
+        [("j/k", "Navigate"), ("a", "Add"), ("d", "Delete")],
+        [("g", "First"), ("e", "Edit"), ("x", "Clear done")],
+        [("G", "Last"), ("Space", "Toggle"), ("D", "Clear all")],
+        [("J/K", "Move"), ("u", "Undo"), ("q", "Quit")],
     ];
-    let mut rows = [vec![Span::raw(" ")], vec![Span::raw(" ")]];
+    let mut rows = [
+        vec![Span::raw(" ")],
+        vec![Span::raw(" ")],
+        vec![Span::raw(" ")],
+    ];
     let column_count = columns.len();
     for (index, column) in columns.into_iter().enumerate() {
         let gap = if index + 1 == column_count { "" } else { "  " };
@@ -231,8 +236,13 @@ fn shortcut_lines() -> Vec<Line<'static>> {
             row.push(Span::raw(format!(" {label:<label_width$}{gap}")));
         }
     }
-    let [first, second] = rows;
-    vec![Line::raw(""), Line::from(first), Line::from(second)]
+    let [first, second, third] = rows;
+    vec![
+        Line::raw(""),
+        Line::from(first),
+        Line::from(second),
+        Line::from(third),
+    ]
 }
 
 fn draw_input(frame: &mut Frame, area: Rect, input: &str, label: &str, accent: Color) {

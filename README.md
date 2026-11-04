@@ -30,6 +30,7 @@ sati
 | Key | Action |
 | --- | --- |
 | `j` / `Down`, `k` / `Up` | Select next / previous task |
+| `g` / `Home`, `G` / `End` | Select first / last task |
 | `J` / `Shift+Down`, `K` / `Shift+Up` | Move task down / up |
 | `Space` / `Enter` | Toggle completion |
 | `a` / `e` | Add / edit task |

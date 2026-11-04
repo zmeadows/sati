@@ -240,6 +240,16 @@ impl App {
                 }
                 KeyCode::Char('j') | KeyCode::Down => self.navigate(true),
                 KeyCode::Char('k') | KeyCode::Up => self.navigate(false),
+                KeyCode::Char('g' | 'G') | KeyCode::Home | KeyCode::End
+                    if !self.tasks.is_empty() =>
+                {
+                    let first = key.code == KeyCode::Home
+                        || (key.code == KeyCode::Char('g')
+                            && !key.modifiers.contains(KeyModifiers::SHIFT));
+                    let index = if first { 0 } else { self.tasks.len() - 1 };
+                    self.list.select(Some(index));
+                    self.reveal_selection = true;
+                }
                 KeyCode::Char(' ') | KeyCode::Enter => {
                     if let Some(index) = self.list.selected() {
                         self.toggle(index, storage)?;
@@ -482,6 +492,75 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Esc);
         press(&mut app, &fixture, KeyCode::Char('u'));
         assert_eq!(app.tasks, original);
+    }
+
+    #[test]
+    fn first_and_last_navigation_preserves_tasks_and_undo_and_is_modal() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        app.list.select(Some(1));
+        let original = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char(' '));
+        let changed = app.tasks.clone();
+        for (code, selected) in [
+            (KeyCode::Char('G'), 2),
+            (KeyCode::Char('g'), 0),
+            (KeyCode::End, 2),
+            (KeyCode::Home, 0),
+        ] {
+            app.reveal_selection = false;
+            press(&mut app, &fixture, code);
+            assert_eq!(app.list.selected(), Some(selected));
+            assert!(app.reveal_selection);
+            assert_eq!(app.tasks, changed);
+            assert_eq!(fixture.storage.load().unwrap(), changed);
+            let mut empty = app_with_tasks(0);
+            press(&mut empty, &fixture, code);
+            assert_eq!(empty.list.selected(), None);
+        }
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks, original);
+        assert_eq!(app.list.selected(), Some(1));
+        for code in [KeyCode::Char('G'), KeyCode::Char('g')] {
+            app.key(KeyEvent::new(code, KeyModifiers::SHIFT), &fixture.storage)
+                .unwrap();
+            assert_eq!(app.list.selected(), Some(2));
+        }
+        app.list.select(Some(1));
+        for mode in [
+            Mode::Adding(String::new()),
+            Mode::Editing {
+                index: 1,
+                input: String::new(),
+            },
+        ] {
+            app.mode = mode;
+            for code in [
+                KeyCode::Char('g'),
+                KeyCode::Char('G'),
+                KeyCode::Home,
+                KeyCode::End,
+            ] {
+                press(&mut app, &fixture, code);
+            }
+            match &app.mode {
+                Mode::Adding(input) | Mode::Editing { input, .. } => assert_eq!(input, "gG"),
+                _ => unreachable!(),
+            }
+            assert_eq!(app.list.selected(), Some(1));
+        }
+        app.mode = Mode::ConfirmClear;
+        for code in [
+            KeyCode::Char('g'),
+            KeyCode::Char('G'),
+            KeyCode::Home,
+            KeyCode::End,
+        ] {
+            press(&mut app, &fixture, code);
+        }
+        assert_eq!(app.mode, Mode::ConfirmClear);
+        assert_eq!(app.tasks, original);
+        assert_eq!(app.list.selected(), Some(1));
     }
 
     #[test]
