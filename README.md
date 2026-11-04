@@ -18,7 +18,7 @@ ordered list, without projects, tags, scheduling, or other productivity features
 │                                                │
 └────────────────────────────────────────────────┘
 
- j/k Navigate  Space Toggle  a Add    q Quit
+ j/k Navigate  Space Toggle  a Add    q Quit  u Undo
  J/K Move      d     Delete  D Clear  e Edit
 ```
 
@@ -32,6 +32,7 @@ struck through; completing a task leaves it in place.
 - Navigate with the keyboard or mouse.
 - Move tasks up or down with the keyboard.
 - Clear the list with confirmation.
+- Undo the last change during the current session.
 - Save every change automatically.
 
 ## Keybindings
@@ -47,6 +48,7 @@ struck through; completing a task leaves it in place.
 | `e` | Edit the selected task's text |
 | `d` | Delete the selected task immediately |
 | `D` (Shift+D) | Confirm clearing all tasks |
+| `u` | Undo the most recent change, restoring the list and selection |
 | `Esc` | Cancel input or confirmation; no action in normal mode |
 | `q` | Quit immediately in normal mode |
 
@@ -60,6 +62,12 @@ are ignored. List shortcuts are ordinary text while typing.
 Press `e` to edit a task using the same input field, prefilled with its current
 text. `Enter` saves and `Esc` cancels. Blank edits leave the task unchanged.
 Editing preserves the task's position, completion state, and selection.
+
+Undo covers adding, editing, deletion, completion toggling, reordering, and
+clearing. It saves the restored list immediately, then discards the undo buffer.
+Only the most recent change can be undone; there is no redo or undo stack.
+Navigation and cancelled or unchanged input leave the buffer intact. Undo history
+is held only in memory and disappears when sati exits.
 
 In the clear dialog, **only `Enter` confirms**; `Esc` cancels. Other keys do nothing.
 

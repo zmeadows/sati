@@ -19,6 +19,11 @@ pub enum Mode {
     ConfirmClear,
 }
 
+struct UndoState {
+    tasks: Vec<Task>,
+    selected: Option<usize>,
+}
+
 pub struct App {
     pub tasks: Vec<Task>,
     pub list: ListState,
@@ -27,6 +32,7 @@ pub struct App {
     pub scroll: usize,
     pub row_tasks: Vec<usize>,
     pub reveal_selection: bool,
+    previous: Option<UndoState>,
 }
 
 impl App {
@@ -40,6 +46,7 @@ impl App {
             scroll: 0,
             row_tasks: Vec::new(),
             reveal_selection: true,
+            previous: None,
         }
     }
 
@@ -72,9 +79,23 @@ impl App {
         storage: &Storage,
     ) -> Result<()> {
         storage.save(&tasks)?;
-        self.tasks = tasks;
+        self.previous = Some(UndoState {
+            tasks: std::mem::replace(&mut self.tasks, tasks),
+            selected: self.list.selected(),
+        });
         self.list.select(selected);
         self.reveal_selection = true;
+        Ok(())
+    }
+
+    fn undo(&mut self, storage: &Storage) -> Result<()> {
+        if let Some(previous) = &self.previous {
+            storage.save(&previous.tasks)?;
+            self.tasks = previous.tasks.clone();
+            self.list.select(previous.selected);
+            self.reveal_selection = true;
+            self.previous = None;
+        }
         Ok(())
     }
 
@@ -152,6 +173,7 @@ impl App {
             },
             Mode::Normal => match key.code {
                 KeyCode::Char('q') => return Ok(true),
+                KeyCode::Char('u') => self.undo(storage)?,
                 KeyCode::Char('J') => self.move_selected(true, storage)?,
                 KeyCode::Char('K') => self.move_selected(false, storage)?,
                 KeyCode::Char('j') | KeyCode::Down
@@ -254,6 +276,121 @@ mod tests {
     fn press(app: &mut App, fixture: &Fixture, code: KeyCode) -> bool {
         app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
             .unwrap()
+    }
+
+    #[test]
+    fn undo_restores_list_and_selection_for_every_modification() {
+        use KeyCode::{Char, Enter};
+        for keys in [
+            vec![Char('d')],
+            vec![Char(' ')],
+            vec![Char('J')],
+            vec![Char('K')],
+            vec![Char('D'), Enter],
+            vec![Char('a'), Char('x'), Enter],
+            vec![Char('e'), Char('x'), Enter],
+        ] {
+            let fixture = Fixture::new();
+            let mut app = app_with_tasks(3);
+            app.list.select(Some(1));
+            app.tasks[1].completed = true;
+            let original = app.tasks.clone();
+            for key in keys {
+                press(&mut app, &fixture, key);
+            }
+            assert_ne!(app.tasks, original);
+            app.navigate(true, true);
+            press(&mut app, &fixture, Char('u'));
+            assert_eq!(app.tasks, original);
+            assert_eq!(app.list.selected(), Some(1));
+            assert_eq!(fixture.storage.load().unwrap(), original);
+            assert!(app.reveal_selection);
+            assert!(app.previous.is_none());
+            press(&mut app, &fixture, Char('u'));
+            assert_eq!(app.tasks, original);
+        }
+    }
+
+    #[test]
+    fn undo_has_one_level_and_no_history_after_restart() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(2);
+        press(&mut app, &fixture, KeyCode::Char('d'));
+        let preceding = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char('d'));
+        assert!(app.tasks.is_empty());
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks, preceding);
+        assert_eq!(app.list.selected(), Some(0));
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks, preceding);
+        let mut restarted = App::new(fixture.storage.load().unwrap());
+        press(&mut restarted, &fixture, KeyCode::Char('u'));
+        assert_eq!(restarted.tasks, preceding);
+        assert!(restarted.previous.is_none());
+    }
+
+    #[test]
+    fn no_ops_and_cancelled_input_keep_undo_and_u_is_text_in_input_modes() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(1);
+        let original = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char(' '));
+        // Boundary movement, unchanged editing, blank adding, and cancelled clear.
+        for code in [
+            KeyCode::Char('J'),
+            KeyCode::Char('e'),
+            KeyCode::Enter,
+            KeyCode::Char('a'),
+            KeyCode::Enter,
+            KeyCode::Char('D'),
+            KeyCode::Char('u'),
+            KeyCode::Esc,
+        ] {
+            press(&mut app, &fixture, code);
+        }
+        for code in [KeyCode::Char('a'), KeyCode::Char('e')] {
+            press(&mut app, &fixture, code);
+            press(&mut app, &fixture, KeyCode::Char('u'));
+            match &app.mode {
+                Mode::Adding(input) | Mode::Editing { input, .. } => assert!(input.ends_with('u')),
+                _ => panic!("expected text input"),
+            }
+            press(&mut app, &fixture, KeyCode::Esc);
+        }
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks, original);
+        let mut empty = app_with_tasks(0);
+        press(&mut empty, &fixture, KeyCode::Char('u'));
+        assert!(empty.tasks.is_empty());
+    }
+
+    #[test]
+    fn failed_modification_or_undo_preserves_the_undo_buffer() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(2);
+        let original = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char(' '));
+        let modified = app.tasks.clone();
+        let data = fixture.directory.join("data");
+        let backup = fixture.directory.join("backup");
+        std::fs::rename(&data, &backup).unwrap();
+        std::fs::write(&data, "blocking file").unwrap();
+        for code in [KeyCode::Char('d'), KeyCode::Char('u')] {
+            assert!(
+                app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
+                    .is_err()
+            );
+            assert_eq!(app.tasks, modified);
+            assert_eq!(app.list.selected(), Some(0));
+            assert_eq!(app.previous.as_ref().unwrap().tasks, original);
+        }
+        std::fs::remove_file(data.clone()).unwrap();
+        std::fs::rename(backup, data).unwrap();
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks, original);
+        assert_eq!(fixture.storage.load().unwrap(), original);
+        assert!(app.previous.is_none());
     }
 
     #[test]
