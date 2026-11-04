@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -6,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::storage::{Result, Storage};
+
+const UNDO_LIMIT: usize = 10;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -40,7 +44,7 @@ pub struct App {
     pub scroll: usize,
     pub row_tasks: Vec<usize>,
     pub reveal_selection: bool,
-    previous: Option<UndoState>,
+    history: VecDeque<UndoState>,
 }
 
 impl App {
@@ -59,7 +63,7 @@ impl App {
             scroll: 0,
             row_tasks: Vec::new(),
             reveal_selection: true,
-            previous: None,
+            history: VecDeque::new(),
         }
     }
 
@@ -89,7 +93,10 @@ impl App {
         storage: &Storage,
     ) -> Result<()> {
         storage.save(&tasks)?;
-        self.previous = Some(UndoState {
+        if self.history.len() == UNDO_LIMIT {
+            self.history.pop_front();
+        }
+        self.history.push_back(UndoState {
             tasks: std::mem::replace(&mut self.tasks, tasks),
             selected: self.list.selected(),
         });
@@ -99,12 +106,12 @@ impl App {
     }
 
     fn undo(&mut self, storage: &Storage) -> Result<()> {
-        if let Some(previous) = &self.previous {
+        if let Some(previous) = self.history.back() {
             storage.save(&previous.tasks)?;
             self.tasks = previous.tasks.clone();
             self.list.select(previous.selected);
             self.reveal_selection = true;
-            self.previous = None;
+            self.history.pop_back();
         }
         Ok(())
     }
@@ -724,7 +731,7 @@ mod tests {
         let mut app = app_with_tasks(0);
         press(&mut app, &fixture, KeyCode::Char('x'));
         assert!(!fixture.task_path().exists());
-        assert!(app.previous.is_none());
+        assert!(app.history.is_empty());
         press(&mut app, &fixture, KeyCode::Char('a'));
         press(&mut app, &fixture, KeyCode::Char('x'));
         press(&mut app, &fixture, KeyCode::Enter);
@@ -791,16 +798,110 @@ mod tests {
             assert_eq!(app.list.selected(), Some(1));
             assert_eq!(fixture.storage.load().unwrap(), original);
             assert!(app.reveal_selection);
-            assert!(app.previous.is_none());
+            assert!(app.history.is_empty());
             press(&mut app, &fixture, Char('u'));
             assert_eq!(app.tasks, original);
         }
     }
 
     #[test]
-    fn undo_has_one_level_and_no_history_after_restart() {
+    fn undo_history_discards_oldest_entries_after_ten_mutations() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(0);
+        for index in 0..12 {
+            press(&mut app, &fixture, KeyCode::Char('a'));
+            app.paste(&format!("task {index}"));
+            press(&mut app, &fixture, KeyCode::Enter);
+            assert_eq!(app.history.len(), (index + 1).min(10));
+        }
+        for remaining in (2..12).rev() {
+            press(&mut app, &fixture, KeyCode::Char('u'));
+            assert_eq!(app.tasks.len(), remaining);
+            assert_eq!(
+                app.tasks.last().unwrap().text,
+                format!("task {}", remaining - 1)
+            );
+            assert_eq!(app.list.selected(), Some(remaining - 1));
+            assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+        }
+        assert!(app.history.is_empty());
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks.len(), 2);
+    }
+
+    #[test]
+    fn new_mutations_after_undo_record_the_restored_state() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(0);
+        for text in ["first", "second"] {
+            press(&mut app, &fixture, KeyCode::Char('a'));
+            app.paste(text);
+            press(&mut app, &fixture, KeyCode::Enter);
+        }
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        press(&mut app, &fixture, KeyCode::Char('e'));
+        app.paste(" edited");
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert_eq!(app.history.len(), 2);
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks[0].text, "first");
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert!(app.tasks.is_empty());
+        assert_eq!(app.list.selected(), None);
+        assert!(app.reveal_selection);
+        assert!(app.history.is_empty());
+        assert!(fixture.storage.load().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mixed_mutations_undo_in_order_and_reveal_restored_wrapped_selection() {
+        use KeyCode::{Char, Enter};
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        app.tasks[0].text = "wrapped task ".repeat(30);
+        let mut snapshots = Vec::new();
+        for keys in [
+            vec![Char('a'), Char('n'), Enter],
+            vec![Char('e'), Char('!'), Enter],
+            vec![Char(' ')],
+            vec![Char('K')],
+            vec![Char('x')],
+            vec![Char('d')],
+            vec![Char('D'), Enter],
+        ] {
+            snapshots.push((app.tasks.clone(), app.list.selected()));
+            for key in keys {
+                press(&mut app, &fixture, key);
+            }
+            assert_eq!(app.history.len(), snapshots.len());
+        }
+        assert!(app.tasks.is_empty());
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(18, 6)).unwrap();
+        for (tasks, selected) in snapshots.into_iter().rev() {
+            app.scroll = usize::MAX;
+            press(&mut app, &fixture, Char('u'));
+            assert_eq!(app.tasks, tasks);
+            assert_eq!(app.list.selected(), selected);
+            assert!(app.reveal_selection);
+            assert_eq!(fixture.storage.load().unwrap(), tasks);
+            let mut rows = Rect::default();
+            terminal
+                .draw(|frame| rows = crate::ui::draw(frame, &mut app))
+                .unwrap();
+            if let Some(selected) = selected {
+                let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
+                assert!(app.row_tasks[app.scroll..end].contains(&selected));
+            }
+        }
+        assert!(app.history.is_empty());
+    }
+
+    #[test]
+    fn undo_walks_back_through_history_and_does_not_survive_restart() {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(2);
+        let original = app.tasks.clone();
         press(&mut app, &fixture, KeyCode::Char('d'));
         let preceding = app.tasks.clone();
         press(&mut app, &fixture, KeyCode::Char('d'));
@@ -808,12 +909,16 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Char('u'));
         assert_eq!(app.tasks, preceding);
         assert_eq!(app.list.selected(), Some(0));
-        press(&mut app, &fixture, KeyCode::Char('u'));
-        assert_eq!(app.tasks, preceding);
         let mut restarted = App::new(fixture.storage.load().unwrap());
         press(&mut restarted, &fixture, KeyCode::Char('u'));
         assert_eq!(restarted.tasks, preceding);
-        assert!(restarted.previous.is_none());
+        assert!(restarted.history.is_empty());
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks, original);
+        assert_eq!(fixture.storage.load().unwrap(), original);
+        assert!(app.history.is_empty());
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks, original);
     }
 
     #[test]
@@ -857,7 +962,14 @@ mod tests {
         let mut app = app_with_tasks(2);
         let original = app.tasks.clone();
         press(&mut app, &fixture, KeyCode::Char(' '));
+        let intermediate = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char('J'));
         let modified = app.tasks.clone();
+        let history: Vec<_> = app
+            .history
+            .iter()
+            .map(|state| (state.tasks.clone(), state.selected))
+            .collect();
         let data = fixture.directory.join("data");
         let backup = fixture.directory.join("backup");
         std::fs::rename(&data, &backup).unwrap();
@@ -868,15 +980,24 @@ mod tests {
                     .is_err()
             );
             assert_eq!(app.tasks, modified);
-            assert_eq!(app.list.selected(), Some(0));
-            assert_eq!(app.previous.as_ref().unwrap().tasks, original);
+            assert_eq!(app.list.selected(), Some(1));
+            assert_eq!(
+                app.history
+                    .iter()
+                    .map(|state| (state.tasks.clone(), state.selected))
+                    .collect::<Vec<_>>(),
+                history
+            );
         }
         std::fs::remove_file(data.clone()).unwrap();
         std::fs::rename(backup, data).unwrap();
         press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks, intermediate);
+        assert_eq!(app.history.len(), 1);
+        press(&mut app, &fixture, KeyCode::Char('u'));
         assert_eq!(app.tasks, original);
         assert_eq!(fixture.storage.load().unwrap(), original);
-        assert!(app.previous.is_none());
+        assert!(app.history.is_empty());
     }
 
     #[test]
@@ -1250,7 +1371,7 @@ mod tests {
         assert_eq!(app.tasks, original);
         assert_eq!(app.list.selected(), Some(0));
         assert_eq!(fixture.storage.load().unwrap(), original);
-        assert!(app.previous.is_none());
+        assert!(app.history.is_empty());
     }
 
     #[test]
@@ -1283,8 +1404,8 @@ mod tests {
             );
             assert_eq!(app.tasks, before_click);
             assert_eq!(app.list.selected(), Some(1));
-            assert_eq!(app.previous.is_some(), has_previous);
-            if let Some(previous) = &app.previous {
+            assert_eq!(!app.history.is_empty(), has_previous);
+            if let Some(previous) = app.history.back() {
                 assert_eq!(previous.tasks, original);
                 assert_eq!(previous.selected, Some(0));
             }

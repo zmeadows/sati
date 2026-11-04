@@ -37,7 +37,7 @@ sati
 | `d` | Delete task |
 | `x` | Clear completed tasks |
 | `D` | Clear all tasks |
-| `u` | Undo last change |
+| `u` | Undo recent changes (up to 10) |
 | `w` | Toggle line wrapping |
 | `q` | Quit |
 
