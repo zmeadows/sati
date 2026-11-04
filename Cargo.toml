@@ -13,7 +13,7 @@ todo = "warn"
 unimplemented = "warn"
 
 [dependencies]
-crossterm = "0.28.1"
+crossterm = "0.29.0"
 fs4 = "1.1.0"
 ratatui = { version = "0.29.0", default-features = false, features = ["crossterm"] }
 serde = { version = "1.0", features = ["derive"] }
