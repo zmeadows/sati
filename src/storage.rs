@@ -3,9 +3,11 @@ use std::{
     error::Error,
     fs::{self, DirBuilder, File, OpenOptions},
     io::{self, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 use crate::app::Task;
 
@@ -17,6 +19,7 @@ pub struct Storage {
 
 impl Storage {
     pub fn discover() -> Result<Self> {
+        #[cfg(not(any(target_os = "macos", windows)))]
         let base = match env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
             Some(path) => {
                 let path = PathBuf::from(path);
@@ -32,6 +35,22 @@ impl Storage {
             )
             .join(".local/share"),
         };
+        #[cfg(target_os = "macos")]
+        let base = PathBuf::from(
+            env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .ok_or("HOME is not set")?,
+        )
+        .join("Library/Application Support");
+        #[cfg(windows)]
+        let base = PathBuf::from(
+            env::var_os("APPDATA")
+                .filter(|value| !value.is_empty())
+                .ok_or("APPDATA is not set")?,
+        );
+        if !base.is_absolute() {
+            return Err("data directory must be an absolute path".into());
+        }
         Ok(Self {
             path: base.join("sati/tasks.json"),
         })
@@ -45,12 +64,11 @@ impl Storage {
         create_data_directory(directory)
             .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
         let path = directory.join("tasks.lock");
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let file = options
             .open(&path)
             .map_err(|error| format!("could not open {}: {error}", path.display()))?;
         // Keep this file open and never unlink it: every instance must lock the same inode.
@@ -126,7 +144,10 @@ fn create_data_directory(directory: &Path) -> io::Result<()> {
         fs::create_dir_all(parent)?;
     }
     // Apply private permissions only when creating sati's own directory.
-    match DirBuilder::new().mode(0o700).create(directory) {
+    let mut builder = DirBuilder::new();
+    #[cfg(unix)]
+    builder.mode(0o700);
+    match builder.create(directory) {
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists && directory.is_dir() => Ok(()),
         result => result,
     }
@@ -135,12 +156,11 @@ fn create_data_directory(directory: &Path) -> io::Result<()> {
 fn create_temporary(directory: &Path) -> Result<(PathBuf, File)> {
     for sequence in 0..1000 {
         let path = directory.join(format!(".tasks.json.{}.{sequence}.tmp", std::process::id()));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
-        {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        match options.open(&path) {
             Ok(file) => return Ok((path, file)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
@@ -154,6 +174,7 @@ fn create_temporary(directory: &Path) -> Result<(PathBuf, File)> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -192,6 +213,7 @@ pub mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn new_application_data_is_private_without_changing_parent_permissions() {
         for with_lock in [false, true] {
             let fixture = Fixture::new();
@@ -243,6 +265,7 @@ pub mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn existing_directories_and_files_are_not_chmodded() {
         let fixture = Fixture::new();
         let directory = fixture.task_path().parent().unwrap();
@@ -435,6 +458,7 @@ pub mod tests {
             .map(|entry| entry.unwrap().path())
             .find(|path| path.extension().is_some_and(|extension| extension == "tmp"))
             .unwrap();
+        #[cfg(unix)]
         assert_eq!(
             fs::metadata(&temporary).unwrap().permissions().mode() & 0o777,
             0o600
@@ -446,6 +470,7 @@ pub mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn directory_sync_failure_reports_visible_replacement_and_uncertain_durability() {
         let fixture = Fixture::new();
         fixture

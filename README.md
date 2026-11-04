@@ -51,8 +51,12 @@ sati --version            # Show the version
 
 ## Data
 
-Tasks are saved automatically to `$XDG_DATA_HOME/sati/tasks.json`, defaulting to
-`~/.local/share/sati/tasks.json`.
+Tasks are saved automatically to:
+
+- Linux: `$XDG_DATA_HOME/sati/tasks.json`, defaulting to
+  `~/.local/share/sati/tasks.json`.
+- macOS: `~/Library/Application Support/sati/tasks.json`.
+- Windows: `%APPDATA%\sati\tasks.json`.
 
 ## License
 

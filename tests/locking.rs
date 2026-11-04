@@ -16,7 +16,11 @@ fn second_process_cannot_read_tasks_while_the_directory_is_locked() {
             .unwrap()
             .as_nanos()
     ));
-    let data = directory.join("sati");
+    let data = if cfg!(target_os = "macos") {
+        directory.join("Library/Application Support/sati")
+    } else {
+        directory.join("sati")
+    };
     fs::create_dir_all(&data).unwrap();
     // Invalid data distinguishes lock contention from reaching the load step.
     fs::write(data.join("tasks.json"), "invalid json").unwrap();
@@ -39,6 +43,7 @@ fn second_process_cannot_read_tasks_while_the_directory_is_locked() {
 fn run_sati(data_home: &Path) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_sati"))
         .env("XDG_DATA_HOME", data_home)
+        .env("HOME", data_home)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
