@@ -1,0 +1,14 @@
+[package]
+name = "sati"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A quiet, persistent terminal checklist"
+license = "MIT"
+
+[dependencies]
+crossterm = "0.28.1"
+ratatui = { version = "0.29.0", default-features = false, features = ["crossterm"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+unicode-width = "0.2"
