@@ -7,6 +7,11 @@ description = "A quiet, persistent terminal checklist"
 license = "MIT"
 readme = "README.md"
 
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+
 [dependencies]
 crossterm = "0.28.1"
 fs4 = "1.1.0"
