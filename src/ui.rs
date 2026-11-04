@@ -76,7 +76,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     let mut lines = Vec::new();
-    let text_width = usize::from(area.width.saturating_sub(5));
+    let text_width = usize::from(area.width.saturating_sub(6));
     for (index, task) in app.tasks.iter().enumerate() {
         let text: String = task
             .text
@@ -112,6 +112,14 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
                 TEXT
             };
             lines.push(Line::from(vec![
+                Span::styled(
+                    if row == 0 && app.list.selected() == Some(index) {
+                        "›"
+                    } else {
+                        " "
+                    },
+                    Style::default().fg(app.accent),
+                ),
                 Span::styled(prefix, Style::default().fg(color)),
                 Span::styled(text, text_style),
             ]));
@@ -300,7 +308,7 @@ mod tests {
             text: "日本語 🪷".into(),
             completed: false,
         }]);
-        for width in [0, 1, 2, 3, 4, 5, 6, 7, 8, 40] {
+        for width in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 40] {
             for height in [0, 1, 2, 3, 6, 12] {
                 terminal.backend_mut().resize(width, height);
                 for mode in [
@@ -353,21 +361,26 @@ mod tests {
     }
 
     #[test]
-    fn completed_text_is_dimmed_and_crossed_out_with_only_checkbox_accented() {
+    fn completed_text_stays_muted_with_accented_marker_and_checkbox() {
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let mut app = App::new(vec![Task {
             text: "Completed".into(),
             completed: true,
         }]);
+        app.accent = Color::Rgb(169, 182, 101);
         terminal
             .draw(|frame| {
                 draw(frame, &mut app);
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        let checkbox = &buffer[(2, 1)];
-        let text = &buffer[(6, 1)];
-        assert_eq!(checkbox.fg, DEFAULT_ACCENT);
+        let marker = &buffer[(1, 1)];
+        let checkbox = &buffer[(3, 1)];
+        let text = &buffer[(7, 1)];
+        assert_eq!(marker.symbol(), "›");
+        assert_eq!(marker.fg, app.accent);
+        assert_eq!(marker.bg, Color::Reset);
+        assert_eq!(checkbox.fg, app.accent);
         assert_eq!(text.fg, MUTED);
         assert!(
             text.modifier
@@ -480,8 +493,14 @@ mod tests {
         ]);
         let mut rows = Rect::default();
         terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
-        assert_eq!(app.row_tasks, [0, 0, 1]);
-        assert!(screen(&terminal).contains("     gamma delta"));
+        assert_eq!(app.row_tasks, [0, 0, 0, 1]);
+        let rendered = screen(&terminal);
+        assert!(rendered.contains("› [ ] alpha beta"));
+        assert!(rendered.contains("      gamma"));
+        assert!(rendered.contains("      delta"));
+        assert!(rendered.contains("  [ ] next"));
+        assert_eq!(rendered.matches('›').count(), 1);
+        assert_eq!(terminal.backend().buffer()[(1, 1)].fg, DEFAULT_ACCENT);
         let click = |row| MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 6,
@@ -491,9 +510,9 @@ mod tests {
         app.mouse(click(2), rows, &fixture.storage).unwrap();
         assert!(app.tasks[0].completed);
         assert!(!app.tasks[1].completed);
-        app.mouse(click(3), rows, &fixture.storage).unwrap();
-        assert!(app.tasks[1].completed);
         app.mouse(click(4), rows, &fixture.storage).unwrap();
+        assert!(app.tasks[1].completed);
+        app.mouse(click(5), rows, &fixture.storage).unwrap();
         assert!(app.tasks.iter().all(|task| task.completed));
         assert_eq!(fixture.storage.load().unwrap(), app.tasks);
     }
