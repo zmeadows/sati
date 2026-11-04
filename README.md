@@ -153,6 +153,11 @@ When `XDG_DATA_HOME` is unset or empty, the path is
 `~/.local/share/sati/tasks.json`. A set `XDG_DATA_HOME` must be absolute.
 The data directory is created at startup.
 
+New sati directories use `0700` permissions; new temporary JSON files and lock
+files use `0600` (or stricter permissions under your umask). Existing paths are
+not chmodded, and parent directory permissions are left unchanged. Atomic saves
+replace `tasks.json` with the private `0600` temporary file.
+
 Every change writes and syncs a temporary file in the same directory, then
 atomically replaces `tasks.json` and syncs the directory. If a save fails, sati
 restores the terminal and reports the error. The original file is preserved on

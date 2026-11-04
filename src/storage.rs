@@ -1,8 +1,9 @@
 use std::{
     env,
     error::Error,
-    fs::{self, File, OpenOptions},
+    fs::{self, DirBuilder, File, OpenOptions},
     io::{self, Write},
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
@@ -41,7 +42,7 @@ impl Storage {
             .path
             .parent()
             .expect("task file has a parent directory");
-        fs::create_dir_all(directory)
+        create_data_directory(directory)
             .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
         let path = directory.join("tasks.lock");
         let file = OpenOptions::new()
@@ -49,6 +50,7 @@ impl Storage {
             .write(true)
             .create(true)
             .truncate(false)
+            .mode(0o600)
             .open(&path)
             .map_err(|error| format!("could not open {}: {error}", path.display()))?;
         // Keep this file open and never unlink it: every instance must lock the same inode.
@@ -81,7 +83,7 @@ impl Storage {
             .path
             .parent()
             .expect("task file has a parent directory");
-        fs::create_dir_all(directory)
+        create_data_directory(directory)
             .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
         let mut contents = serde_json::to_vec_pretty(tasks)?;
         contents.push(b'\n');
@@ -117,10 +119,26 @@ impl Storage {
     }
 }
 
+fn create_data_directory(directory: &Path) -> io::Result<()> {
+    if let Some(parent) = directory.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    // Apply private permissions only when creating sati's own directory.
+    match DirBuilder::new().mode(0o700).create(directory) {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists && directory.is_dir() => Ok(()),
+        result => result,
+    }
+}
+
 fn create_temporary(directory: &Path) -> Result<(PathBuf, File)> {
     for sequence in 0..1000 {
         let path = directory.join(format!(".tasks.json.{}.{sequence}.tmp", std::process::id()));
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+        {
             Ok(file) => return Ok((path, file)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
@@ -134,6 +152,7 @@ fn create_temporary(directory: &Path) -> Result<(PathBuf, File)> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
@@ -168,6 +187,109 @@ pub mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.directory);
         }
+    }
+
+    #[test]
+    fn new_application_data_is_private_without_changing_parent_permissions() {
+        for with_lock in [false, true] {
+            let fixture = Fixture::new();
+            fs::set_permissions(&fixture.directory, fs::Permissions::from_mode(0o755)).unwrap();
+            let _held = with_lock.then(|| fixture.storage.lock().unwrap());
+            fixture
+                .storage
+                .save(&[Task {
+                    text: "Private task".into(),
+                    completed: false,
+                }])
+                .unwrap();
+            let directory = fixture.task_path().parent().unwrap();
+            assert_eq!(
+                fs::metadata(directory).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(
+                fs::metadata(fixture.task_path())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            assert_eq!(
+                fs::metadata(&fixture.directory)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o755
+            );
+            if with_lock {
+                assert_eq!(
+                    fs::metadata(directory.join("tasks.lock"))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o600
+                );
+            }
+            let (path, file) = create_temporary(directory).unwrap();
+            assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+            drop(file);
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn existing_directories_and_files_are_not_chmodded() {
+        let fixture = Fixture::new();
+        let directory = fixture.task_path().parent().unwrap();
+        fs::create_dir(directory).unwrap();
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o750)).unwrap();
+        let lock_path = directory.join("tasks.lock");
+        fs::write(&lock_path, "").unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o640)).unwrap();
+        fs::write(fixture.task_path(), "[]\n").unwrap();
+        fs::set_permissions(fixture.task_path(), fs::Permissions::from_mode(0o640)).unwrap();
+        let unrelated = fixture.directory.join("other-user-file");
+        fs::write(&unrelated, "Keep this file unchanged").unwrap();
+        fs::set_permissions(&unrelated, fs::Permissions::from_mode(0o644)).unwrap();
+        let _held = fixture.storage.lock().unwrap();
+        assert!(fixture.storage.load().unwrap().is_empty());
+        assert_eq!(
+            fs::metadata(fixture.task_path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+        fixture.storage.save(&[]).unwrap();
+        // A save publishes the private replacement; it does not chmod other existing paths.
+        assert_eq!(
+            fs::metadata(fixture.task_path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(directory).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        assert_eq!(
+            fs::metadata(lock_path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        assert_eq!(
+            fs::metadata(&unrelated).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        assert_eq!(
+            fs::read_to_string(unrelated).unwrap(),
+            "Keep this file unchanged"
+        );
     }
 
     #[test]
@@ -311,6 +433,10 @@ pub mod tests {
             .map(|entry| entry.unwrap().path())
             .find(|path| path.extension().is_some_and(|extension| extension == "tmp"))
             .unwrap();
+        assert_eq!(
+            fs::metadata(&temporary).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert_eq!(
             serde_json::from_slice::<Vec<Task>>(&fs::read(temporary).unwrap()).unwrap(),
             tasks
