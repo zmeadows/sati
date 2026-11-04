@@ -91,7 +91,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         let text_style = if task.completed {
             Style::default()
                 .fg(MUTED)
-                .add_modifier(Modifier::DIM | Modifier::CROSSED_OUT)
+                .add_modifier(Modifier::CROSSED_OUT)
         } else {
             Style::default().fg(TEXT)
         };
@@ -382,10 +382,8 @@ mod tests {
         assert_eq!(marker.bg, Color::Reset);
         assert_eq!(checkbox.fg, app.accent);
         assert_eq!(text.fg, MUTED);
-        assert!(
-            text.modifier
-                .contains(Modifier::DIM | Modifier::CROSSED_OUT)
-        );
+        assert!(text.modifier.contains(Modifier::CROSSED_OUT));
+        assert!(!text.modifier.contains(Modifier::DIM));
         assert_eq!(text.bg, Color::Reset);
     }
 
