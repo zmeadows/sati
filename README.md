@@ -44,7 +44,7 @@ When adding, editing, or clearing all tasks, `Enter` confirms and `Esc` cancels.
 ```bash
 sati --no-wrap             # Keep long tasks on one row
 sati --no-logo             # Hide the sati border title
-sati --sharp-corners       # Use square checklist corners (default: rounded)
+sati --round-corners       # Use rounded checklist corners (default: sharp)
 sati --accent '#a9b665'    # Set the selection accent
 sati --version            # Show the version
 ```

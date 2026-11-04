@@ -50,7 +50,7 @@ impl App {
             mode: Mode::Normal,
             wrap: true,
             logo: true,
-            rounded: true,
+            rounded: false,
             accent: crate::ui::DEFAULT_ACCENT,
             scroll: 0,
             row_tasks: Vec::new(),

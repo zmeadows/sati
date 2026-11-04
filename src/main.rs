@@ -17,7 +17,7 @@ use app::App;
 use storage::{Result, Storage};
 
 const USAGE: &str =
-    "Usage: sati [--no-wrap] [--no-logo] [--sharp-corners] [--accent '#RRGGBB'] [--version]";
+    "Usage: sati [--no-wrap] [--no-logo] [--round-corners] [--accent '#RRGGBB'] [--version]";
 
 // Report repeats for plain characters and Enter too; alternate keys preserve shifted text.
 const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
@@ -48,7 +48,7 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let Some(options) = parse_arguments(std::env::args_os().skip(1))? else {
         println!(
-            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--sharp-corners    Use square checklist corners (default: rounded).\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e).\n--version          Print the version.\n--help, -h         Show this help."
+            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--round-corners    Use rounded checklist corners (default: sharp).\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e).\n--version          Print the version.\n--help, -h         Show this help."
         );
         return Ok(());
     };
@@ -128,7 +128,7 @@ fn parse_arguments(
     let mut options = Options {
         wrap: true,
         logo: true,
-        rounded: true,
+        rounded: false,
         accent: ui::DEFAULT_ACCENT,
         print_version: false,
     };
@@ -139,8 +139,8 @@ fn parse_arguments(
             options.wrap = false;
         } else if argument == "--no-logo" {
             options.logo = false;
-        } else if argument == "--sharp-corners" {
-            options.rounded = false;
+        } else if argument == "--round-corners" {
+            options.rounded = true;
         } else if argument == "--version" {
             options.print_version = true;
         } else if argument == "--accent" {
@@ -215,15 +215,15 @@ mod tests {
         let defaults = parse_arguments([]).unwrap().unwrap();
         assert!(defaults.wrap);
         assert!(defaults.logo);
-        assert!(defaults.rounded);
+        assert!(!defaults.rounded);
         assert_eq!(defaults.accent, ui::DEFAULT_ACCENT);
         assert!(!defaults.print_version);
         assert!(!parse_arguments(["--no-wrap".into()]).unwrap().unwrap().wrap);
-        let options = parse_arguments(["--no-logo", "--sharp-corners"].map(Into::into))
+        let options = parse_arguments(["--no-logo", "--round-corners"].map(Into::into))
             .unwrap()
             .unwrap();
         assert!(!options.logo);
-        assert!(!options.rounded);
+        assert!(options.rounded);
         assert!(options.wrap);
         assert_eq!(parse_arguments(["--help".into()]).unwrap(), None);
         assert!(parse_arguments(["--unknown".into()]).is_err());
