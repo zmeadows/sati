@@ -159,10 +159,14 @@ not chmodded, and parent directory permissions are left unchanged. Atomic saves
 replace `tasks.json` with the private `0600` temporary file.
 
 Every change writes and syncs a temporary file in the same directory, then
-atomically replaces `tasks.json` and syncs the directory. If a save fails, sati
-restores the terminal and reports the error. The original file is preserved on
-write or replacement failure; the error identifies any temporary recovery file.
-A failure to sync the directory after replacement is reported separately.
+atomically replaces `tasks.json` and syncs the directory. Any save error exits
+sati after restoring the terminal and reporting the error. The original file is
+preserved on write or replacement failure; the error identifies any temporary
+recovery file.
+If directory synchronization fails after replacement, the new list is already
+visible, but its durability after a crash or power loss is uncertain. The error
+states this explicitly. sati does not roll back the replacement or retry using
+its old in-memory list; the next run reloads the task file from disk.
 Invalid JSON is reported at startup and left untouched. Repair it or move it
 aside before restarting.
 

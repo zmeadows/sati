@@ -76,7 +76,8 @@ impl App {
         self.reveal_selection = true;
     }
 
-    // Install the new list only after it has been saved successfully.
+    // Update memory only after a fully synced save. Any save error exits the event loop;
+    // after a post-replacement error, the next run reloads the file already on disk.
     fn replace(
         &mut self,
         tasks: Vec<Task>,

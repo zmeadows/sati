@@ -107,12 +107,14 @@ impl Storage {
                 temporary.display()
             )
         })?;
+        // Replacement is now visible. A directory-sync failure cannot roll it back.
         File::open(directory)
             .and_then(|file| file.sync_all())
             .map_err(|error| {
                 format!(
-                    "saved {}, but could not sync its directory: {error}. The save may not survive a power loss",
-                    self.path.display()
+                    "replaced {}, but could not sync directory {}: {error}. The new task list is already visible; its durability after a crash or power loss is uncertain",
+                    self.path.display(),
+                    directory.display()
                 )
             })?;
         Ok(())
