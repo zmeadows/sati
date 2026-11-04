@@ -89,12 +89,12 @@ impl Storage {
         contents.push(b'\n');
 
         let (temporary, mut file) = create_temporary(directory)?;
-        // Never truncate the live file. Keep the temporary file on failure for recovery.
+        // Never truncate the live file. Failed writes may leave incomplete temporary data.
         file.write_all(&contents)
             .and_then(|()| file.sync_all())
             .map_err(|error| {
                 format!(
-                    "could not write {}: {error}. Original tasks are unchanged; temporary data remains at {}",
+                    "could not write or sync {}: {error}. Original tasks are unchanged; temporary file at {} may contain incomplete JSON",
                     self.path.display(),
                     temporary.display()
                 )
@@ -102,7 +102,7 @@ impl Storage {
         drop(file);
         fs::rename(&temporary, &self.path).map_err(|error| {
             format!(
-                "could not replace {}: {error}. Original tasks are unchanged; recover the new list from {}",
+                "could not replace {}: {error}. Original tasks are unchanged; fully written temporary file remains at {}",
                 self.path.display(),
                 temporary.display()
             )
@@ -428,7 +428,7 @@ pub mod tests {
             completed: false,
         }];
         let error = fixture.storage.save(&tasks).unwrap_err().to_string();
-        assert!(error.contains("recover the new list"));
+        assert!(error.contains("fully written temporary file remains"));
         assert!(fixture.task_path().is_dir());
         let temporary = fs::read_dir(fixture.task_path().parent().unwrap())
             .unwrap()

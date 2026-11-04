@@ -161,8 +161,10 @@ replace `tasks.json` with the private `0600` temporary file.
 Every change writes and syncs a temporary file in the same directory, then
 atomically replaces `tasks.json` and syncs the directory. Any save error exits
 sati after restoring the terminal and reporting the error. The original file is
-preserved on write or replacement failure; the error identifies any temporary
-recovery file.
+preserved on any failure before replacement. The error identifies any remaining
+temporary file. After a write or temporary-file sync failure, that file may contain
+incomplete JSON and must be checked before attempting recovery. If only replacement
+fails, the fully written temporary file remains.
 If directory synchronization fails after replacement, the new list is already
 visible, but its durability after a crash or power loss is uncertain. The error
 states this explicitly. sati does not roll back the replacement or retry using
