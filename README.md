@@ -11,15 +11,15 @@ ordered list, without projects, tags, scheduling, or other productivity features
 ## Preview
 
 ```text
-┌─────────────────────────────────────────┐
-│ [ ] Finish reviewing code               │
-│ [x] Clean up Sway configuration         │
-│ [ ] Read for 30 minutes                 │
-│                                         │
-└─────────────────────────────────────────┘
+┌────────────────────────────────────────────────┐
+│ [ ] Finish reviewing code                      │
+│ [x] Clean up Sway configuration                │
+│ [ ] Read for 30 minutes                        │
+│                                                │
+└────────────────────────────────────────────────┘
 
- j/k Navigate   Space/Enter Toggle   a Add
- J/K Move       d Delete   D Clear   q Quit
+ j/k Navigate  Space Toggle  a Add    q Quit
+ J/K Move      d     Delete  D Clear
 ```
 
 The selected checkbox has a muted orange accent. Completed text is dimmed and

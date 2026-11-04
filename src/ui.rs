@@ -80,15 +80,40 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     if let Mode::Adding(input) = &app.mode {
         draw_input(frame, sections[1], input);
     }
-    frame.render_widget(
-        Paragraph::new("\n j/k Navigate   Space/Enter Toggle   a Add\n J/K Move       d Delete   D Clear   q Quit")
-            .style(Style::default().fg(MUTED)),
-        sections[2],
-    );
+    draw_shortcuts(frame, sections[2]);
     if app.mode == Mode::ConfirmClear {
         draw_confirmation(frame, area);
     }
     rows
+}
+
+fn draw_shortcuts(frame: &mut Frame, area: Rect) {
+    let keys = Style::default().fg(TEXT).add_modifier(Modifier::BOLD);
+    let columns = [
+        [("j/k", "Navigate"), ("J/K", "Move")],
+        [("Space", "Toggle"), ("d", "Delete")],
+        [("a", "Add"), ("D", "Clear")],
+        [("q", "Quit"), ("", "")],
+    ];
+    let mut rows = [vec![Span::raw(" ")], vec![Span::raw(" ")]];
+    for column in columns {
+        let key_width = column.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
+        let label_width = column
+            .iter()
+            .map(|(_, label)| label.len())
+            .max()
+            .unwrap_or(0);
+        for (row, (key, label)) in rows.iter_mut().zip(column) {
+            row.push(Span::styled(format!("{key:<key_width$}"), keys));
+            row.push(Span::raw(format!(" {label:<label_width$}  ")));
+        }
+    }
+    let [first, second] = rows;
+    frame.render_widget(
+        Paragraph::new(vec![Line::raw(""), Line::from(first), Line::from(second)])
+            .style(Style::default().fg(MUTED)),
+        area,
+    );
 }
 
 fn draw_input(frame: &mut Frame, area: Rect, input: &str) {
