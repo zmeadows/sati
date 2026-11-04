@@ -213,9 +213,9 @@ fn shortcut_lines() -> Vec<Line<'static>> {
     let keys = Style::default().fg(TEXT).add_modifier(Modifier::BOLD);
     let columns = [
         [("j/k", "Navigate"), ("a", "Add"), ("d", "Delete")],
-        [("g", "First"), ("e", "Edit"), ("x", "Clear done")],
-        [("G", "Last"), ("Space", "Toggle"), ("D", "Clear all")],
-        [("J/K", "Move"), ("u", "Undo"), ("q", "Quit")],
+        [("g/G", "First/last"), ("e", "Edit"), ("x", "Clear done")],
+        [("J/K", "Move"), ("Space", "Toggle"), ("D", "Clear all")],
+        [("w", "Wrap"), ("u", "Undo"), ("q", "Quit")],
     ];
     let mut rows = [
         vec![Span::raw(" ")],
@@ -412,6 +412,8 @@ mod tests {
 
     #[test]
     fn disabled_wrapping_keeps_one_row_and_input_shows_its_tail() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let fixture = crate::storage::tests::Fixture::new();
         let mut terminal = Terminal::new(TestBackend::new(12, 8)).unwrap();
         let mut app = App::new(vec![
             Task {
@@ -423,8 +425,10 @@ mod tests {
                 completed: false,
             },
         ]);
+        let toggle = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
+        app.key(toggle, &fixture.storage).unwrap();
+        assert!(!app.wrap);
         app.mode = Mode::Adding("a long input ending in 界z".into());
-        app.wrap = false;
         terminal
             .draw(|frame| {
                 draw(frame, &mut app);
@@ -433,6 +437,17 @@ mod tests {
         let rendered = screen(&terminal);
         assert!(rendered.contains("[ ] next"));
         assert!(rendered.contains("界z"));
+        app.mode = Mode::Normal;
+        app.key(toggle, &fixture.storage).unwrap();
+        assert!(app.wrap);
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        assert!(app.row_tasks.len() > 2);
+        assert_eq!(app.list.selected(), Some(0));
+        assert!(!fixture.task_path().exists());
     }
 
     #[test]

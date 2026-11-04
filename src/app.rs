@@ -227,6 +227,10 @@ impl App {
             Mode::Normal => match key.code {
                 KeyCode::Char('q') => return Ok(true),
                 KeyCode::Char('u') => self.undo(storage)?,
+                KeyCode::Char('w') => {
+                    self.wrap = !self.wrap;
+                    self.reveal_selection = true;
+                }
                 KeyCode::Char('x') => self.clear_completed(storage)?,
                 KeyCode::Char('J') => self.move_selected(true, storage)?,
                 KeyCode::Char('K') => self.move_selected(false, storage)?,

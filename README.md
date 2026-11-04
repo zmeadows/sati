@@ -38,6 +38,7 @@ sati
 | `x` | Clear completed tasks |
 | `D` | Clear all tasks |
 | `u` | Undo last change |
+| `w` | Toggle line wrapping |
 | `q` | Quit |
 
 When adding, editing, or clearing all tasks, `Enter` confirms and `Esc` cancels.
