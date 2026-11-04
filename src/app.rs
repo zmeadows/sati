@@ -34,6 +34,7 @@ pub struct App {
     pub wrap: bool,
     pub logo: bool,
     pub rounded: bool,
+    pub add_to_bottom: bool,
     pub accent: ratatui::style::Color,
     pub scroll: usize,
     pub row_tasks: Vec<usize>,
@@ -51,6 +52,7 @@ impl App {
             wrap: true,
             logo: true,
             rounded: false,
+            add_to_bottom: false,
             accent: crate::ui::DEFAULT_ACCENT,
             scroll: 0,
             row_tasks: Vec::new(),
@@ -195,12 +197,19 @@ impl App {
                                 self.replace(tasks, Some(index), storage)?;
                             }
                         } else {
-                            tasks.push(Task {
-                                text,
-                                completed: false,
-                            });
-                            let selected = Some(tasks.len() - 1);
-                            self.replace(tasks, selected, storage)?;
+                            let index = if self.add_to_bottom {
+                                tasks.len()
+                            } else {
+                                self.list.selected().map_or(tasks.len(), |index| index + 1)
+                            };
+                            tasks.insert(
+                                index,
+                                Task {
+                                    text,
+                                    completed: false,
+                                },
+                            );
+                            self.replace(tasks, Some(index), storage)?;
                         }
                     }
                     self.mode = Mode::Normal;
@@ -998,6 +1007,52 @@ mod tests {
         assert_eq!(app.list.selected(), Some(0));
         assert!(!fixture.task_path().exists());
         assert!(press(&mut app, &fixture, KeyCode::Char('q')));
+    }
+
+    #[test]
+    fn adding_inserts_below_focus_or_at_bottom_and_undo_restores_order() {
+        for add_to_bottom in [false, true] {
+            for (count, selected) in [
+                (0, None),
+                (3, Some(0)),
+                (3, Some(1)),
+                (3, Some(2)),
+                (3, None),
+            ] {
+                let fixture = Fixture::new();
+                let mut app = app_with_tasks(count);
+                app.add_to_bottom = add_to_bottom;
+                app.list.select(selected);
+                if count > 0 {
+                    app.tasks[0].completed = true;
+                }
+                let original = app.tasks.clone();
+                let expected_index = if add_to_bottom {
+                    count
+                } else {
+                    selected.map_or(count, |index| index + 1)
+                };
+                let mut expected = original.clone();
+                expected.insert(
+                    expected_index,
+                    Task {
+                        text: "New task".into(),
+                        completed: false,
+                    },
+                );
+                press(&mut app, &fixture, KeyCode::Char('a'));
+                app.paste("New task");
+                press(&mut app, &fixture, KeyCode::Enter);
+                assert_eq!(app.tasks, expected);
+                assert_eq!(app.list.selected(), Some(expected_index));
+                assert_eq!(fixture.storage.load().unwrap(), expected);
+                assert!(app.reveal_selection);
+                press(&mut app, &fixture, KeyCode::Char('u'));
+                assert_eq!(app.tasks, original);
+                assert_eq!(app.list.selected(), selected);
+                assert_eq!(fixture.storage.load().unwrap(), original);
+            }
+        }
     }
 
     #[test]
