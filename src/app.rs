@@ -105,6 +105,10 @@ impl App {
         Ok(())
     }
 
+    pub fn can_undo(&self) -> bool {
+        !self.history.is_empty()
+    }
+
     fn undo(&mut self, storage: &Storage) -> Result<()> {
         if let Some(previous) = self.history.back() {
             storage.save(&previous.tasks)?;

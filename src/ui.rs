@@ -21,17 +21,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let entering_text = matches!(app.mode, Mode::Adding(_) | Mode::Editing { .. });
     // Give the checklist priority when height is limited; input always gets a row.
     let input_height = u16::from(entering_text && area.height > 0);
-    let shortcuts = shortcut_lines();
-    let legend_width = shortcuts.iter().map(Line::width).max().unwrap_or(0);
+    let mut shortcuts = shortcut_lines(app, area.width);
+    let available = usize::from(area.height.saturating_sub(3 + input_height));
+    if shortcuts.len() > available {
+        shortcuts.clear();
+    } else if !shortcuts.is_empty() && shortcuts.len() < available {
+        shortcuts.insert(0, Line::raw(""));
+    }
     let legend_height = shortcuts.len() as u16;
-    let legend_height = if app.keybinds
-        && area.height >= 3 + legend_height + input_height
-        && usize::from(area.width) >= legend_width
-    {
-        legend_height
-    } else {
-        0
-    };
     let sections = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(input_height),
@@ -210,8 +207,45 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-fn shortcut_lines() -> Vec<Line<'static>> {
+fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
+    if !app.keybinds || width == 0 || app.mode == Mode::ConfirmClear {
+        return Vec::new();
+    }
     let keys = Style::default().fg(TEXT).add_modifier(Modifier::BOLD);
+    let available = |key: &str| match key {
+        "u" => app.can_undo(),
+        "x" => app.tasks.iter().any(|task| task.completed),
+        _ => true,
+    };
+    // The full aligned legend occupies 54 columns; pack smaller contexts by action.
+    if app.mode != Mode::Normal || app.tasks.is_empty() || width < 54 {
+        let mut rows: Vec<Vec<(&str, &str)>> = match app.mode {
+            Mode::Adding(_) | Mode::Editing { .. } => {
+                vec![vec![("Enter", "Confirm"), ("Esc", "Cancel")]]
+            }
+            _ if app.tasks.is_empty() => vec![vec![("u", "Undo"), ("w", "Wrap"), ("q", "Quit")]],
+            _ => vec![
+                vec![("j/k", "Navigate"), ("Space", "Toggle"), ("w", "Wrap")],
+                vec![("a", "Add"), ("e", "Edit"), ("d", "Delete"), ("u", "Undo")],
+                vec![("x", "Clear done"), ("D", "Clear all"), ("q", "Quit")],
+            ],
+        };
+        for row in &mut rows {
+            row.retain(|(key, _)| available(key));
+        }
+        let mut lines = wrap_shortcuts(&rows, width);
+        // Keep at most three hint rows, dropping secondary actions first.
+        for omit in ["x", "D", "w", "u", "e", "d", "j/k"] {
+            if lines.len() <= 3 {
+                break;
+            }
+            for row in &mut rows {
+                row.retain(|(key, _)| *key != omit);
+            }
+            lines = wrap_shortcuts(&rows, width);
+        }
+        return lines;
+    }
     let columns = [
         [("j/k", "Navigate"), ("a", "Add"), ("d", "Delete")],
         [("g/G", "First/last"), ("e", "Edit"), ("x", "Clear done")],
@@ -233,17 +267,45 @@ fn shortcut_lines() -> Vec<Line<'static>> {
             .max()
             .unwrap_or(0);
         for (row, (key, label)) in rows.iter_mut().zip(column) {
+            if !available(key) {
+                row.push(Span::raw(
+                    " ".repeat(key_width + 1 + label_width + gap.len()),
+                ));
+                continue;
+            }
             row.push(Span::styled(format!("{key:<key_width$}"), keys));
             row.push(Span::raw(format!(" {label:<label_width$}{gap}")));
         }
     }
     let [first, second, third] = rows;
-    vec![
-        Line::raw(""),
-        Line::from(first),
-        Line::from(second),
-        Line::from(third),
-    ]
+    vec![Line::from(first), Line::from(second), Line::from(third)]
+}
+
+fn wrap_shortcuts(rows: &[Vec<(&str, &str)>], width: u16) -> Vec<Line<'static>> {
+    let keys = Style::default().fg(TEXT).add_modifier(Modifier::BOLD);
+    let mut lines = Vec::new();
+    for row in rows {
+        let mut line = Line::raw(" ");
+        for &(key, label) in row {
+            let pair_width = key.width() + 1 + label.width();
+            if pair_width + 1 > usize::from(width) {
+                continue;
+            }
+            let gap = if line.width() > 1 { "  " } else { "" };
+            if line.width() + gap.len() + pair_width > usize::from(width) {
+                lines.push(line);
+                line = Line::raw(" ");
+            } else {
+                line.push_span(Span::raw(gap));
+            }
+            line.push_span(Span::styled(key.to_owned(), keys));
+            line.push_span(Span::raw(format!(" {label}")));
+        }
+        if line.width() > 1 {
+            lines.push(line);
+        }
+    }
+    lines
 }
 
 fn draw_input(frame: &mut Frame, area: Rect, input: &str, label: &str, accent: Color) {
@@ -326,13 +388,152 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
+    fn legends_follow_mode_availability_and_terminal_width() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = App::new(vec![Task {
+            text: "task".into(),
+            completed: false,
+        }]);
+        let text = |app: &App, width| {
+            shortcut_lines(app, width)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(!text(&app, 80).contains("Undo"));
+        assert!(!text(&app, 80).contains("Clear done"));
+        app.key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+            &fixture.storage,
+        )
+        .unwrap();
+        for width in [80, 60, 40, 30, 18, 1, 0] {
+            let lines = shortcut_lines(&app, width);
+            assert!(lines.len() <= 3);
+            assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
+        }
+        for width in [80, 60] {
+            let normal = text(&app, width);
+            for key in [
+                "j/k",
+                "g/G",
+                "J/K",
+                "Space",
+                "Undo",
+                "Clear done",
+                "Clear all",
+                "Quit",
+                "Wrap",
+            ] {
+                assert!(normal.contains(key), "{normal}");
+            }
+        }
+        assert_eq!(
+            text(&app, 40),
+            " j/k Navigate  Space Toggle  w Wrap\n a Add  e Edit  d Delete  u Undo\n x Clear done  D Clear all  q Quit"
+        );
+        for mode in [
+            Mode::Adding(String::new()),
+            Mode::Editing {
+                index: 0,
+                input: "task".into(),
+            },
+        ] {
+            app.mode = mode;
+            assert_eq!(text(&app, 40), " Enter Confirm  Esc Cancel");
+        }
+        app.mode = Mode::ConfirmClear;
+        assert!(shortcut_lines(&app, 80).is_empty());
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        let mut rows = Rect::default();
+        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        assert_eq!(rows.height, 10);
+        assert_eq!(screen(&terminal).matches("Confirm").count(), 1);
+        assert_eq!(screen(&terminal).matches("Cancel").count(), 1);
+        app.key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &fixture.storage,
+        )
+        .unwrap();
+        assert_eq!(text(&app, 40), " u Undo  w Wrap  q Quit");
+        assert_eq!(text(&App::new(Vec::new()), 40), " w Wrap  q Quit");
+        app.keybinds = false;
+        assert!(shortcut_lines(&app, 80).is_empty());
+        app.mode = Mode::Adding(String::new());
+        assert!(shortcut_lines(&app, 80).is_empty());
+    }
+
+    #[test]
+    fn changing_footer_height_preserves_selection_and_mouse_mapping() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = App::new(
+            (0..12)
+                .map(|index| Task {
+                    text: format!("task {index} {}", "wrapped words ".repeat(4)),
+                    completed: false,
+                })
+                .collect(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        app.list.select(Some(11));
+        let mut heights = Vec::new();
+        for mode in [
+            Mode::Normal,
+            Mode::Adding(String::new()),
+            Mode::Editing {
+                index: 11,
+                input: "task".into(),
+            },
+            Mode::Normal,
+        ] {
+            app.mode = mode;
+            let mut rows = Rect::default();
+            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+            heights.push(rows.height);
+            let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
+            assert!(app.row_tasks[app.scroll..end].contains(&11));
+            if app.mode == Mode::Normal {
+                let index = app.row_tasks[app.scroll];
+                let was_completed = app.tasks[index].completed;
+                app.mouse(
+                    MouseEvent {
+                        kind: MouseEventKind::Down(MouseButton::Left),
+                        column: rows.x,
+                        row: rows.y,
+                        modifiers: KeyModifiers::NONE,
+                    },
+                    rows,
+                    &fixture.storage,
+                )
+                .unwrap();
+                assert_eq!(app.tasks[index].completed, !was_completed);
+                app.list.select(Some(11));
+                app.reveal_selection = true;
+            }
+        }
+        assert!(heights[1] > heights[0]);
+        assert_eq!(heights[1], heights[2]);
+        assert_eq!(heights[0], heights[3]);
+        app.keybinds = false;
+        let mut rows = Rect::default();
+        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        assert_eq!(rows.height, 10);
+        app.mode = Mode::Adding(String::new());
+        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        assert_eq!(rows.height, 9);
+    }
+
+    #[test]
     fn tiny_terminals_and_resizing_are_safe_in_every_mode() {
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
         let mut app = App::new(vec![Task {
             text: "日本語 🪷".into(),
             completed: false,
         }]);
-        for width in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 40] {
+        for width in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 40, 60, 80] {
             for height in [0, 1, 2, 3, 6, 12] {
                 terminal.backend_mut().resize(width, height);
                 for mode in [
@@ -551,7 +752,7 @@ mod tests {
     fn continuation_clicks_toggle_the_correct_task_and_leave_other_rows_alone() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let fixture = crate::storage::tests::Fixture::new();
-        let mut terminal = Terminal::new(TestBackend::new(18, 9)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(18, 12)).unwrap();
         let mut app = App::new(vec![
             Task {
                 text: "alpha beta gamma delta".into(),
