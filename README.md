@@ -41,7 +41,9 @@ arrow keys navigate results, and `Enter` selects a task. `Esc` cancels search
 and restores the previous selection.
 
 In normal mode, `u` undoes a change and `Ctrl+R` redoes it, up to 256 steps each.
-History stays in memory and is cleared on restart. A new change clears redo history.
+History normally survives closing and reopening sati. It is best-effort and may be
+discarded after crashes or external task-file changes; tasks are saved independently.
+A new change clears redo history.
 
 ## Options
 

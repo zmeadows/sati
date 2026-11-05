@@ -18,6 +18,20 @@ pub struct Task {
     pub completed: bool,
 }
 
+impl Task {
+    pub(crate) fn text_error(&self) -> Option<&'static str> {
+        if self.text.is_empty() {
+            Some("text is empty")
+        } else if self.text.trim() != self.text {
+            Some("text has leading or trailing whitespace")
+        } else if self.text.chars().any(char::is_control) {
+            Some("text contains a control character")
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Mode {
     Normal,
@@ -37,9 +51,50 @@ pub enum Mode {
     ConfirmClear,
 }
 
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct UndoState {
     tasks: Vec<Task>,
+    #[serde(deserialize_with = "Option::deserialize")]
     selected: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryCache {
+    version: u32,
+    tasks: Vec<Task>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    selected: Option<usize>,
+    undo: VecDeque<UndoState>,
+    redo: VecDeque<UndoState>,
+}
+
+impl HistoryCache {
+    pub fn tasks(&self) -> &[Task] {
+        &self.tasks
+    }
+
+    fn valid_for(&self, tasks: &[Task], completed_at_bottom: bool) -> bool {
+        let valid_state = |tasks: &[Task], selected: Option<usize>| {
+            selected.is_none_or(|index| index < tasks.len())
+                && tasks.iter().all(|task| task.text_error().is_none())
+                && (!completed_at_bottom
+                    || !tasks
+                        .windows(2)
+                        .any(|pair| pair[0].completed && !pair[1].completed))
+        };
+        self.version == 1
+            && self.tasks == tasks
+            && self.undo.len() <= HISTORY_LIMIT
+            && self.redo.len() <= HISTORY_LIMIT
+            && valid_state(&self.tasks, self.selected)
+            && self
+                .undo
+                .iter()
+                .chain(&self.redo)
+                .all(|state| valid_state(&state.tasks, state.selected))
+    }
 }
 
 pub struct App {
@@ -175,6 +230,30 @@ impl App {
 
     pub fn can_redo(&self) -> bool {
         !self.redo_history.is_empty()
+    }
+
+    pub fn into_history_cache(self) -> HistoryCache {
+        HistoryCache {
+            version: 1,
+            tasks: self.tasks,
+            selected: self.list.selected(),
+            undo: self.history,
+            redo: self.redo_history,
+        }
+    }
+
+    pub fn restore_history(&mut self, cache: HistoryCache) {
+        if !cache.valid_for(&self.tasks, self.completed_at_bottom) {
+            return;
+        }
+        self.history = cache.undo;
+        self.redo_history = cache.redo;
+        self.list.select(cache.selected);
+        self.mode = Mode::Normal;
+        self.scroll = 0;
+        self.row_tasks.clear();
+        self.viewport_height = 0;
+        self.reveal_selection = true;
     }
 
     pub fn search_query(&self) -> Option<&str> {
@@ -631,6 +710,140 @@ impl App {
 mod tests {
     use super::*;
     use crate::storage::tests::Fixture;
+
+    fn reopen_with_history(app: App, fixture: &Fixture) -> App {
+        let grouped = app.completed_at_bottom;
+        fixture
+            .storage
+            .save_history(&app.into_history_cache())
+            .unwrap();
+        let mut reopened = App::new(fixture.storage.load().unwrap());
+        reopened.completed_at_bottom = grouped;
+        reopened.restore_history(fixture.storage.load_history().unwrap());
+        reopened
+    }
+
+    #[test]
+    fn cache_restores_both_stacks_and_selection_without_persisting_transient_state() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        app.toggle(0, &fixture.storage).unwrap();
+        app.move_selected(true, &fixture.storage).unwrap();
+        app.undo(&fixture.storage).unwrap();
+        let tasks = app.tasks.clone();
+        app.list.select(Some(2));
+        app.scroll = 999;
+        app.row_tasks = vec![2];
+        app.viewport_height = 1;
+        app.mode = Mode::Searching {
+            input: "not cached".into(),
+            original: Some(0),
+        };
+        let mut reopened = reopen_with_history(app, &fixture);
+        assert_eq!(reopened.tasks, tasks);
+        assert_eq!(reopened.list.selected(), Some(2));
+        assert_eq!(reopened.mode, Mode::Normal);
+        assert_eq!(reopened.scroll, 0);
+        assert!(reopened.row_tasks.is_empty());
+        assert_eq!(reopened.viewport_height, 0);
+        assert!(reopened.reveal_selection);
+        assert_eq!(reopened.history.len(), 1);
+        assert_eq!(reopened.redo_history.len(), 1);
+        let path = fixture.task_path().with_file_name("history.json");
+        let bytes = std::fs::read(&path).unwrap();
+        reopened.redo(&fixture.storage).unwrap();
+        assert_ne!(reopened.tasks, tasks);
+        reopened.undo(&fixture.storage).unwrap();
+        assert_eq!(reopened.tasks, tasks);
+        reopened.toggle(1, &fixture.storage).unwrap();
+        assert!(!reopened.can_redo());
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn cache_validation_is_all_or_nothing_for_every_snapshot_and_required_field() {
+        use serde_json::json;
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        app.toggle(0, &fixture.storage).unwrap();
+        app.toggle(1, &fixture.storage).unwrap();
+        app.undo(&fixture.storage).unwrap();
+        app.list.select(Some(2));
+        let tasks = app.tasks.clone();
+        let original = std::fs::read(fixture.task_path()).unwrap();
+        let base = serde_json::to_value(app.into_history_cache()).unwrap();
+        let mut invalid = Vec::new();
+        for field in ["version", "tasks", "selected", "undo", "redo"] {
+            let mut value = base.clone();
+            value.as_object_mut().unwrap().remove(field);
+            invalid.push(value);
+        }
+        for (field, replacement) in [
+            ("version", json!(2)),
+            ("selected", json!(3)),
+            ("selected", json!(-1)),
+            ("tasks", json!([])),
+            ("undo", json!(null)),
+            ("redo", json!("bad")),
+        ] {
+            let mut value = base.clone();
+            value[field] = replacement;
+            invalid.push(value);
+        }
+        for stack in ["undo", "redo"] {
+            for field in ["tasks", "selected"] {
+                let mut value = base.clone();
+                value[stack][0].as_object_mut().unwrap().remove(field);
+                invalid.push(value);
+            }
+            for selection in [json!(99), json!("bad")] {
+                let mut value = base.clone();
+                value[stack][0]["selected"] = selection;
+                invalid.push(value);
+            }
+            for text in [
+                "",
+                " padded",
+                "padded ",
+                "line\nbreak",
+                "tab\there",
+                "nul\0here",
+            ] {
+                let mut value = base.clone();
+                value[stack][0]["tasks"][0]["text"] = json!(text);
+                invalid.push(value);
+            }
+            let mut value = base.clone();
+            value[stack][0]["tasks"][0]["completed"] = json!(null);
+            invalid.push(value);
+            let mut value = base.clone();
+            value[stack] = json!(vec![base[stack][0].clone(); HISTORY_LIMIT + 1]);
+            invalid.push(value);
+        }
+        for value in invalid {
+            let mut reopened = App::new(tasks.clone());
+            let path = fixture.task_path().with_file_name("history.json");
+            std::fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+            if let Some(cache) = fixture.storage.load_history() {
+                reopened.restore_history(cache);
+            }
+            assert_eq!(reopened.tasks, tasks, "{value}");
+            assert_eq!(reopened.list.selected(), Some(0), "{value}");
+            assert!(!reopened.can_undo() && !reopened.can_redo(), "{value}");
+            assert_eq!(std::fs::read(fixture.task_path()).unwrap(), original);
+        }
+        let mut invalid_empty = base.clone();
+        invalid_empty["tasks"] = json!([]);
+        invalid_empty["selected"] = json!(0);
+        let mut empty = App::new(Vec::new());
+        empty.restore_history(serde_json::from_value(invalid_empty).unwrap());
+        assert!(!empty.can_undo() && !empty.can_redo());
+        assert_eq!(empty.list.selected(), None);
+        let mut valid = App::new(tasks);
+        valid.restore_history(serde_json::from_value(base).unwrap());
+        assert!(valid.can_undo() && valid.can_redo());
+        assert_eq!(valid.list.selected(), Some(2));
+    }
     use unicode_segmentation::UnicodeSegmentation;
 
     fn app_with_tasks(count: usize) -> App {
@@ -1708,6 +1921,8 @@ mod tests {
             press(&mut app, &fixture, KeyCode::Enter);
             assert_eq!(app.history.len(), (index + 1).min(HISTORY_LIMIT));
         }
+        let mut app = reopen_with_history(app, &fixture);
+        assert_eq!(app.history.len(), HISTORY_LIMIT);
         for remaining in (2..258).rev() {
             press(&mut app, &fixture, KeyCode::Char('u'));
             assert_eq!(app.tasks.len(), remaining);
@@ -1721,6 +1936,8 @@ mod tests {
         assert!(app.history.is_empty());
         press(&mut app, &fixture, KeyCode::Char('u'));
         assert_eq!(app.tasks.len(), 2);
+        assert_eq!(app.redo_history.len(), HISTORY_LIMIT);
+        let mut app = reopen_with_history(app, &fixture);
         assert_eq!(app.redo_history.len(), HISTORY_LIMIT);
         for remaining in 3..=258 {
             app.key(
@@ -1936,7 +2153,7 @@ mod tests {
     }
 
     #[test]
-    fn undo_walks_back_through_history_and_does_not_survive_restart() {
+    fn undo_walks_back_through_history_and_a_new_app_starts_empty_without_cache_restore() {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(2);
         let original = app.tasks.clone();

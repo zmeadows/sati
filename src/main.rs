@@ -5,7 +5,8 @@ mod storage;
 mod ui;
 
 use std::{
-    io, panic,
+    io::{self, Write},
+    panic,
     process::ExitCode,
     sync::{
         Arc,
@@ -82,6 +83,9 @@ fn run() -> Result<()> {
     app.add_to_bottom = options.add_to_bottom;
     app.completed_at_bottom = options.completed_at_bottom;
     app.accent = options.accent;
+    if let Some(cache) = storage.load_history() {
+        app.restore_history(cache);
+    }
     // Atomics let the panic hook clean up without locking state held by setup.
     let modes = Arc::new(TerminalModes::default());
     let panic_modes = Arc::clone(&modes);
@@ -120,13 +124,30 @@ fn run() -> Result<()> {
         Ok(())
     })();
     let restore_result = modes.restore(&mut io::stdout());
+    finish_session(result, restore_result, app, &storage)
+}
+
+fn finish_session(
+    result: Result<()>,
+    restore_result: io::Result<()>,
+    app: App,
+    storage: &Storage,
+) -> Result<()> {
     match (result, restore_result) {
         (Err(error), Err(restore)) => {
             Err(format!("{error}; could not restore terminal: {restore}").into())
         }
         (Err(error), Ok(())) => Err(error),
         (Ok(()), Err(error)) => Err(format!("could not restore terminal: {error}").into()),
-        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Ok(())) => {
+            if let Err(error) = storage.save_history(&app.into_history_cache()) {
+                let _ = writeln!(
+                    io::stderr(),
+                    "sati: warning: could not save undo history: {error}"
+                );
+            }
+            Ok(())
+        }
     }
 }
 
@@ -318,6 +339,118 @@ fn parse_accent(value: &std::ffi::OsStr) -> Result<ratatui::style::Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_is_compatible_with_decoded_tasks_not_json_formatting() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let tasks: Vec<_> = [("one 日本語", false), ("two 🪷", true)]
+            .map(|(text, completed)| app::Task {
+                text: text.into(),
+                completed,
+            })
+            .into();
+        fixture.storage.save(&tasks).unwrap();
+        let mut app = App::new(tasks.clone());
+        app.list.select(Some(1));
+        fixture
+            .storage
+            .save_history(&app.into_history_cache())
+            .unwrap();
+        // Reordering JSON object keys and changing whitespace are not task edits.
+        std::fs::write(fixture.task_path(), "[ {\"completed\":false,\"text\":\"one 日本語\"}, {\"completed\":true,\"text\":\"two 🪷\"} ]").unwrap();
+        let mut app = App::new(load_tasks(&fixture.storage, false).unwrap());
+        app.restore_history(fixture.storage.load_history().unwrap());
+        assert_eq!(app.list.selected(), Some(1));
+        assert!(!app.can_undo() && !app.can_redo());
+        for (index, mut changed) in [tasks.clone(), tasks.clone(), tasks.clone()]
+            .into_iter()
+            .enumerate()
+        {
+            // Each iteration changes text, status, or ordering independently.
+            match index {
+                0 => changed[0].text.push('!'),
+                1 => changed[0].completed = true,
+                _ => changed.swap(0, 1),
+            }
+            fixture.storage.save(&changed).unwrap();
+            let mut app = App::new(load_tasks(&fixture.storage, false).unwrap());
+            app.restore_history(fixture.storage.load_history().unwrap());
+            assert_eq!(app.tasks, changed);
+            assert_eq!(app.list.selected(), Some(0));
+        }
+    }
+
+    #[test]
+    fn startup_grouping_rejects_incompatible_current_or_historical_order() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = App::new(
+            [("done", true), ("active", false)]
+                .map(|(text, completed)| app::Task {
+                    text: text.into(),
+                    completed,
+                })
+                .into(),
+        );
+        fixture.storage.save(&app.tasks).unwrap();
+        app.list.select(Some(1));
+        fixture
+            .storage
+            .save_history(&app.into_history_cache())
+            .unwrap();
+        let grouped = load_tasks(&fixture.storage, true).unwrap();
+        assert_eq!(grouped[0].text, "active");
+        let mut app = App::new(grouped);
+        app.completed_at_bottom = true;
+        app.restore_history(fixture.storage.load_history().unwrap());
+        assert_eq!(app.list.selected(), Some(0));
+        assert!(!app.can_undo() && !app.can_redo());
+        // The current order can match even when an old snapshot is incompatible.
+        let cache = serde_json::json!({"version":1,"tasks":app.tasks,"selected":1,
+            "undo":[{"tasks":[{"text":"done","completed":true},{"text":"active","completed":false}],"selected":0}],"redo":[]});
+        app.restore_history(serde_json::from_value(cache).unwrap());
+        assert!(!app.can_undo());
+        assert_eq!(app.list.selected(), Some(0));
+    }
+
+    #[test]
+    fn only_successful_sessions_save_history_and_cache_failure_is_nonfatal() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let tasks: Vec<_> = ["one", "two"]
+            .map(|text| app::Task {
+                text: text.into(),
+                completed: false,
+            })
+            .into();
+        fixture.storage.save(&tasks).unwrap();
+        let held = fixture.storage.lock().unwrap();
+        finish_session(Ok(()), Ok(()), App::new(tasks.clone()), &fixture.storage).unwrap();
+        let path = fixture.task_path().with_file_name("history.json");
+        let bytes = std::fs::read(&path).unwrap();
+        for cleanup_fails in [false, true] {
+            let mut app = App::new(tasks.clone());
+            app.list.select(Some(1));
+            let result = if cleanup_fails {
+                finish_session(
+                    Ok(()),
+                    Err(io::ErrorKind::BrokenPipe.into()),
+                    app,
+                    &fixture.storage,
+                )
+            } else {
+                finish_session(Err("storage error".into()), Ok(()), app, &fixture.storage)
+            };
+            assert!(result.is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let tasks_before = std::fs::read(fixture.task_path()).unwrap();
+        finish_session(Ok(()), Ok(()), App::new(tasks), &fixture.storage).unwrap();
+        assert_eq!(std::fs::read(fixture.task_path()).unwrap(), tasks_before);
+        assert!(path.is_dir());
+        assert!(fixture.storage.lock().is_err());
+        drop(held);
+    }
 
     #[test]
     fn completed_at_bottom_groups_existing_tasks_stably_and_is_opt_in() {
