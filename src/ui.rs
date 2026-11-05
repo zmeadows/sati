@@ -23,7 +23,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let area = frame.area();
     let entering_text = matches!(
         app.mode,
-        Mode::Adding(_)
+        Mode::Adding(_, _)
             | Mode::Editing { .. }
             | Mode::Searching { .. }
             | Mode::SearchResults { .. }
@@ -62,7 +62,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     draw_tasks(frame, app, rows);
 
     match &app.mode {
-        Mode::Adding(input) => draw_input(frame, sections[1], input, "add", app.accent),
+        Mode::Adding(input, _) => draw_input(frame, sections[1], input, "add", app.accent),
         Mode::Editing { input, .. } => draw_input(frame, sections[1], input, "edit", app.accent),
         Mode::Searching { input, .. } | Mode::SearchResults { input, .. } => {
             let no_matches = !input.text().is_empty() && app.list.selected().is_none();
@@ -371,7 +371,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
                 ("Enter", "Select"),
                 ("Esc", "Cancel"),
             ]],
-            Mode::Adding(_) | Mode::Editing { .. } => {
+            Mode::Adding(_, _) | Mode::Editing { .. } => {
                 vec![vec![("Enter", "Confirm"), ("Esc", "Cancel")]]
             }
             _ if app.tasks.is_empty() => vec![vec![("u", "Undo"), ("w", "Wrap"), ("q", "Quit")]],
@@ -611,7 +611,7 @@ mod tests {
             .map(|(_, line)| line)
             .collect()
     }
-    use crate::app::Task;
+    use crate::app::{AddPlacement, Task};
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
@@ -989,7 +989,7 @@ mod tests {
             " j/k Navigate    Space Toggle     w Wrap\n a/e Add/edit    d     Delete     u Undo\n x   Clear done  D     Clear all  q Quit"
         );
         for mode in [
-            Mode::Adding(TextInput::default()),
+            Mode::Adding(TextInput::default(), AddPlacement::End),
             Mode::Editing {
                 index: 0,
                 input: "task".into(),
@@ -1015,7 +1015,7 @@ mod tests {
         assert_eq!(text(&App::new(Vec::new()), 40), " w Wrap  q Quit");
         app.keybinds = false;
         assert!(shortcut_lines(&app, 80).is_empty());
-        app.mode = Mode::Adding(TextInput::default());
+        app.mode = Mode::Adding(TextInput::default(), AddPlacement::End);
         assert!(shortcut_lines(&app, 80).is_empty());
     }
 
@@ -1036,7 +1036,7 @@ mod tests {
         let mut heights = Vec::new();
         for mode in [
             Mode::Normal,
-            Mode::Adding(TextInput::default()),
+            Mode::Adding(TextInput::default(), AddPlacement::End),
             Mode::Editing {
                 index: 11,
                 input: "task".into(),
@@ -1075,7 +1075,7 @@ mod tests {
         let mut rows = Rect::default();
         terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
         assert_eq!(rows.height, 10);
-        app.mode = Mode::Adding(TextInput::default());
+        app.mode = Mode::Adding(TextInput::default(), AddPlacement::End);
         terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
         assert_eq!(rows.height, 9);
     }
@@ -1092,7 +1092,7 @@ mod tests {
                 terminal.backend_mut().resize(width, height);
                 for mode in [
                     Mode::Normal,
-                    Mode::Adding("Long input 日本語 🪷".into()),
+                    Mode::Adding("Long input 日本語 🪷".into(), AddPlacement::End),
                     Mode::Editing {
                         index: 0,
                         input: "Existing text 日本語 🪷".into(),
@@ -1471,7 +1471,7 @@ mod tests {
         let toggle = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
         app.key(toggle, &fixture.storage).unwrap();
         assert!(!app.wrap);
-        app.mode = Mode::Adding("a long input ending in 界z".into());
+        app.mode = Mode::Adding("a long input ending in 界z".into(), AddPlacement::End);
         terminal
             .draw(|frame| {
                 draw(frame, &mut app);
@@ -1510,7 +1510,7 @@ mod tests {
                         input: text.clone().into(),
                     }
                 } else {
-                    Mode::Adding(text.clone().into())
+                    Mode::Adding(text.clone().into(), AddPlacement::End)
                 };
                 let mut terminal = Terminal::new(TestBackend::new(width, 5)).unwrap();
                 for code in std::iter::repeat_n(KeyCode::Left, text.graphemes(true).count() + 2)

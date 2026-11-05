@@ -54,7 +54,10 @@ Then run `sati`.
 | First / last task | `g` / `G`, `Home` / `End` |
 | Move one page | `PageDown` / `PageUp` |
 | Reorder task | `J` / `K`, `Shift+↓` / `Shift+↑` |
-| Add / edit | `a` / `e` |
+| Append task | `a` |
+| Insert below selection | `o` |
+| Insert above selection | `O` |
+| Edit task | `e` |
 | Check / uncheck | `Space`, `Enter` |
 | Delete task | `d`, `Delete` |
 | Clear completed / clear all | `x` / `D` |
@@ -63,6 +66,8 @@ Then run `sati`.
 | Search | `/`, `Ctrl+F` |
 | Toggle wrapping | `w` |
 | Quit | `q` |
+
+With `--completed-at-bottom`, new tasks stay in the incomplete section.
 
 ### While typing
 
@@ -85,7 +90,6 @@ The add, edit, and search prompts share these shortcuts:
 | `--no-logo` | Hide the title in the border. |
 | `--no-keybinds` | Hide the shortcut hints. |
 | `--round-corners` | Use rounded borders. |
-| `--add-to-bottom` | Add tasks at the end instead of below the selection. |
 | `--completed-at-bottom` | Keep completed tasks below unfinished ones. |
 | `--accent '#RRGGBB'` | Set the accent color (default `#e78a4e`). |
 

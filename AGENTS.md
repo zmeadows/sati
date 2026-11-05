@@ -28,7 +28,7 @@
 - A task has only `text` and `completed`; list order is meaningful. Do not add a persistent schema field casually.
 - Task text is a nonempty, trimmed, single-line description. Preserve arbitrary valid Unicode; reject corrupt persisted data rather than silently repairing or overwriting it.
 - The normal list selection refers to a **task**, not a wrapped display row. Keep indices valid after deletion, reordering, clearing, and undo.
-- `--add-to-bottom` changes insertion location; `--completed-at-bottom` groups completed items below incomplete ones. Keep behavior, navigation, and undo coherent under both options.
+- `a` appends, `o` inserts below selection, and `O` inserts above selection. With `--completed-at-bottom`, new tasks stay in the incomplete section. Keep insertion, navigation, and undo coherent with this grouping.
 - Undo and redo each hold at most **256 in-memory snapshots** of tasks and selection. Only successful mutations enter ordinary history and clear redo. Undo/redo transfer snapshots between stacks after saving. Navigation, cancellation, and no-ops leave both histories unchanged.
 - `history.json` is an optional cache written only after normal quit and terminal restoration. Restore it only after full validation against loaded, normalized tasks. `tasks.json` remains authoritative; cache failures must not prevent startup or successful shutdown.
 

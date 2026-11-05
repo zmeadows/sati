@@ -32,10 +32,17 @@ impl Task {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AddPlacement {
+    End,
+    Below,
+    Above,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Mode {
     Normal,
-    Adding(TextInput),
+    Adding(TextInput, AddPlacement),
     Editing {
         index: usize,
         input: TextInput,
@@ -105,7 +112,6 @@ pub struct App {
     pub logo: bool,
     pub keybinds: bool,
     pub rounded: bool,
-    pub add_to_bottom: bool,
     pub completed_at_bottom: bool,
     pub accent: ratatui::style::Color,
     pub scroll: usize,
@@ -127,7 +133,6 @@ impl App {
             logo: true,
             keybinds: true,
             rounded: false,
-            add_to_bottom: false,
             completed_at_bottom: false,
             accent: crate::ui::DEFAULT_ACCENT,
             scroll: 0,
@@ -414,7 +419,7 @@ impl App {
                             | KeyCode::PageDown
                     )
             }
-            Mode::Adding(_) | Mode::Editing { .. } | Mode::Searching { .. } => {
+            Mode::Adding(_, _) | Mode::Editing { .. } | Mode::Searching { .. } => {
                 matches!(
                     key.code,
                     KeyCode::Char(_)
@@ -443,7 +448,9 @@ impl App {
             && key.modifiers.difference(KeyModifiers::SHIFT)
                 == (KeyModifiers::CONTROL | KeyModifiers::ALT)
             && let (
-                Mode::Adding(input) | Mode::Editing { input, .. } | Mode::Searching { input, .. },
+                Mode::Adding(input, _)
+                | Mode::Editing { input, .. }
+                | Mode::Searching { input, .. },
                 KeyCode::Char(character),
             ) = (&mut self.mode, key.code)
             && !character.is_control()
@@ -470,7 +477,7 @@ impl App {
                     }
                     return Ok(false);
                 }
-                if let Mode::Adding(input)
+                if let Mode::Adding(input, _)
                 | Mode::Editing { input, .. }
                 | Mode::Searching { input, .. } = &mut self.mode
                 {
@@ -519,60 +526,66 @@ impl App {
                 return Ok(false);
             }
         }
+        let placement = match self.mode {
+            Mode::Adding(_, placement) => placement,
+            _ => AddPlacement::End,
+        };
         let edited_task = match &self.mode {
             Mode::Editing { index, .. } => Some(*index),
             _ => None,
         };
         match &mut self.mode {
-            Mode::Adding(input) | Mode::Editing { input, .. } | Mode::Searching { input, .. } => {
-                match key.code {
-                    KeyCode::Esc => self.mode = Mode::Normal,
-                    KeyCode::Backspace => input.delete_before(),
-                    KeyCode::Delete => input.delete_after(),
-                    KeyCode::Left => input.move_left(),
-                    KeyCode::Right => input.move_right(),
-                    KeyCode::Home => input.set_cursor(0),
-                    KeyCode::End => input.set_cursor(input.text().len()),
-                    KeyCode::Char(character) if !character.is_control() => {
-                        input.insert(character.encode_utf8(&mut [0; 4]))
-                    }
-                    KeyCode::Enter => {
-                        let text = input.text().trim().to_owned();
-                        if !text.is_empty() {
-                            let mut tasks = self.tasks.clone();
-                            if let Some(index) = edited_task {
-                                if tasks[index].text != text {
-                                    tasks[index].text = text;
-                                    self.replace(tasks, Some(index), storage)?;
-                                }
-                            } else {
-                                let mut index = if self.add_to_bottom {
-                                    tasks.len()
-                                } else {
-                                    self.list.selected().map_or(tasks.len(), |index| index + 1)
-                                };
-                                if self.completed_at_bottom {
-                                    let boundary = tasks
-                                        .iter()
-                                        .position(|task| task.completed)
-                                        .unwrap_or(tasks.len());
-                                    index = index.min(boundary);
-                                }
-                                tasks.insert(
-                                    index,
-                                    Task {
-                                        text,
-                                        completed: false,
-                                    },
-                                );
+            Mode::Adding(input, _)
+            | Mode::Editing { input, .. }
+            | Mode::Searching { input, .. } => match key.code {
+                KeyCode::Esc => self.mode = Mode::Normal,
+                KeyCode::Backspace => input.delete_before(),
+                KeyCode::Delete => input.delete_after(),
+                KeyCode::Left => input.move_left(),
+                KeyCode::Right => input.move_right(),
+                KeyCode::Home => input.set_cursor(0),
+                KeyCode::End => input.set_cursor(input.text().len()),
+                KeyCode::Char(character) if !character.is_control() => {
+                    input.insert(character.encode_utf8(&mut [0; 4]))
+                }
+                KeyCode::Enter => {
+                    let text = input.text().trim().to_owned();
+                    if !text.is_empty() {
+                        let mut tasks = self.tasks.clone();
+                        if let Some(index) = edited_task {
+                            if tasks[index].text != text {
+                                tasks[index].text = text;
                                 self.replace(tasks, Some(index), storage)?;
                             }
+                        } else {
+                            let mut index = match placement {
+                                AddPlacement::End => tasks.len(),
+                                AddPlacement::Below => {
+                                    self.list.selected().map_or(tasks.len(), |index| index + 1)
+                                }
+                                AddPlacement::Above => self.list.selected().unwrap_or(tasks.len()),
+                            };
+                            if self.completed_at_bottom {
+                                let boundary = tasks
+                                    .iter()
+                                    .position(|task| task.completed)
+                                    .unwrap_or(tasks.len());
+                                index = index.min(boundary);
+                            }
+                            tasks.insert(
+                                index,
+                                Task {
+                                    text,
+                                    completed: false,
+                                },
+                            );
+                            self.replace(tasks, Some(index), storage)?;
                         }
-                        self.mode = Mode::Normal;
                     }
-                    _ => {}
+                    self.mode = Mode::Normal;
                 }
-            }
+                _ => {}
+            },
             Mode::ConfirmClear => match key.code {
                 KeyCode::Enter => {
                     self.replace(Vec::new(), None, storage)?;
@@ -619,7 +632,15 @@ impl App {
                         self.toggle(index, storage)?;
                     }
                 }
-                KeyCode::Char('a') => self.mode = Mode::Adding(TextInput::default()),
+                KeyCode::Char('a' | 'o' | 'O') => {
+                    let placement = match key.code {
+                        KeyCode::Char('a') => AddPlacement::End,
+                        KeyCode::Char('O') => AddPlacement::Above,
+                        _ if key.modifiers.contains(KeyModifiers::SHIFT) => AddPlacement::Above,
+                        _ => AddPlacement::Below,
+                    };
+                    self.mode = Mode::Adding(TextInput::default(), placement);
+                }
                 KeyCode::Char('e') => {
                     if let Some(index) = self.list.selected() {
                         self.mode = Mode::Editing {
@@ -650,8 +671,9 @@ impl App {
     }
 
     pub fn paste(&mut self, text: &str) {
-        if let Mode::Adding(input) | Mode::Editing { input, .. } | Mode::Searching { input, .. } =
-            &mut self.mode
+        if let Mode::Adding(input, _)
+        | Mode::Editing { input, .. }
+        | Mode::Searching { input, .. } = &mut self.mode
         {
             let normalized: String = text
                 .replace("\r\n", "\n")
@@ -795,7 +817,7 @@ mod tests {
     fn conventional_aliases_do_not_leak_into_other_modes_or_replace_text_delete() {
         let fixture = Fixture::new();
         for mode in [
-            Mode::Adding("abc".into()),
+            Mode::Adding("abc".into(), AddPlacement::End),
             Mode::Editing {
                 index: 0,
                 input: "abc".into(),
@@ -815,7 +837,7 @@ mod tests {
             app.toggle(1, &fixture.storage).unwrap();
             app.undo(&fixture.storage).unwrap();
             app.mode = mode;
-            if let Mode::Adding(input)
+            if let Mode::Adding(input, _)
             | Mode::Editing { input, .. }
             | Mode::Searching { input, .. } = &mut app.mode
             {
@@ -837,7 +859,7 @@ mod tests {
                 &fixture.storage,
             )
             .unwrap();
-            if let Mode::Adding(input)
+            if let Mode::Adding(input, _)
             | Mode::Editing { input, .. }
             | Mode::Searching { input, .. } = &app.mode
             {
@@ -1112,7 +1134,7 @@ mod tests {
                     app.mode = if edit {
                         Mode::Editing { index: 0, input }
                     } else {
-                        Mode::Adding(input)
+                        Mode::Adding(input, AddPlacement::End)
                     };
                     app.key(
                         KeyEvent::new_with_kind(code, modifiers, kind),
@@ -1120,7 +1142,7 @@ mod tests {
                     )
                     .unwrap();
                     let input = match &app.mode {
-                        Mode::Adding(input) | Mode::Editing { input, .. } => input,
+                        Mode::Adding(input, _) | Mode::Editing { input, .. } => input,
                         _ => unreachable!(),
                     };
                     assert_eq!(input.cursor(), expected_cursor, "{code:?} {modifiers:?}");
@@ -1136,7 +1158,7 @@ mod tests {
                     input: text.into(),
                 }
             } else {
-                Mode::Adding(text.into())
+                Mode::Adding(text.into(), AddPlacement::End)
             };
             let original_mode = format!("{:?}", app.mode);
             for (code, modifiers) in [
@@ -1445,12 +1467,11 @@ mod tests {
     #[test]
     fn additions_and_reordering_stay_within_completion_groups() {
         let fixture = Fixture::new();
-        for add_to_bottom in [false, true] {
+        for key in ['a', 'o', 'O'] {
             let mut app = app_with_tasks(4);
             app.tasks[2].completed = true;
             app.tasks[3].completed = true;
             app.completed_at_bottom = true;
-            app.add_to_bottom = add_to_bottom;
             let original = app.tasks.clone();
             app.list.select(Some(1));
             press(&mut app, &fixture, KeyCode::Char('J'));
@@ -1462,7 +1483,7 @@ mod tests {
             assert_eq!(app.tasks[3], original[2]);
             press(&mut app, &fixture, KeyCode::Char('u'));
             assert_eq!(app.tasks, original);
-            press(&mut app, &fixture, KeyCode::Char('a'));
+            press(&mut app, &fixture, KeyCode::Char(key));
             press(&mut app, &fixture, KeyCode::Char('n'));
             press(&mut app, &fixture, KeyCode::Enter);
             assert_eq!(app.list.selected(), Some(2));
@@ -1517,7 +1538,7 @@ mod tests {
                         app.mode = if edit {
                             Mode::Editing { index: 0, input }
                         } else {
-                            Mode::Adding(input)
+                            Mode::Adding(input, AddPlacement::End)
                         };
                         assert!(
                             !app.key(
@@ -1527,7 +1548,7 @@ mod tests {
                             .unwrap()
                         );
                         let actual = match &app.mode {
-                            Mode::Adding(input) | Mode::Editing { input, .. } => input,
+                            Mode::Adding(input, _) | Mode::Editing { input, .. } => input,
                             _ => panic!("AltGr must not change mode"),
                         };
                         assert_eq!(actual, &expected, "{character:?} {modifiers:?} {kind:?}");
@@ -1568,12 +1589,12 @@ mod tests {
             app.mode = if edit {
                 Mode::Editing { index: 0, input }
             } else {
-                Mode::Adding(input)
+                Mode::Adding(input, AddPlacement::End)
             };
             press(&mut app, &fixture, KeyCode::Char('界'));
             app.paste("e\u{301}\r\nq\tD\u{2028}");
             match &app.mode {
-                Mode::Adding(input) | Mode::Editing { input, .. } => {
+                Mode::Adding(input, _) | Mode::Editing { input, .. } => {
                     assert_eq!(input.text(), "a界e\u{301} q D b");
                     assert_eq!(&input.text()[input.cursor()..], "b");
                 }
@@ -1598,7 +1619,7 @@ mod tests {
             let original = app.tasks.clone();
             press(&mut app, &fixture, start);
             let prefix = match &app.mode {
-                Mode::Adding(input) | Mode::Editing { input, .. } => input.text().to_owned(),
+                Mode::Adding(input, _) | Mode::Editing { input, .. } => input.text().to_owned(),
                 _ => unreachable!(),
             };
             for grapheme in ["e\u{301}", "👩‍💻", "👨‍👩‍👧‍👦", "👍🏽", "🇺🇳"]
@@ -1608,7 +1629,7 @@ mod tests {
                 }
                 press(&mut app, &fixture, KeyCode::Backspace);
                 match &app.mode {
-                    Mode::Adding(input) | Mode::Editing { input, .. } => {
+                    Mode::Adding(input, _) | Mode::Editing { input, .. } => {
                         assert_eq!(input.text(), prefix)
                     }
                     _ => unreachable!(),
@@ -1617,7 +1638,7 @@ mod tests {
             app.paste("e\u{301}👩‍💻");
             repeat(&mut app, &fixture, KeyCode::Backspace, KeyModifiers::NONE);
             match &app.mode {
-                Mode::Adding(input) | Mode::Editing { input, .. } => {
+                Mode::Adding(input, _) | Mode::Editing { input, .. } => {
                     assert_eq!(input.text(), &format!("{prefix}e\u{301}"))
                 }
                 _ => unreachable!(),
@@ -1626,7 +1647,7 @@ mod tests {
                 repeat(&mut app, &fixture, KeyCode::Backspace, KeyModifiers::NONE);
             }
             match &app.mode {
-                Mode::Adding(input) | Mode::Editing { input, .. } => {
+                Mode::Adding(input, _) | Mode::Editing { input, .. } => {
                     assert!(input.text().is_empty())
                 }
                 _ => unreachable!(),
@@ -1646,7 +1667,7 @@ mod tests {
             app.paste("Start ");
             app.paste("日本語\r\nq\nD\rd\tx\0u\u{0008}\u{001b}[13u\u{0085}👩‍💻\u{2028}e\u{2029}end");
             let expected = "Start 日本語 q D d x u  [13u 👩‍💻 e end";
-            assert_eq!(app.mode, Mode::Adding(expected.into()));
+            assert_eq!(app.mode, Mode::Adding(expected.into(), AddPlacement::End));
             assert_eq!(app.tasks, original);
             assert_eq!(app.list.selected(), Some(0));
             assert!(!fixture.task_path().exists());
@@ -1743,7 +1764,7 @@ mod tests {
                 assert!(app.list.selected().is_none_or(|index| index < count));
             }
             for mode in [
-                Mode::Adding("input".into()),
+                Mode::Adding("input".into(), AddPlacement::End),
                 Mode::Editing {
                     index: 0,
                     input: "input".into(),
@@ -1756,7 +1777,7 @@ mod tests {
                 press(&mut app, &fixture, KeyCode::PageUp);
                 assert_eq!(app.list.selected(), selected);
                 match &app.mode {
-                    Mode::Adding(input) | Mode::Editing { input, .. } => {
+                    Mode::Adding(input, _) | Mode::Editing { input, .. } => {
                         assert_eq!(input.text(), "input")
                     }
                     mode => assert_eq!(*mode, Mode::ConfirmClear),
@@ -1800,7 +1821,7 @@ mod tests {
         }
         app.list.select(Some(1));
         for mode in [
-            Mode::Adding(TextInput::default()),
+            Mode::Adding(TextInput::default(), AddPlacement::End),
             Mode::Editing {
                 index: 1,
                 input: TextInput::default(),
@@ -1816,7 +1837,9 @@ mod tests {
                 press(&mut app, &fixture, code);
             }
             match &app.mode {
-                Mode::Adding(input) | Mode::Editing { input, .. } => assert_eq!(input.text(), "gG"),
+                Mode::Adding(input, _) | Mode::Editing { input, .. } => {
+                    assert_eq!(input.text(), "gG")
+                }
                 _ => unreachable!(),
             }
             assert_eq!(app.list.selected(), Some(1));
@@ -1917,7 +1940,7 @@ mod tests {
             repeat(&mut app, &fixture, KeyCode::Enter, KeyModifiers::NONE);
             repeat(&mut app, &fixture, KeyCode::Esc, KeyModifiers::NONE);
             match &app.mode {
-                Mode::Adding(input) | Mode::Editing { input, .. } => {
+                Mode::Adding(input, _) | Mode::Editing { input, .. } => {
                     assert!(input.text().ends_with("uqd日本"))
                 }
                 _ => panic!("repeat must not leave text input"),
@@ -2011,7 +2034,7 @@ mod tests {
         app.tasks[0].completed = true;
         let original = app.tasks.clone();
         for mode in [
-            Mode::Adding(TextInput::default()),
+            Mode::Adding(TextInput::default(), AddPlacement::End),
             Mode::Editing {
                 index: 0,
                 input: "task 0".into(),
@@ -2022,7 +2045,7 @@ mod tests {
             press(&mut app, &fixture, KeyCode::Char('x'));
             assert_eq!(app.tasks, original);
             match &app.mode {
-                Mode::Adding(input) | Mode::Editing { input, .. } => {
+                Mode::Adding(input, _) | Mode::Editing { input, .. } => {
                     assert!(input.text().ends_with('x'))
                 }
                 mode => assert_eq!(*mode, Mode::ConfirmClear),
@@ -2181,7 +2204,7 @@ mod tests {
         app.redo(&fixture.storage).unwrap();
         assert!(app.tasks[0].completed);
         app.undo(&fixture.storage).unwrap();
-        app.mode = Mode::Adding("new branch".into());
+        app.mode = Mode::Adding("new branch".into(), AddPlacement::End);
         press(&mut app, &fixture, KeyCode::Enter);
         let branched = app.tasks.clone();
         assert!(!app.can_redo());
@@ -2200,7 +2223,7 @@ mod tests {
         let original = app.tasks.clone();
         for mode in [
             Mode::Normal,
-            Mode::Adding("task".into()),
+            Mode::Adding("task".into(), AddPlacement::End),
             Mode::Editing {
                 index: 0,
                 input: "task".into(),
@@ -2364,7 +2387,7 @@ mod tests {
             press(&mut app, &fixture, code);
             press(&mut app, &fixture, KeyCode::Char('u'));
             match &app.mode {
-                Mode::Adding(input) | Mode::Editing { input, .. } => {
+                Mode::Adding(input, _) | Mode::Editing { input, .. } => {
                     assert!(input.text().ends_with('u'))
                 }
                 _ => panic!("expected text input"),
@@ -2567,7 +2590,10 @@ mod tests {
         let mut app = app_with_tasks(3);
         app.list.select(Some(1));
         let original = app.tasks.clone();
-        for mode in [Mode::Adding(TextInput::default()), Mode::ConfirmClear] {
+        for mode in [
+            Mode::Adding(TextInput::default(), AddPlacement::End),
+            Mode::ConfirmClear,
+        ] {
             app.mode = mode;
             for code in [
                 KeyCode::Char('J'),
@@ -2581,7 +2607,7 @@ mod tests {
             assert_eq!(app.tasks, original);
             assert_eq!(app.list.selected(), Some(1));
             assert!(!fixture.task_path().exists());
-            if let Mode::Adding(input) = &app.mode {
+            if let Mode::Adding(input, _) = &app.mode {
                 assert_eq!(input.text(), "JK");
             }
         }
@@ -2638,48 +2664,123 @@ mod tests {
     }
 
     #[test]
-    fn adding_inserts_below_focus_or_at_bottom_and_undo_restores_order() {
-        for add_to_bottom in [false, true] {
-            for (count, selected) in [
-                (0, None),
-                (3, Some(0)),
-                (3, Some(1)),
-                (3, Some(2)),
-                (3, None),
-            ] {
-                let fixture = Fixture::new();
-                let mut app = app_with_tasks(count);
-                app.add_to_bottom = add_to_bottom;
-                app.list.select(selected);
-                if count > 0 {
-                    app.tasks[0].completed = true;
+    fn positional_insertions_preserve_order_selection_and_history() {
+        for (count, selected, positions) in [
+            (0, None, [0, 0, 0]),
+            (1, Some(0), [1, 1, 0]),
+            (3, Some(0), [3, 1, 0]),
+            (3, Some(1), [3, 2, 1]),
+            (3, Some(2), [3, 3, 2]),
+            (3, None, [3, 3, 3]),
+        ] {
+            for boundary in [None, Some(0), Some(1.min(count)), Some(count)] {
+                for (key, position) in ['a', 'o', 'O'].into_iter().zip(positions) {
+                    let fixture = Fixture::new();
+                    let mut app = app_with_tasks(count);
+                    app.completed_at_bottom = boundary.is_some();
+                    for (index, task) in app.tasks.iter_mut().enumerate() {
+                        task.completed = boundary.map_or(index == 0, |start| index >= start);
+                    }
+                    app.list.select(selected);
+                    let original = app.tasks.clone();
+                    let expected_index = position.min(boundary.unwrap_or(count));
+                    let mut expected = original.clone();
+                    expected.insert(
+                        expected_index,
+                        Task {
+                            text: "New task".into(),
+                            completed: false,
+                        },
+                    );
+                    press(&mut app, &fixture, KeyCode::Char(key));
+                    app.paste("New task");
+                    press(&mut app, &fixture, KeyCode::Enter);
+                    assert_eq!(app.tasks, expected);
+                    assert_eq!(app.list.selected(), Some(expected_index));
+                    assert_eq!(fixture.storage.load().unwrap(), expected);
+                    assert_eq!(app.history.len(), 1);
+                    assert!(app.reveal_selection);
+                    app.keybinds = false;
+                    let mut terminal =
+                        ratatui::Terminal::new(ratatui::backend::TestBackend::new(18, 3)).unwrap();
+                    terminal
+                        .draw(|frame| {
+                            crate::ui::draw(frame, &mut app);
+                        })
+                        .unwrap();
+                    assert_eq!(app.row_tasks[app.scroll], expected_index);
+                    app.undo(&fixture.storage).unwrap();
+                    assert_eq!(app.tasks, original);
+                    assert_eq!(app.list.selected(), selected);
+                    app.redo(&fixture.storage).unwrap();
+                    assert_eq!(app.tasks, expected);
+                    assert_eq!(app.list.selected(), Some(expected_index));
+                    app.undo(&fixture.storage).unwrap();
+                    press(&mut app, &fixture, KeyCode::Char(key));
+                    app.paste("New branch");
+                    press(&mut app, &fixture, KeyCode::Enter);
+                    assert!(!app.can_redo());
+                    assert_eq!(app.history.len(), 1);
                 }
-                let original = app.tasks.clone();
-                let expected_index = if add_to_bottom {
-                    count
-                } else {
-                    selected.map_or(count, |index| index + 1)
-                };
-                let mut expected = original.clone();
-                expected.insert(
-                    expected_index,
-                    Task {
-                        text: "New task".into(),
-                        completed: false,
-                    },
-                );
-                press(&mut app, &fixture, KeyCode::Char('a'));
-                app.paste("New task");
-                press(&mut app, &fixture, KeyCode::Enter);
-                assert_eq!(app.tasks, expected);
-                assert_eq!(app.list.selected(), Some(expected_index));
-                assert_eq!(fixture.storage.load().unwrap(), expected);
-                assert!(app.reveal_selection);
-                press(&mut app, &fixture, KeyCode::Char('u'));
-                assert_eq!(app.tasks, original);
-                assert_eq!(app.list.selected(), selected);
-                assert_eq!(fixture.storage.load().unwrap(), original);
             }
+        }
+    }
+
+    #[test]
+    fn positional_input_cancellation_and_save_failures_preserve_both_histories() {
+        for key in ['a', 'o', 'O'] {
+            let fixture = Fixture::new();
+            let mut app = app_with_tasks(2);
+            app.toggle(0, &fixture.storage).unwrap();
+            app.toggle(1, &fixture.storage).unwrap();
+            app.undo(&fixture.storage).unwrap();
+            let snapshot = |app: &App| {
+                serde_json::to_value((
+                    &app.tasks,
+                    app.list.selected(),
+                    &app.history,
+                    &app.redo_history,
+                ))
+                .unwrap()
+            };
+            let original = snapshot(&app);
+            for ending in [KeyCode::Esc, KeyCode::Enter] {
+                press(&mut app, &fixture, KeyCode::Char(key));
+                app.paste(if ending == KeyCode::Esc {
+                    "canceled task"
+                } else {
+                    " "
+                });
+                press(&mut app, &fixture, ending);
+                assert_eq!(snapshot(&app), original);
+                assert_eq!(app.mode, Mode::Normal);
+            }
+            for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+                app.key(
+                    KeyEvent::new_with_kind(KeyCode::Char(key), KeyModifiers::NONE, kind),
+                    &fixture.storage,
+                )
+                .unwrap();
+                assert_eq!(app.mode, Mode::Normal);
+            }
+            press(&mut app, &fixture, KeyCode::Char(key));
+            app.paste("new task");
+            let data = fixture.directory.join("data");
+            let backup = fixture.directory.join("backup");
+            std::fs::rename(&data, &backup).unwrap();
+            std::fs::write(&data, "blocked").unwrap();
+            assert!(
+                app.key(
+                    KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                    &fixture.storage
+                )
+                .is_err()
+            );
+            assert_eq!(snapshot(&app), original);
+            assert!(matches!(app.mode, Mode::Adding(_, _)));
+            std::fs::remove_file(&data).unwrap();
+            std::fs::rename(backup, data).unwrap();
+            assert_eq!(fixture.storage.load().unwrap(), app.tasks);
         }
     }
 
@@ -2863,7 +2964,7 @@ mod tests {
                 .unwrap();
             assert_eq!(app.list.selected(), Some(6));
         }
-        app.mode = Mode::Adding(TextInput::default());
+        app.mode = Mode::Adding(TextInput::default(), AddPlacement::End);
         app.mouse(click(1, 2), rows, &fixture.storage).unwrap();
         assert!(app.tasks[6].completed);
         app.mode = Mode::Normal;
