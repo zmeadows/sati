@@ -93,6 +93,7 @@ The add, edit, and search prompts share these shortcuts:
 | `--no-logo` | Hide the title in the border. |
 | `--no-keybinds` | Hide the shortcut hints. |
 | `--round-corners` | Use rounded borders. |
+| `--unicode-markers` | Use `[ ]`, `[✓]`, and `[↪]` for ordinary, completed, and carried tasks. |
 | `--completed-at-bottom` | Keep completed tasks below unfinished ones. |
 | `--accent '#RRGGBB'` | Set the accent color (default `#e78a4e`). |
 

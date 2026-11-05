@@ -31,7 +31,7 @@ use ratatui::crossterm::event::EnableBracketedPaste;
 use app::App;
 use storage::{Result, Storage};
 
-const USAGE: &str = "Usage: sati [--no-wrap] [--no-logo] [--no-keybinds] [--round-corners] [--completed-at-bottom] [--accent '#RRGGBB'] [--version]";
+const USAGE: &str = "Usage: sati [--no-wrap] [--no-logo] [--no-keybinds] [--round-corners] [--unicode-markers] [--completed-at-bottom] [--accent '#RRGGBB'] [--version]";
 
 // Report repeats for plain characters and Enter too; alternate keys preserve shifted text.
 const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
@@ -46,6 +46,7 @@ struct Options {
     logo: bool,
     keybinds: bool,
     rounded: bool,
+    unicode_markers: bool,
     completed_at_bottom: bool,
     accent: ratatui::style::Color,
     print_version: bool,
@@ -64,7 +65,7 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let Some(options) = parse_arguments(std::env::args_os().skip(1))? else {
         println!(
-            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--no-keybinds      Hide the keybind list.\n--round-corners    Use rounded checklist corners (default: sharp).\n--completed-at-bottom Keep completed tasks below unfinished tasks.\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e).\n--version          Print the version.\n--help, -h         Show this help."
+            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--no-keybinds      Hide the keybind list.\n--round-corners    Use rounded checklist corners (default: sharp).\n--unicode-markers  Use [✓] for completed and [↪] for carried tasks.\n--completed-at-bottom Keep completed tasks below unfinished tasks.\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e).\n--version          Print the version.\n--help, -h         Show this help."
         );
         return Ok(());
     };
@@ -79,6 +80,7 @@ fn run() -> Result<()> {
     app.logo = options.logo;
     app.keybinds = options.keybinds;
     app.rounded = options.rounded;
+    app.unicode_markers = options.unicode_markers;
     app.completed_at_bottom = options.completed_at_bottom;
     app.accent = options.accent;
     if let Some(cache) = storage.load_history() {
@@ -276,6 +278,7 @@ fn parse_arguments(
         logo: true,
         keybinds: true,
         rounded: false,
+        unicode_markers: false,
         completed_at_bottom: false,
         accent: ui::DEFAULT_ACCENT,
         print_version: false,
@@ -291,6 +294,8 @@ fn parse_arguments(
             options.keybinds = false;
         } else if argument == "--round-corners" {
             options.rounded = true;
+        } else if argument == "--unicode-markers" {
+            options.unicode_markers = true;
         } else if argument == "--add-to-bottom" {
             // Accepted for compatibility with v0.1.0; insertion is now key-specific.
         } else if argument == "--completed-at-bottom" {
@@ -659,6 +664,13 @@ mod tests {
         assert!(defaults.logo);
         assert!(defaults.keybinds);
         assert!(!defaults.rounded);
+        assert!(!defaults.unicode_markers);
+        assert!(
+            parse_arguments(["--unicode-markers".into(), "--no-wrap".into()])
+                .unwrap()
+                .unwrap()
+                .unicode_markers
+        );
         assert_eq!(defaults.accent, ui::DEFAULT_ACCENT);
         assert!(!defaults.print_version);
         assert!(!parse_arguments(["--no-wrap".into()]).unwrap().unwrap().wrap);

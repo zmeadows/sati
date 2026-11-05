@@ -48,3 +48,25 @@ fn deprecated_add_flag_is_an_undocumented_no_op() {
         assert!(!String::from_utf8_lossy(&normal.stdout).contains("--add-to-bottom"));
     }
 }
+
+#[test]
+fn unicode_markers_are_documented_and_combine_with_existing_options() {
+    let output = Command::new(env!("CARGO_BIN_EXE_sati"))
+        .args(["--unicode-markers", "--help"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("--unicode-markers") && help.contains("[✓]") && help.contains("[↪]"));
+    let output = Command::new(env!("CARGO_BIN_EXE_sati"))
+        .args(["--unicode-markers", "--no-wrap", "--version"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("sati {}\n", env!("CARGO_PKG_VERSION"))
+    );
+}

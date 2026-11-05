@@ -10,7 +10,7 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Mode};
+use crate::app::{App, Mode, Task};
 use crate::input::TextInput;
 
 // Gruvbox Material dark/medium; the terminal supplies the background.
@@ -166,12 +166,8 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
                 } else {
                     "  ■  "
                 }
-            } else if task.completed {
-                " [x] "
-            } else if task.carried {
-                " [>] "
             } else {
-                " [ ] "
+                task_checkbox(task, app.unicode_markers)
             };
             let color = if searching {
                 if matches.is_empty() {
@@ -267,6 +263,16 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
             label,
             app.accent,
         );
+    }
+}
+
+fn task_checkbox(task: &Task, unicode: bool) -> &'static str {
+    if task.completed {
+        if unicode { " [✓] " } else { " [x] " }
+    } else if task.carried {
+        if unicode { " [↪] " } else { " [>] " }
+    } else {
+        " [ ] "
     }
 }
 
@@ -673,6 +679,95 @@ mod tests {
     }
     use crate::app::{AddPlacement, Task};
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn unicode_checkboxes_are_single_cell_and_preserve_rendering_and_search() {
+        for glyph in ["\u{2713}", "\u{21aa}"] {
+            assert_eq!(glyph.width(), 1);
+        }
+        let tasks = vec![
+            Task {
+                text: "ordinary task wraps here".into(),
+                completed: false,
+                carried: false,
+            },
+            Task {
+                text: "done task wraps here".into(),
+                completed: true,
+                carried: false,
+            },
+            Task {
+                text: "carried task wraps here".into(),
+                completed: false,
+                carried: true,
+            },
+        ];
+        for (task, ascii, unicode) in [
+            (&tasks[0], " [ ] ", " [ ] "),
+            (&tasks[1], " [x] ", " [\u{2713}] "),
+            (&tasks[2], " [>] ", " [\u{21aa}] "),
+        ] {
+            assert_eq!(task_checkbox(task, false), ascii);
+            assert_eq!(task_checkbox(task, true), unicode);
+            assert_eq!(ascii.width(), 5);
+            assert_eq!(unicode.width(), 5);
+        }
+        for width in [0, 1, 2, 3, 8, 18, 40] {
+            for wrap in [false, true] {
+                for mode in [
+                    Mode::Normal,
+                    Mode::Searching {
+                        input: "done".into(),
+                        original: Some(1),
+                    },
+                    Mode::SearchResults {
+                        input: "done".into(),
+                        original: Some(1),
+                    },
+                ] {
+                    let searching = mode != Mode::Normal;
+                    let mut app = App::new(tasks.clone());
+                    assert!(!app.unicode_markers);
+                    app.mode = mode;
+                    app.list.select(Some(1));
+                    app.wrap = wrap;
+                    app.keybinds = false;
+                    app.accent = Color::Rgb(169, 182, 101);
+                    let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+                    let mut rows = Rect::default();
+                    terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+                    let ascii = terminal.backend().buffer().clone();
+                    let mapping = app.row_tasks.clone();
+                    let scroll = app.scroll;
+                    app.unicode_markers = true;
+                    let mut unicode_rows = Rect::default();
+                    terminal
+                        .draw(|frame| unicode_rows = draw(frame, &mut app))
+                        .unwrap();
+                    assert_eq!(rows, unicode_rows);
+                    assert_eq!(app.row_tasks, mapping);
+                    assert_eq!(app.scroll, scroll);
+                    let mut unicode = terminal.backend().buffer().clone();
+                    if !searching {
+                        for cell in &mut unicode.content {
+                            match cell.symbol() {
+                                "✓" => {
+                                    cell.set_symbol("x");
+                                }
+                                "↪" => {
+                                    cell.set_symbol(">");
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    assert_eq!(ascii, unicode);
+                    assert_eq!(app.tasks, tasks);
+                    assert!(!app.can_undo() && !app.can_redo());
+                }
+            }
+        }
+    }
 
     #[test]
     fn carryover_checkboxes_preserve_layout_and_search_markers() {
