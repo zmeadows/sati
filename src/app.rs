@@ -40,6 +40,7 @@ pub struct App {
     pub keybinds: bool,
     pub rounded: bool,
     pub add_to_bottom: bool,
+    pub completed_at_bottom: bool,
     pub accent: ratatui::style::Color,
     pub scroll: usize,
     pub row_tasks: Vec<usize>,
@@ -60,6 +61,7 @@ impl App {
             keybinds: true,
             rounded: false,
             add_to_bottom: false,
+            completed_at_bottom: false,
             accent: crate::ui::DEFAULT_ACCENT,
             scroll: 0,
             row_tasks: Vec::new(),
@@ -171,8 +173,19 @@ impl App {
     fn toggle(&mut self, index: usize, storage: &Storage) -> Result<()> {
         let mut tasks = self.tasks.clone();
         tasks[index].completed = !tasks[index].completed;
-        self.replace(tasks, Some(index), storage)?;
-        self.reveal_selection = false;
+        let selected = if self.completed_at_bottom {
+            let task = tasks.remove(index);
+            let boundary = tasks
+                .iter()
+                .position(|task| task.completed)
+                .unwrap_or(tasks.len());
+            tasks.insert(boundary, task);
+            boundary
+        } else {
+            index
+        };
+        self.replace(tasks, Some(selected), storage)?;
+        self.reveal_selection = selected != index;
         Ok(())
     }
 
@@ -184,6 +197,9 @@ impl App {
             return Ok(());
         }
         let next = if down { index + 1 } else { index - 1 };
+        if self.completed_at_bottom && self.tasks[index].completed != self.tasks[next].completed {
+            return Ok(());
+        }
         let mut tasks = self.tasks.clone();
         tasks.swap(index, next);
         self.replace(tasks, Some(next), storage)
@@ -304,11 +320,18 @@ impl App {
                                 self.replace(tasks, Some(index), storage)?;
                             }
                         } else {
-                            let index = if self.add_to_bottom {
+                            let mut index = if self.add_to_bottom {
                                 tasks.len()
                             } else {
                                 self.list.selected().map_or(tasks.len(), |index| index + 1)
                             };
+                            if self.completed_at_bottom {
+                                let boundary = tasks
+                                    .iter()
+                                    .position(|task| task.completed)
+                                    .unwrap_or(tasks.len());
+                                index = index.min(boundary);
+                            }
                             tasks.insert(
                                 index,
                                 Task {
@@ -629,6 +652,105 @@ mod tests {
             }
         }
         assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn completed_group_is_a_stack_and_each_toggle_undoes_as_one_change() {
+        let fixture = Fixture::new();
+        let original: Vec<_> = [("a", false), ("b", false), ("c", true), ("d", true)]
+            .map(|(text, completed)| Task {
+                text: text.into(),
+                completed,
+            })
+            .into();
+        let mut app = App::new(original.clone());
+        app.completed_at_bottom = true;
+        for (index, order, selected) in [
+            (0, vec!["b", "a", "c", "d"], 1),
+            (0, vec!["b", "a", "c", "d"], 0),
+            (2, vec!["c", "b", "a", "d"], 0),
+        ] {
+            app.toggle(index, &fixture.storage).unwrap();
+            assert_eq!(
+                app.tasks
+                    .iter()
+                    .map(|task| task.text.as_str())
+                    .collect::<Vec<_>>(),
+                order
+            );
+            assert_eq!(app.list.selected(), Some(selected));
+            assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+        }
+        assert_eq!(app.history.len(), 3);
+        for selected in [0, 1, 0] {
+            press(&mut app, &fixture, KeyCode::Char('u'));
+            assert_eq!(app.list.selected(), Some(selected));
+            assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+        }
+        assert_eq!(app.tasks, original);
+        assert!(!app.can_undo());
+
+        // A failed toggle or undo must not change the ordering, selection, or history.
+        app.toggle(0, &fixture.storage).unwrap();
+        let before = app.tasks.clone();
+        let selected = app.list.selected();
+        let data = fixture.directory.join("data");
+        let backup = fixture.directory.join("backup");
+        std::fs::rename(&data, &backup).unwrap();
+        std::fs::write(&data, "blocked directory").unwrap();
+        assert!(app.toggle(0, &fixture.storage).is_err());
+        assert!(app.undo(&fixture.storage).is_err());
+        assert_eq!(app.tasks, before);
+        assert_eq!(app.list.selected(), selected);
+        assert_eq!(app.history.len(), 1);
+        std::fs::remove_file(&data).unwrap();
+        std::fs::rename(backup, data).unwrap();
+        app.undo(&fixture.storage).unwrap();
+        assert_eq!(app.tasks, original);
+    }
+
+    #[test]
+    fn additions_and_reordering_stay_within_completion_groups() {
+        let fixture = Fixture::new();
+        for add_to_bottom in [false, true] {
+            let mut app = app_with_tasks(4);
+            app.tasks[2].completed = true;
+            app.tasks[3].completed = true;
+            app.completed_at_bottom = true;
+            app.add_to_bottom = add_to_bottom;
+            let original = app.tasks.clone();
+            app.list.select(Some(1));
+            press(&mut app, &fixture, KeyCode::Char('J'));
+            app.list.select(Some(2));
+            press(&mut app, &fixture, KeyCode::Char('K'));
+            assert_eq!(app.tasks, original);
+            assert!(!app.can_undo());
+            press(&mut app, &fixture, KeyCode::Char('J'));
+            assert_eq!(app.tasks[3], original[2]);
+            press(&mut app, &fixture, KeyCode::Char('u'));
+            assert_eq!(app.tasks, original);
+            press(&mut app, &fixture, KeyCode::Char('a'));
+            press(&mut app, &fixture, KeyCode::Char('n'));
+            press(&mut app, &fixture, KeyCode::Enter);
+            assert_eq!(app.list.selected(), Some(2));
+            assert_eq!(app.tasks[2].text, "n");
+            assert!(!app.tasks[2].completed);
+            assert!(app.tasks[3..].iter().all(|task| task.completed));
+            assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+            press(&mut app, &fixture, KeyCode::Char('u'));
+            assert_eq!(app.tasks, original);
+        }
+        let mut app = app_with_tasks(1);
+        app.completed_at_bottom = true;
+        for _ in 0..2 {
+            press(&mut app, &fixture, KeyCode::Enter);
+        }
+        assert!(!app.tasks[0].completed);
+        assert_eq!(app.list.selected(), Some(0));
+        app.tasks.clear();
+        app.list.select(None);
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert!(app.tasks.is_empty());
     }
 
     #[test]

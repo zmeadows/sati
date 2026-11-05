@@ -65,9 +65,16 @@ sati --no-logo             # Hide the sati border title
 sati --no-keybinds         # Hide the keybind list
 sati --round-corners       # Use rounded checklist corners (default: sharp)
 sati --add-to-bottom       # Add new tasks at the bottom instead of below selection
+sati --completed-at-bottom # Keep completed tasks at the bottom
 sati --accent '#a9b665'     # Set the selection accent
 sati --version             # Show the version
 ```
+
+With `--completed-at-bottom`, existing tasks are grouped and saved at startup,
+preserving their order within each group. Newly completed tasks go above the
+existing completed tasks; reopened tasks move to the end of the unfinished group.
+New tasks stay in the unfinished group, including with `--add-to-bottom`.
+Task reordering stays within each group.
 
 ## Data
 

@@ -833,6 +833,66 @@ mod tests {
     }
 
     #[test]
+    fn moving_a_completed_task_keeps_selection_visible_and_mouse_undo_correct() {
+        use ratatui::crossterm::event::{
+            KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = App::new(vec![
+            Task {
+                text: "long wrapped task with many words".into(),
+                completed: false,
+            },
+            Task {
+                text: "next".into(),
+                completed: false,
+            },
+            Task {
+                text: "already done".into(),
+                completed: true,
+            },
+        ]);
+        app.completed_at_bottom = true;
+        app.keybinds = false;
+        let original = app.tasks.clone();
+        let mut terminal = Terminal::new(TestBackend::new(18, 5)).unwrap();
+        let mut rows = Rect::default();
+        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        app.mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rows.x + 6,
+                row: rows.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            rows,
+            &fixture.storage,
+        )
+        .unwrap();
+        assert_eq!(app.list.selected(), Some(1));
+        assert_eq!(app.tasks[1].text, original[0].text);
+        assert!(app.tasks[1].completed);
+        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        assert_eq!(app.row_tasks[app.scroll], 1);
+        assert!(screen(&terminal).contains("› [x] long"));
+        app.key(
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
+            &fixture.storage,
+        )
+        .unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        assert_eq!(app.list.selected(), Some(0));
+        assert_eq!(app.tasks, original);
+        assert_eq!(app.row_tasks[app.scroll], 0);
+        assert_eq!(fixture.storage.load().unwrap(), original);
+        assert!(!app.can_undo());
+    }
+
+    #[test]
     fn only_leading_tags_are_bold_across_wrapping_and_completion_styles() {
         for (text, tag) in [
             ("foo: first bar:", "foo:"),

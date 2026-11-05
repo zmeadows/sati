@@ -29,7 +29,7 @@ use ratatui::crossterm::event::EnableBracketedPaste;
 use app::App;
 use storage::{Result, Storage};
 
-const USAGE: &str = "Usage: sati [--no-wrap] [--no-logo] [--no-keybinds] [--round-corners] [--add-to-bottom] [--accent '#RRGGBB'] [--version]";
+const USAGE: &str = "Usage: sati [--no-wrap] [--no-logo] [--no-keybinds] [--round-corners] [--add-to-bottom] [--completed-at-bottom] [--accent '#RRGGBB'] [--version]";
 
 // Report repeats for plain characters and Enter too; alternate keys preserve shifted text.
 const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
@@ -45,6 +45,7 @@ struct Options {
     keybinds: bool,
     rounded: bool,
     add_to_bottom: bool,
+    completed_at_bottom: bool,
     accent: ratatui::style::Color,
     print_version: bool,
 }
@@ -62,7 +63,7 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let Some(options) = parse_arguments(std::env::args_os().skip(1))? else {
         println!(
-            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--no-keybinds      Hide the keybind list.\n--round-corners    Use rounded checklist corners (default: sharp).\n--add-to-bottom    Add new tasks at the bottom (default: below selection).\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e).\n--version          Print the version.\n--help, -h         Show this help."
+            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--no-keybinds      Hide the keybind list.\n--round-corners    Use rounded checklist corners (default: sharp).\n--add-to-bottom    Add new tasks at the bottom (default: below selection).\n--completed-at-bottom Keep completed tasks below unfinished tasks.\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e).\n--version          Print the version.\n--help, -h         Show this help."
         );
         return Ok(());
     };
@@ -72,12 +73,13 @@ fn run() -> Result<()> {
     }
     let storage = Storage::discover()?;
     let _instance_lock = storage.lock()?;
-    let mut app = App::new(storage.load()?);
+    let mut app = App::new(load_tasks(&storage, options.completed_at_bottom)?);
     app.wrap = options.wrap;
     app.logo = options.logo;
     app.keybinds = options.keybinds;
     app.rounded = options.rounded;
     app.add_to_bottom = options.add_to_bottom;
+    app.completed_at_bottom = options.completed_at_bottom;
     app.accent = options.accent;
     // Atomics let the panic hook clean up without locking state held by setup.
     let modes = Arc::new(TerminalModes::default());
@@ -233,6 +235,19 @@ fn keyboard_support(result: io::Result<bool>) -> io::Result<bool> {
     }
 }
 
+fn load_tasks(storage: &Storage, completed_at_bottom: bool) -> Result<Vec<app::Task>> {
+    let mut tasks = storage.load()?;
+    if completed_at_bottom
+        && tasks
+            .windows(2)
+            .any(|pair| pair[0].completed && !pair[1].completed)
+    {
+        tasks.sort_by_key(|task| task.completed);
+        storage.save(&tasks)?;
+    }
+    Ok(tasks)
+}
+
 fn parse_arguments(
     arguments: impl IntoIterator<Item = std::ffi::OsString>,
 ) -> Result<Option<Options>> {
@@ -242,6 +257,7 @@ fn parse_arguments(
         keybinds: true,
         rounded: false,
         add_to_bottom: false,
+        completed_at_bottom: false,
         accent: ui::DEFAULT_ACCENT,
         print_version: false,
     };
@@ -258,6 +274,8 @@ fn parse_arguments(
             options.rounded = true;
         } else if argument == "--add-to-bottom" {
             options.add_to_bottom = true;
+        } else if argument == "--completed-at-bottom" {
+            options.completed_at_bottom = true;
         } else if argument == "--version" {
             options.print_version = true;
         } else if argument == "--accent" {
@@ -299,6 +317,47 @@ fn parse_accent(value: &std::ffi::OsStr) -> Result<ratatui::style::Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_at_bottom_groups_existing_tasks_stably_and_is_opt_in() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let original: Vec<_> = [
+            ("done 1", true),
+            ("active 1", false),
+            ("done 2", true),
+            ("active 2", false),
+        ]
+        .map(|(text, completed)| app::Task {
+            text: text.into(),
+            completed,
+        })
+        .into();
+        fixture.storage.save(&original).unwrap();
+        let contents = std::fs::read(fixture.task_path()).unwrap();
+        assert_eq!(load_tasks(&fixture.storage, false).unwrap(), original);
+        assert_eq!(std::fs::read(fixture.task_path()).unwrap(), contents);
+        let grouped = load_tasks(&fixture.storage, true).unwrap();
+        assert_eq!(
+            grouped,
+            [
+                original[1].clone(),
+                original[3].clone(),
+                original[0].clone(),
+                original[2].clone()
+            ]
+        );
+        assert_eq!(fixture.storage.load().unwrap(), grouped);
+        assert_eq!(load_tasks(&fixture.storage, true).unwrap(), grouped);
+        assert!(!parse_arguments([]).unwrap().unwrap().completed_at_bottom);
+        let options = parse_arguments(
+            ["--completed-at-bottom", "--add-to-bottom", "--no-wrap"].map(Into::into),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(options.completed_at_bottom);
+        assert!(options.add_to_bottom);
+        assert!(!options.wrap);
+    }
 
     #[test]
     fn terminal_commands_encode_repeat_and_paste_reporting_and_restoration() {
