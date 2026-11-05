@@ -115,7 +115,8 @@ pub struct App {
     pub completed_at_bottom: bool,
     pub accent: ratatui::style::Color,
     pub scroll: usize,
-    pub row_tasks: Vec<usize>,
+    // A temporary inline add row has no task until it is confirmed.
+    pub row_tasks: Vec<Option<usize>>,
     pub viewport_height: u16,
     pub reveal_selection: bool,
     history: VecDeque<UndoState>,
@@ -161,6 +162,27 @@ impl App {
         self.reveal_selection = true;
     }
 
+    pub fn insertion_index(&self, placement: AddPlacement) -> usize {
+        let index = match placement {
+            AddPlacement::End => self.tasks.len(),
+            AddPlacement::Below => self
+                .list
+                .selected()
+                .map_or(self.tasks.len(), |index| index + 1),
+            AddPlacement::Above => self.list.selected().unwrap_or(self.tasks.len()),
+        };
+        if self.completed_at_bottom {
+            index.min(
+                self.tasks
+                    .iter()
+                    .position(|task| task.completed)
+                    .unwrap_or(self.tasks.len()),
+            )
+        } else {
+            index
+        }
+    }
+
     fn page(&mut self, forward: bool) {
         if self.tasks.is_empty() {
             return;
@@ -170,10 +192,10 @@ impl App {
         let start = self
             .row_tasks
             .iter()
-            .position(|&task| task == current)
+            .position(|&task| task == Some(current))
             .unwrap_or(0);
         // Anchor within a tall task when its beginning has scrolled offscreen.
-        let anchor = if self.row_tasks.get(self.scroll) == Some(&current) {
+        let anchor = if self.row_tasks.get(self.scroll) == Some(&Some(current)) {
             self.scroll
         } else {
             start
@@ -188,6 +210,7 @@ impl App {
             .row_tasks
             .get(target.min(self.row_tasks.len().saturating_sub(1)))
             .copied()
+            .flatten()
             .unwrap_or(current)
             .min(last);
         // A page landing in the same wrapped task must still make task-level progress.
@@ -538,7 +561,10 @@ impl App {
             Mode::Adding(input, _)
             | Mode::Editing { input, .. }
             | Mode::Searching { input, .. } => match key.code {
-                KeyCode::Esc => self.mode = Mode::Normal,
+                KeyCode::Esc => {
+                    self.mode = Mode::Normal;
+                    self.reveal_selection = true;
+                }
                 KeyCode::Backspace => input.delete_before(),
                 KeyCode::Delete => input.delete_after(),
                 KeyCode::Left => input.move_left(),
@@ -558,20 +584,7 @@ impl App {
                                 self.replace(tasks, Some(index), storage)?;
                             }
                         } else {
-                            let mut index = match placement {
-                                AddPlacement::End => tasks.len(),
-                                AddPlacement::Below => {
-                                    self.list.selected().map_or(tasks.len(), |index| index + 1)
-                                }
-                                AddPlacement::Above => self.list.selected().unwrap_or(tasks.len()),
-                            };
-                            if self.completed_at_bottom {
-                                let boundary = tasks
-                                    .iter()
-                                    .position(|task| task.completed)
-                                    .unwrap_or(tasks.len());
-                                index = index.min(boundary);
-                            }
+                            let index = self.insertion_index(placement);
                             tasks.insert(
                                 index,
                                 Task {
@@ -583,6 +596,7 @@ impl App {
                         }
                     }
                     self.mode = Mode::Normal;
+                    self.reveal_selection = true;
                 }
                 _ => {}
             },
@@ -697,9 +711,11 @@ impl App {
         }
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(&index) = self
+                if let Some(index) = self
                     .row_tasks
                     .get(self.scroll + usize::from(event.row - rows.y))
+                    .copied()
+                    .flatten()
                 {
                     self.toggle(index, storage)?;
                 }
@@ -715,13 +731,13 @@ impl App {
                 let end = (self.scroll + height).min(self.row_tasks.len());
                 let visible = &self.row_tasks[self.scroll..end];
                 if let Some(selected) = self.list.selected()
-                    && !visible.contains(&selected)
+                    && !visible.contains(&Some(selected))
                 {
                     self.list
                         .select(if event.kind == MouseEventKind::ScrollDown {
-                            visible.last().copied()
+                            visible.iter().rev().find_map(|&task| task)
                         } else {
-                            visible.first().copied()
+                            visible.iter().find_map(|&task| task)
                         });
                 }
                 self.reveal_selection = false;
@@ -920,7 +936,7 @@ mod tests {
         let tasks = app.tasks.clone();
         app.list.select(Some(2));
         app.scroll = 999;
-        app.row_tasks = vec![2];
+        app.row_tasks = vec![Some(2)];
         app.viewport_height = 1;
         app.mode = Mode::Searching {
             input: "not cached".into(),
@@ -1749,7 +1765,7 @@ mod tests {
         let fixture = Fixture::new();
         for count in [0, 1, 3] {
             let mut app = app_with_tasks(count);
-            app.row_tasks = (0..count).collect();
+            app.row_tasks = (0..count).map(Some).collect();
             app.viewport_height = 2;
             let original = app.tasks.clone();
             for code in [
@@ -2334,7 +2350,7 @@ mod tests {
                 .unwrap();
             if let Some(selected) = selected {
                 let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
-                assert!(app.row_tasks[app.scroll..end].contains(&selected));
+                assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
             }
         }
         assert!(app.history.is_empty());
@@ -2708,7 +2724,7 @@ mod tests {
                             crate::ui::draw(frame, &mut app);
                         })
                         .unwrap();
-                    assert_eq!(app.row_tasks[app.scroll], expected_index);
+                    assert_eq!(app.row_tasks[app.scroll], Some(expected_index));
                     app.undo(&fixture.storage).unwrap();
                     assert_eq!(app.tasks, original);
                     assert_eq!(app.list.selected(), selected);
@@ -2877,7 +2893,7 @@ mod tests {
     fn mouse_toggle_undo_restores_the_selection_before_the_click() {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(3);
-        app.row_tasks = vec![0, 1, 2];
+        app.row_tasks = vec![Some(0), Some(1), Some(2)];
         let original = app.tasks.clone();
         let click = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -2902,7 +2918,7 @@ mod tests {
         for has_previous in [false, true] {
             let fixture = Fixture::new();
             let mut app = app_with_tasks(3);
-            app.row_tasks = vec![0, 1, 2];
+            app.row_tasks = vec![Some(0), Some(1), Some(2)];
             let original = app.tasks.clone();
             if has_previous {
                 press(&mut app, &fixture, KeyCode::Char(' '));
@@ -2947,7 +2963,7 @@ mod tests {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(10);
         app.scroll = 5;
-        app.row_tasks = (0..10).collect();
+        app.row_tasks = (0..10).map(Some).collect();
         let rows = Rect::new(1, 1, 30, 3);
         let click = |column, row| MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
