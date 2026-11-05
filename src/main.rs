@@ -33,7 +33,7 @@ use ratatui::crossterm::event::EnableBracketedPaste;
 use app::App;
 use storage::{Result, Storage};
 
-const USAGE: &str = "Usage: sati [--no-wrap] [--no-logo] [--no-keybinds] [--round-corners] [--ascii-markers] [--completed-at-bottom] [--accent '#RRGGBB'] [--version]\n       sati export [--output PATH | -o PATH] [--force]";
+const USAGE: &str = "Usage: sati [--no-wrap] [--no-logo] [--no-keybinds] [--round-corners] [--ascii-markers] [--completed-at-bottom] [--accent COLOR] [--version]\n       sati export [--output PATH | -o PATH] [--force]";
 
 // Report repeats for plain characters and Enter too; alternate keys preserve shifted text.
 const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
@@ -75,7 +75,7 @@ fn run() -> Result<()> {
     }
     let Some(options) = parse_arguments(arguments)? else {
         println!(
-            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--no-keybinds      Hide the keybind list.\n--round-corners    Use rounded checklist corners (default: sharp).\n--ascii-markers    Use >, [x], and [>] instead of Unicode task markers.\n--completed-at-bottom Keep completed tasks below unfinished tasks.\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e).\n--version          Print the version.\n--help, -h         Show this help.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file."
+            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--no-keybinds      Hide the keybind list.\n--round-corners    Use rounded checklist corners (default: sharp).\n--ascii-markers    Use >, [x], and [>] instead of Unicode task markers.\n--completed-at-bottom Keep completed tasks below unfinished tasks.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: yellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file."
         );
         return Ok(());
     };
@@ -332,7 +332,7 @@ fn parse_arguments(
         } else if argument == "--accent" {
             let value = arguments
                 .next()
-                .ok_or("--accent requires a color in #RRGGBB format")?;
+                .ok_or("--accent requires a color (ANSI name, #RRGGBB, or index 0-255)")?;
             options.accent = parse_accent(&value)?;
         } else if argument == "--help" || argument == "-h" {
             help = true;
@@ -346,23 +346,10 @@ fn parse_arguments(
 }
 
 fn parse_accent(value: &std::ffi::OsStr) -> Result<ratatui::style::Color> {
-    let text = value.to_str().unwrap_or("");
-    if text.len() != 7
-        || !text.starts_with('#')
-        || !text[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err(format!(
-            "invalid accent color: {}. Expected #RRGGBB",
-            value.to_string_lossy()
-        )
-        .into());
-    }
-    let rgb = u32::from_str_radix(&text[1..], 16)?;
-    Ok(ratatui::style::Color::Rgb(
-        (rgb >> 16) as u8,
-        (rgb >> 8) as u8,
-        rgb as u8,
-    ))
+    value.to_str()
+        .and_then(|text| text.parse::<ratatui::style::Color>().ok())
+        .filter(|color| *color != ratatui::style::Color::Reset)
+        .ok_or_else(|| format!("invalid accent color: {}. Expected an ANSI color name, #RRGGBB, or index 0-255; reset is not allowed", value.to_string_lossy()).into())
 }
 
 #[cfg(test)]
@@ -756,11 +743,26 @@ mod tests {
     }
 
     #[test]
+    fn accent_accepts_native_named_and_indexed_colors() {
+        use ratatui::style::Color;
+        for (text, expected) in [
+            ("yellow", Color::Yellow),
+            ("lightblue", Color::LightBlue),
+            ("3", Color::Indexed(3)),
+            ("255", Color::Indexed(255)),
+        ] {
+            assert_eq!(parse_accent(std::ffi::OsStr::new(text)).unwrap(), expected);
+        }
+    }
+
+    #[test]
     fn accent_rejects_missing_or_invalid_values() {
         assert!(parse_arguments(["--accent".into()]).is_err());
         for color in [
             "",
             "orange",
+            "reset",
+            "256",
             "e78a4e",
             "#abc",
             "#12345678",

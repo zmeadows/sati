@@ -47,7 +47,7 @@
 - Task wrapping affects visual-row scrolling, Page Up/Down, mouse hit mapping, and selection visibility. Account for narrow/short windows and tasks taller than the viewport.
 - Keep footer hints contextual and compact. **Do not advertise Page Up/Down in the bottom shortcut legend**; those are intentionally unlisted convenience shortcuts.
 - Preserve raw-mode, alternate-screen, keyboard enhancement, paste, and mouse setup/cleanup. The terminal should be restored on normal exit, errors, and panic paths; unsupported optional features should degrade gracefully.
-- Respect the existing CLI flags and subdued Gruvbox Material look. The terminal provides the background; `--accent` overrides the selection accent.
+- Respect the existing CLI flags, terminal-native colors, and subdued styling. The terminal provides the background; `--accent` overrides the selection accent.
 
 ## Development conventions
 

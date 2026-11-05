@@ -13,11 +13,21 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{App, Mode, Task};
 use crate::input::TextInput;
 
-// Gruvbox Material dark/medium; the terminal supplies the background.
-const TEXT: Color = Color::Rgb(212, 190, 152);
-const MUTED: Color = Color::Rgb(146, 131, 116);
-pub const DEFAULT_ACCENT: Color = Color::Rgb(231, 138, 78);
-const BORDER: Color = Color::Rgb(80, 73, 69);
+pub const DEFAULT_ACCENT: Color = Color::Yellow;
+
+fn normal_style() -> Style {
+    Style::default()
+        .fg(Color::Reset)
+        .remove_modifier(Modifier::DIM)
+}
+
+fn muted_style() -> Style {
+    normal_style().add_modifier(Modifier::DIM)
+}
+
+fn accent_style(accent: Color) -> Style {
+    normal_style().fg(accent)
+}
 
 pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let area = frame.area();
@@ -48,21 +58,23 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         } else {
             BorderType::Plain
         })
-        .border_style(Style::default().fg(BORDER));
+        .border_style(muted_style());
     // Hide the title when it cannot fit intact between the corners.
     if app.logo && sections[0].width >= 8 {
-        block = block.title(Line::styled(" sati ", Style::default().fg(MUTED)).right_aligned());
+        block = block.title(Line::styled(" sati ", muted_style()).right_aligned());
     }
     let completed = app.tasks.iter().filter(|task| task.completed).count();
     let counter = format!("[{completed}/{}]", app.tasks.len());
     if sections[0].height >= 2 && counter.width() + 2 <= usize::from(sections[0].width) {
-        block = block.title_bottom(
-            Line::styled(counter.as_str(), Style::default().fg(MUTED)).right_aligned(),
-        );
+        block = block.title_bottom(Line::styled(counter.as_str(), muted_style()).right_aligned());
     }
     if let Some(notice) = &app.notification
-        && let Some(foreground) =
-            notice.foreground(std::time::Instant::now(), app.accent, TEXT, MUTED)
+        && let Some(notification_style) = notice.style(
+            std::time::Instant::now(),
+            accent_style(app.accent),
+            normal_style(),
+            muted_style(),
+        )
     {
         let available = usize::from(sections[0].width).saturating_sub(counter.width() + 3);
         let short = if notice.message() == "Copied task" {
@@ -78,9 +90,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
             short
         };
         if sections[0].height >= 2 && message.width() <= available {
-            block = block.title_bottom(
-                Line::styled(message, Style::default().fg(foreground)).left_aligned(),
-            );
+            block = block.title_bottom(Line::styled(message, notification_style).left_aligned());
         }
     }
     let rows = block.inner(sections[0]);
@@ -107,10 +117,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         }
         _ => {}
     }
-    frame.render_widget(
-        Paragraph::new(shortcuts).style(Style::default().fg(MUTED)),
-        sections[2],
-    );
+    frame.render_widget(Paragraph::new(shortcuts).style(muted_style()), sections[2]);
     if app.mode == Mode::ConfirmClear {
         draw_confirmation(frame, area);
     }
@@ -134,7 +141,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.tasks.is_empty() && inline.is_none() {
         app.scroll = 0;
         frame.render_widget(
-            Paragraph::new(" Press a to add a task").style(Style::default().fg(MUTED)),
+            Paragraph::new(" Press a to add a task").style(muted_style()),
             area,
         );
         return;
@@ -178,11 +185,9 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
             vec![(0..text.len(), text.as_str())]
         };
         let text_style = if task.completed {
-            Style::default()
-                .fg(MUTED)
-                .add_modifier(Modifier::CROSSED_OUT)
+            muted_style().add_modifier(Modifier::CROSSED_OUT)
         } else {
-            Style::default().fg(TEXT)
+            normal_style()
         };
         for (row, (source, text)) in wrapped.into_iter().enumerate() {
             app.row_tasks.push(Some(index));
@@ -197,18 +202,18 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 task_checkbox(task, app.unicode_markers)
             };
-            let color = if searching {
+            let marker_style = if searching {
                 if matches.is_empty() {
-                    MUTED
+                    muted_style()
                 } else {
-                    app.accent
+                    accent_style(app.accent)
                 }
             } else if selected == Some(index) {
-                app.accent
+                accent_style(app.accent)
             } else if task.completed {
-                MUTED
+                muted_style()
             } else {
-                TEXT
+                normal_style()
             };
             let mut line = Line::from(vec![
                 Span::styled(
@@ -217,9 +222,9 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
                     } else {
                         " "
                     },
-                    Style::default().fg(app.accent),
+                    accent_style(app.accent),
                 ),
-                Span::styled(prefix, Style::default().fg(color)),
+                Span::styled(prefix, marker_style),
             ]);
             line.spans.extend(task_spans(
                 text,
@@ -227,7 +232,6 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
                 tag_end,
                 &matches,
                 text_style,
-                app.accent,
             ));
             lines.push(line);
         }
@@ -362,37 +366,18 @@ fn wrap_text(text: &str, width: usize) -> Vec<(Range<usize>, &str)> {
     lines
 }
 
-fn highlight_foreground(accent: Color) -> Color {
-    let Color::Rgb(r, g, b) = accent else {
-        return Color::Rgb(0, 0, 0);
-    };
-    let linear = |value: u8| {
-        let srgb = f64::from(value) / 255.0;
-        if srgb <= 0.04045 {
-            srgb / 12.92
-        } else {
-            ((srgb + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    let luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
-    let black = (luminance + 0.05) / 0.05;
-    let white = 1.05 / (luminance + 0.05);
-    if black >= white {
-        Color::Rgb(0, 0, 0)
-    } else {
-        Color::Rgb(255, 255, 255)
-    }
-}
-
 fn task_spans(
     text: &str,
     offset: usize,
     tag_end: usize,
     matches: &[Range<usize>],
     base: Style,
-    accent: Color,
 ) -> Vec<Span<'static>> {
-    let highlight = base.bg(accent).fg(highlight_foreground(accent));
+    let highlight = base
+        .fg(Color::Reset)
+        .bg(Color::Reset)
+        .remove_modifier(Modifier::DIM)
+        .add_modifier(Modifier::REVERSED);
     let mut spans = Vec::new();
     let mut start = 0;
     let mut style = base;
@@ -427,7 +412,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     if !app.keybinds || width == 0 || app.mode == Mode::ConfirmClear {
         return Vec::new();
     }
-    let keys = Style::default().fg(TEXT).add_modifier(Modifier::BOLD);
+    let keys = normal_style().add_modifier(Modifier::BOLD);
     let extra_hints = |lines: &mut [Line<'static>]| {
         if app.mode == Mode::Normal
             && app.can_redo()
@@ -539,7 +524,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
 }
 
 fn wrap_shortcuts(rows: &[Vec<(&str, &str)>], width: u16) -> Vec<Line<'static>> {
-    let keys = Style::default().fg(TEXT).add_modifier(Modifier::BOLD);
+    let keys = normal_style().add_modifier(Modifier::BOLD);
     let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
     if column_count == 0 {
         return Vec::new();
@@ -616,14 +601,14 @@ fn draw_input_line(
         return;
     }
     let mut line = Line::from(vec![
-        Span::styled(label, Style::default().fg(MUTED)),
+        Span::styled(label, muted_style()),
         Span::raw(" "),
-        Span::styled("› ", Style::default().fg(accent)),
+        Span::styled("› ", accent_style(accent)),
     ]);
     // Use a compact prompt when the full label would leave no cursor cell.
     if usize::from(area.width) <= line.width() {
         line = if area.width >= 3 {
-            Line::from(Span::styled("› ", Style::default().fg(accent)))
+            Line::from(Span::styled("› ", accent_style(accent)))
         } else {
             Line::default()
         };
@@ -655,7 +640,7 @@ fn draw_input_line(
         end += grapheme.len();
     }
     let visible = &text[start..end];
-    line.push_span(Span::styled(visible, Style::default().fg(TEXT)));
+    line.push_span(Span::styled(visible, normal_style()));
     frame.render_widget(Paragraph::new(line), area);
     let cursor = (prefix_width + width).min(usize::from(area.width - 1));
     if show_cursor {
@@ -673,7 +658,7 @@ fn draw_confirmation(frame: &mut Frame, area: Rect) {
         height,
     );
     frame.render_widget(Clear, dialog);
-    let block = Block::bordered().border_style(Style::default().fg(BORDER));
+    let block = Block::bordered().border_style(muted_style());
     let inner = block.inner(dialog);
     frame.render_widget(block, dialog);
     let lines = if inner.height >= 5 {
@@ -694,7 +679,7 @@ fn draw_confirmation(frame: &mut Frame, area: Rect) {
     frame.render_widget(
         Paragraph::new(lines)
             .alignment(Alignment::Center)
-            .style(Style::default().fg(TEXT)),
+            .style(normal_style()),
         inner,
     );
 }
@@ -702,6 +687,76 @@ fn draw_confirmation(frame: &mut Frame, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn semantic_styles_and_reverse_highlights_preserve_modifier_hierarchy() {
+        assert_eq!(DEFAULT_ACCENT, Color::Yellow);
+        assert!(muted_style().add_modifier.contains(Modifier::DIM));
+        assert!(
+            !muted_style()
+                .patch(normal_style())
+                .add_modifier
+                .contains(Modifier::DIM)
+        );
+        for accent in [Color::Yellow, Color::Indexed(3), Color::Rgb(20, 40, 60)] {
+            assert!(
+                !muted_style()
+                    .patch(accent_style(accent))
+                    .add_modifier
+                    .contains(Modifier::DIM)
+            );
+            let mut app = App::new(vec![Task {
+                text: "Work: text".into(),
+                completed: true,
+                carried: false,
+            }]);
+            app.accent = accent;
+            app.mode = Mode::SearchResults {
+                input: "Work".into(),
+                original: Some(0),
+            };
+            let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+            terminal
+                .draw(|frame| {
+                    draw(frame, &mut app);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let marker = &buffer[(4, 1)];
+            assert_eq!(marker.fg, accent);
+            assert!(!marker.modifier.contains(Modifier::DIM));
+            for x in 7..11 {
+                let cell = &buffer[(x, 1)];
+                assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
+                assert!(
+                    cell.modifier
+                        .contains(Modifier::REVERSED | Modifier::BOLD | Modifier::CROSSED_OUT)
+                );
+                assert!(!cell.modifier.contains(Modifier::DIM));
+            }
+            let ordinary = &buffer[(13, 1)];
+            assert!(
+                ordinary
+                    .modifier
+                    .contains(Modifier::DIM | Modifier::CROSSED_OUT)
+            );
+            assert!(!ordinary.modifier.contains(Modifier::REVERSED));
+        }
+        let spans = task_spans(
+            "abc",
+            0,
+            0,
+            std::slice::from_ref(&(1..2)),
+            muted_style().add_modifier(Modifier::ITALIC),
+        );
+        assert!(
+            spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::ITALIC | Modifier::REVERSED)
+        );
+        assert!(!spans[1].style.add_modifier.contains(Modifier::DIM));
+    }
 
     fn wrapped_strings(text: &str, width: usize) -> Vec<&str> {
         wrap_text(text, width)
@@ -846,7 +901,7 @@ mod tests {
                                         for (offset, character) in expected.chars().enumerate() {
                                             let cell = &buffer[(start + offset as u16, y)];
                                             assert_eq!(cell.symbol(), character.to_string());
-                                            assert_eq!(cell.fg, MUTED);
+                                            assert_eq!(cell.fg, Color::Reset);
                                         }
                                     } else {
                                         for x in 1..width - 1 {
@@ -1017,7 +1072,7 @@ mod tests {
                             .buffer()
                             .content
                             .iter()
-                            .any(|cell| cell.bg == app.accent)
+                            .any(|cell| cell.modifier.contains(Modifier::REVERSED))
                     );
                     key(&mut app, KeyCode::Char('n'));
                     assert_eq!(app.list.selected(), Some(if single { 19 } else { 0 }));
@@ -1349,9 +1404,9 @@ mod tests {
                         );
                         assert_eq!(rendered.matches('›').count(), 1);
                         let buffer = terminal.backend().buffer();
-                        assert_eq!(buffer[(rows.x + 2, y)].fg, MUTED);
+                        assert_eq!(buffer[(rows.x + 2, y)].fg, Color::Reset);
                         assert_eq!(buffer[(rows.x + 6, y)].fg, app.accent);
-                        assert_eq!(buffer[(rows.x + 8, y)].fg, TEXT);
+                        assert_eq!(buffer[(rows.x + 8, y)].fg, Color::Reset);
                         assert!(terminal.backend().cursor_visible());
                         assert_eq!(
                             terminal.backend().cursor_position(),
@@ -1697,16 +1752,18 @@ mod tests {
             assert_eq!(buffer[(4, y)].fg, app.accent);
         }
         assert_eq!(buffer[(4, 3)].symbol(), "□");
-        assert_eq!(buffer[(4, 3)].fg, MUTED);
+        assert_eq!(buffer[(4, 3)].fg, Color::Reset);
         assert_eq!(buffer[(7, 1)].symbol(), "w");
         assert!(buffer[(7, 1)].modifier.contains(Modifier::BOLD));
         for (y, expected) in [(1, "İfooİFOO"), (2, "İfoo")] {
             let mut highlighted = String::new();
             for x in 7..39 {
                 let cell = &buffer[(x, y)];
-                if cell.bg == app.accent {
+                if cell.modifier.contains(Modifier::REVERSED) {
                     highlighted.push_str(cell.symbol());
-                    assert_eq!(cell.fg, Color::Rgb(255, 255, 255));
+                    assert_eq!(cell.fg, Color::Reset);
+                    assert_eq!(cell.bg, Color::Reset);
+                    assert!(!cell.modifier.contains(Modifier::DIM));
                     assert_eq!(cell.modifier.contains(Modifier::CROSSED_OUT), y == 2);
                 }
             }
@@ -1782,7 +1839,11 @@ mod tests {
         assert_eq!(app.row_tasks, mapping);
         for (y, length) in [(1, 4), (2, 4)] {
             for x in 7..7 + length {
-                assert_eq!(terminal.backend().buffer()[(x, y)].bg, app.accent);
+                assert!(
+                    terminal.backend().buffer()[(x, y)]
+                        .modifier
+                        .contains(Modifier::REVERSED)
+                );
             }
             assert_eq!(
                 terminal.backend().buffer()[(7 + length, y)].bg,
@@ -1842,7 +1903,7 @@ mod tests {
     }
 
     #[test]
-    fn search_feedback_legends_and_contrast_remain_compact() {
+    fn search_feedback_and_legends_remain_compact() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = App::new(vec![Task {
             carried: false,
@@ -1891,38 +1952,6 @@ mod tests {
             app.keybinds = false;
             assert!(shortcut_lines(&app, 80).is_empty());
             app.keybinds = true;
-        }
-        assert_eq!(
-            highlight_foreground(Color::Rgb(0, 0, 0)),
-            Color::Rgb(255, 255, 255)
-        );
-        assert_eq!(
-            highlight_foreground(Color::Rgb(255, 255, 255)),
-            Color::Rgb(0, 0, 0)
-        );
-        assert_eq!(highlight_foreground(DEFAULT_ACCENT), Color::Rgb(0, 0, 0));
-        // Independent contrast check across a small RGB cube, including midtones.
-        for r in [0, 64, 128, 192, 255] {
-            for g in [0, 64, 128, 192, 255] {
-                for b in [0, 64, 128, 192, 255] {
-                    let linear = |v| {
-                        let s = f64::from(v) / 255.0;
-                        if s <= 0.04045 {
-                            s / 12.92
-                        } else {
-                            ((s + 0.055) / 1.055).powf(2.4)
-                        }
-                    };
-                    let l = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
-                    let ratio = if highlight_foreground(Color::Rgb(r, g, b)) == Color::Rgb(0, 0, 0)
-                    {
-                        (l + 0.05) / 0.05
-                    } else {
-                        1.05 / (l + 0.05)
-                    };
-                    assert!(ratio >= 4.5);
-                }
-            }
         }
         assert!(!fixture.task_path().exists());
     }
@@ -2473,9 +2502,9 @@ mod tests {
                             if cell.modifier.contains(Modifier::BOLD) {
                                 bold.push_str(cell.symbol());
                             }
-                            assert_eq!(cell.fg, if completed { MUTED } else { TEXT });
+                            assert_eq!(cell.fg, Color::Reset);
                             assert_eq!(cell.modifier.contains(Modifier::CROSSED_OUT), completed);
-                            assert!(!cell.modifier.contains(Modifier::DIM));
+                            assert_eq!(cell.modifier.contains(Modifier::DIM), completed);
                         }
                     }
                     assert_eq!(bold, tag, "{text:?}, width={width}, wrap={wrap}");
@@ -2510,9 +2539,9 @@ mod tests {
         assert_eq!(marker.fg, app.accent);
         assert_eq!(marker.bg, Color::Reset);
         assert_eq!(checkbox.fg, app.accent);
-        assert_eq!(text.fg, MUTED);
+        assert_eq!(text.fg, Color::Reset);
         assert!(text.modifier.contains(Modifier::CROSSED_OUT));
-        assert!(!text.modifier.contains(Modifier::DIM));
+        assert!(text.modifier.contains(Modifier::DIM));
         assert_eq!(text.bg, Color::Reset);
     }
 
@@ -2667,9 +2696,9 @@ mod tests {
                 assert_eq!(terminal.get_cursor_position().unwrap(), (cursor, 0).into());
                 let buffer = terminal.backend().buffer();
                 assert_eq!(buffer[(cursor, 0)].symbol(), " ");
-                assert_eq!(buffer[(0, 0)].fg, MUTED);
+                assert_eq!(buffer[(0, 0)].fg, Color::Reset);
                 assert_eq!(buffer[((label.width() + 1) as u16, 0)].fg, accent);
-                assert_eq!(buffer[(prefix_width as u16, 0)].fg, TEXT);
+                assert_eq!(buffer[(prefix_width as u16, 0)].fg, Color::Reset);
             }
         }
     }

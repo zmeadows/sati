@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use ratatui::style::Color;
+use ratatui::style::Style;
 
 // Phases run sequentially; their durations determine the total lifetime.
 // Any nonnegative Duration is valid; zero skips a phase (all zero expires immediately).
@@ -40,13 +40,7 @@ impl Notification {
         self.timing(now).map(|(_, wait)| wait)
     }
 
-    pub fn foreground(
-        &self,
-        now: Instant,
-        accent: Color,
-        normal: Color,
-        dim: Color,
-    ) -> Option<Color> {
+    pub fn style(&self, now: Instant, accent: Style, normal: Style, dim: Style) -> Option<Style> {
         self.timing(now)
             .map(|(phase, _)| [accent, normal, dim][phase])
     }
@@ -66,6 +60,7 @@ fn timing(mut elapsed: Duration, phases: [Duration; 3]) -> Option<(usize, Durati
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::{Color, Modifier};
 
     #[test]
     fn waits_only_for_boundaries_and_skips_elapsed_phases() {
@@ -124,22 +119,28 @@ mod tests {
                 (1779, 2),
             ] {
                 assert_eq!(
-                    first.foreground(
+                    first.style(
                         start + Duration::from_millis(elapsed),
-                        colors[0],
-                        colors[1],
-                        colors[2]
+                        Style::default().fg(colors[0]),
+                        Style::default().fg(colors[1]),
+                        Style::default().fg(colors[2]).add_modifier(Modifier::DIM)
                     ),
-                    Some(colors[phase])
+                    Some(if phase == 2 {
+                        Style::default()
+                            .fg(colors[phase])
+                            .add_modifier(Modifier::DIM)
+                    } else {
+                        Style::default().fg(colors[phase])
+                    })
                 );
             }
             assert!(
                 first
-                    .foreground(
+                    .style(
                         start + Duration::from_millis(1780),
-                        colors[0],
-                        colors[1],
-                        colors[2]
+                        Style::default().fg(colors[0]),
+                        Style::default().fg(colors[1]),
+                        Style::default().fg(colors[2]).add_modifier(Modifier::DIM)
                     )
                     .is_none()
             );
@@ -149,8 +150,13 @@ mod tests {
             started: start + Duration::from_secs(2),
         };
         assert_eq!(
-            replacement.foreground(replacement.started, Color::Blue, Color::Reset, Color::Black),
-            Some(Color::Blue)
+            replacement.style(
+                replacement.started,
+                Style::default().fg(Color::Blue),
+                Style::default(),
+                Style::default().add_modifier(Modifier::DIM)
+            ),
+            Some(Style::default().fg(Color::Blue))
         );
         assert_eq!(
             replacement.next_redraw(replacement.started),
