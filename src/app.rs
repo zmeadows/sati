@@ -22,7 +22,18 @@ pub struct Task {
 pub enum Mode {
     Normal,
     Adding(TextInput),
-    Editing { index: usize, input: TextInput },
+    Editing {
+        index: usize,
+        input: TextInput,
+    },
+    Searching {
+        input: TextInput,
+        original: Option<usize>,
+    },
+    SearchResults {
+        input: TextInput,
+        original: Option<usize>,
+    },
     ConfirmClear,
 }
 
@@ -159,6 +170,56 @@ impl App {
         !self.history.is_empty()
     }
 
+    pub fn search_query(&self) -> Option<&str> {
+        match &self.mode {
+            Mode::Searching { input, .. } | Mode::SearchResults { input, .. } => Some(input.text()),
+            _ => None,
+        }
+    }
+
+    fn refresh_search(&mut self) {
+        let Mode::Searching { input, original } = &self.mode else {
+            return;
+        };
+        let anchor = original.unwrap_or(0).min(self.tasks.len());
+        let selected = (anchor..self.tasks.len())
+            .chain(0..anchor)
+            .find(|&index| crate::search::matches(&self.tasks[index].text, input.text()));
+        self.list.select(selected);
+        self.reveal_selection = true;
+    }
+
+    fn search_next(&mut self, forward: bool) {
+        let Some(query) = self.search_query() else {
+            return;
+        };
+        let Some(current) = self.list.selected() else {
+            return;
+        };
+        let selected = if forward {
+            (current + 1..self.tasks.len())
+                .chain(0..=current)
+                .find(|&index| crate::search::matches(&self.tasks[index].text, query))
+        } else {
+            (0..current)
+                .rev()
+                .chain((current..self.tasks.len()).rev())
+                .find(|&index| crate::search::matches(&self.tasks[index].text, query))
+        };
+        self.list.select(selected);
+        self.reveal_selection = true;
+    }
+
+    fn finish_search(&mut self, accept: bool) {
+        let mode = std::mem::replace(&mut self.mode, Mode::Normal);
+        if let Mode::Searching { original, .. } | Mode::SearchResults { original, .. } = mode {
+            if !accept {
+                self.list.select(original);
+            }
+            self.reveal_selection = true;
+        }
+    }
+
     fn undo(&mut self, storage: &Storage) -> Result<()> {
         if let Some(previous) = self.history.back() {
             storage.save(&previous.tasks)?;
@@ -238,7 +299,7 @@ impl App {
                             | KeyCode::PageDown
                     )
             }
-            Mode::Adding(_) | Mode::Editing { .. } => {
+            Mode::Adding(_) | Mode::Editing { .. } | Mode::Searching { .. } => {
                 matches!(
                     key.code,
                     KeyCode::Char(_)
@@ -250,6 +311,10 @@ impl App {
                         | KeyCode::End
                 )
             }
+            Mode::SearchResults { .. } => matches!(
+                key.code,
+                KeyCode::Char('n' | 'N') | KeyCode::Up | KeyCode::Down
+            ),
             Mode::ConfirmClear => false,
         };
         if key.kind == KeyEventKind::Release
@@ -263,11 +328,14 @@ impl App {
             && key.modifiers.difference(KeyModifiers::SHIFT)
                 == (KeyModifiers::CONTROL | KeyModifiers::ALT)
         {
-            if let (Mode::Adding(input) | Mode::Editing { input, .. }, KeyCode::Char(character)) =
-                (&mut self.mode, key.code)
+            if let (
+                Mode::Adding(input) | Mode::Editing { input, .. } | Mode::Searching { input, .. },
+                KeyCode::Char(character),
+            ) = (&mut self.mode, key.code)
             {
                 if !character.is_control() {
                     input.insert(character.encode_utf8(&mut [0; 4]));
+                    self.refresh_search();
                     return Ok(false);
                 }
             }
@@ -281,7 +349,10 @@ impl App {
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             if key.modifiers == KeyModifiers::CONTROL {
-                if let Mode::Adding(input) | Mode::Editing { input, .. } = &mut self.mode {
+                if let Mode::Adding(input)
+                | Mode::Editing { input, .. }
+                | Mode::Searching { input, .. } = &mut self.mode
+                {
                     match key.code {
                         KeyCode::Char('a' | 'A') => input.set_cursor(0),
                         KeyCode::Char('e' | 'E') => input.set_cursor(input.text().len()),
@@ -292,60 +363,96 @@ impl App {
                     }
                 }
             }
+            self.refresh_search();
             return Ok(false);
+        }
+        if matches!(
+            self.mode,
+            Mode::Searching { .. } | Mode::SearchResults { .. }
+        ) {
+            if key.code == KeyCode::Esc {
+                self.finish_search(false);
+                return Ok(false);
+            }
+            if matches!(self.mode, Mode::SearchResults { .. }) {
+                match key.code {
+                    KeyCode::Enter => self.finish_search(true),
+                    KeyCode::Char('N') | KeyCode::Up => self.search_next(false),
+                    KeyCode::Char('n') => {
+                        self.search_next(!key.modifiers.contains(KeyModifiers::SHIFT))
+                    }
+                    KeyCode::Down => self.search_next(true),
+                    _ => {}
+                }
+                return Ok(false);
+            }
+            if key.code == KeyCode::Enter {
+                if self.search_query() == Some("") {
+                    self.finish_search(false);
+                } else if self.list.selected().is_some() {
+                    if let Mode::Searching { input, original } =
+                        std::mem::replace(&mut self.mode, Mode::Normal)
+                    {
+                        self.mode = Mode::SearchResults { input, original };
+                    }
+                }
+                return Ok(false);
+            }
         }
         let edited_task = match &self.mode {
             Mode::Editing { index, .. } => Some(*index),
             _ => None,
         };
         match &mut self.mode {
-            Mode::Adding(input) | Mode::Editing { input, .. } => match key.code {
-                KeyCode::Esc => self.mode = Mode::Normal,
-                KeyCode::Backspace => input.delete_before(),
-                KeyCode::Delete => input.delete_after(),
-                KeyCode::Left => input.move_left(),
-                KeyCode::Right => input.move_right(),
-                KeyCode::Home => input.set_cursor(0),
-                KeyCode::End => input.set_cursor(input.text().len()),
-                KeyCode::Char(character) if !character.is_control() => {
-                    input.insert(character.encode_utf8(&mut [0; 4]))
-                }
-                KeyCode::Enter => {
-                    let text = input.text().trim().to_owned();
-                    if !text.is_empty() {
-                        let mut tasks = self.tasks.clone();
-                        if let Some(index) = edited_task {
-                            if tasks[index].text != text {
-                                tasks[index].text = text;
+            Mode::Adding(input) | Mode::Editing { input, .. } | Mode::Searching { input, .. } => {
+                match key.code {
+                    KeyCode::Esc => self.mode = Mode::Normal,
+                    KeyCode::Backspace => input.delete_before(),
+                    KeyCode::Delete => input.delete_after(),
+                    KeyCode::Left => input.move_left(),
+                    KeyCode::Right => input.move_right(),
+                    KeyCode::Home => input.set_cursor(0),
+                    KeyCode::End => input.set_cursor(input.text().len()),
+                    KeyCode::Char(character) if !character.is_control() => {
+                        input.insert(character.encode_utf8(&mut [0; 4]))
+                    }
+                    KeyCode::Enter => {
+                        let text = input.text().trim().to_owned();
+                        if !text.is_empty() {
+                            let mut tasks = self.tasks.clone();
+                            if let Some(index) = edited_task {
+                                if tasks[index].text != text {
+                                    tasks[index].text = text;
+                                    self.replace(tasks, Some(index), storage)?;
+                                }
+                            } else {
+                                let mut index = if self.add_to_bottom {
+                                    tasks.len()
+                                } else {
+                                    self.list.selected().map_or(tasks.len(), |index| index + 1)
+                                };
+                                if self.completed_at_bottom {
+                                    let boundary = tasks
+                                        .iter()
+                                        .position(|task| task.completed)
+                                        .unwrap_or(tasks.len());
+                                    index = index.min(boundary);
+                                }
+                                tasks.insert(
+                                    index,
+                                    Task {
+                                        text,
+                                        completed: false,
+                                    },
+                                );
                                 self.replace(tasks, Some(index), storage)?;
                             }
-                        } else {
-                            let mut index = if self.add_to_bottom {
-                                tasks.len()
-                            } else {
-                                self.list.selected().map_or(tasks.len(), |index| index + 1)
-                            };
-                            if self.completed_at_bottom {
-                                let boundary = tasks
-                                    .iter()
-                                    .position(|task| task.completed)
-                                    .unwrap_or(tasks.len());
-                                index = index.min(boundary);
-                            }
-                            tasks.insert(
-                                index,
-                                Task {
-                                    text,
-                                    completed: false,
-                                },
-                            );
-                            self.replace(tasks, Some(index), storage)?;
                         }
+                        self.mode = Mode::Normal;
                     }
-                    self.mode = Mode::Normal;
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             Mode::ConfirmClear => match key.code {
                 KeyCode::Enter => {
                     self.replace(Vec::new(), None, storage)?;
@@ -355,6 +462,13 @@ impl App {
                 _ => {}
             },
             Mode::Normal => match key.code {
+                KeyCode::Char('/') => {
+                    self.mode = Mode::Searching {
+                        input: TextInput::default(),
+                        original: self.list.selected(),
+                    };
+                    self.list.select(None);
+                }
                 KeyCode::Char('q') => return Ok(true),
                 KeyCode::Char('u') => self.undo(storage)?,
                 KeyCode::Char('w') => {
@@ -415,12 +529,16 @@ impl App {
                 KeyCode::Char('D') if !self.tasks.is_empty() => self.mode = Mode::ConfirmClear,
                 _ => {}
             },
+            Mode::SearchResults { .. } => unreachable!("results keys handled above"),
         }
+        self.refresh_search();
         Ok(false)
     }
 
     pub fn paste(&mut self, text: &str) {
-        if let Mode::Adding(input) | Mode::Editing { input, .. } = &mut self.mode {
+        if let Mode::Adding(input) | Mode::Editing { input, .. } | Mode::Searching { input, .. } =
+            &mut self.mode
+        {
             let normalized: String = text
                 .replace("\r\n", "\n")
                 .chars()
@@ -434,6 +552,7 @@ impl App {
                 .collect();
             input.insert(&normalized);
         }
+        self.refresh_search();
     }
 
     pub fn mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
@@ -652,6 +771,211 @@ mod tests {
             }
         }
         assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn search_uses_original_anchor_and_accepts_or_cancels_without_mutating() {
+        let fixture = Fixture::new();
+        let mut app = App::new(
+            [
+                ("alpha zero", false),
+                ("alpine", false),
+                ("beta", false),
+                ("ALPHA done", true),
+                ("alpha last", true),
+            ]
+            .map(|(text, completed)| Task {
+                text: text.into(),
+                completed,
+            })
+            .into(),
+        );
+        app.completed_at_bottom = true;
+        app.list.select(Some(2));
+        let original = app.tasks.clone();
+        fixture.storage.save(&original).unwrap();
+        let bytes = std::fs::read(fixture.task_path()).unwrap();
+        press(&mut app, &fixture, KeyCode::Char('/'));
+        assert_eq!(app.list.selected(), None);
+        app.paste("a");
+        assert_eq!(app.list.selected(), Some(2));
+        press(&mut app, &fixture, KeyCode::Char('l'));
+        assert_eq!(app.list.selected(), Some(3));
+        press(&mut app, &fixture, KeyCode::Backspace);
+        assert_eq!(app.list.selected(), Some(2));
+        app.paste("lpha");
+        assert_eq!(app.list.selected(), Some(3));
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::SearchResults { .. }));
+        repeat(&mut app, &fixture, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(matches!(app.mode, Mode::SearchResults { .. }));
+        for (code, expected) in [
+            (KeyCode::Char('n'), 4),
+            (KeyCode::Down, 0),
+            (KeyCode::Char('N'), 4),
+            (KeyCode::Up, 3),
+        ] {
+            repeat(&mut app, &fixture, code, KeyModifiers::NONE);
+            assert_eq!(app.list.selected(), Some(expected));
+        }
+        repeat(&mut app, &fixture, KeyCode::Char('n'), KeyModifiers::SHIFT);
+        assert_eq!(app.list.selected(), Some(0));
+        for code in [
+            KeyCode::Char('a'),
+            KeyCode::Char('e'),
+            KeyCode::Char('d'),
+            KeyCode::Char('D'),
+            KeyCode::Char('x'),
+            KeyCode::Char('u'),
+            KeyCode::Char('J'),
+            KeyCode::Char('K'),
+            KeyCode::Char('w'),
+            KeyCode::Char('q'),
+            KeyCode::Char(' '),
+            KeyCode::PageDown,
+            KeyCode::Home,
+        ] {
+            assert!(!press(&mut app, &fixture, code));
+            assert_eq!(app.list.selected(), Some(0));
+            assert!(matches!(app.mode, Mode::SearchResults { .. }));
+        }
+        app.paste("ignored");
+        assert_eq!(app.search_query(), Some("alpha"));
+        press(&mut app, &fixture, KeyCode::Esc);
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.list.selected(), Some(2));
+        assert!(app.reveal_selection);
+        press(&mut app, &fixture, KeyCode::Char('/'));
+        app.paste("alpha");
+        press(&mut app, &fixture, KeyCode::Enter);
+        press(&mut app, &fixture, KeyCode::Enter);
+        repeat(&mut app, &fixture, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.list.selected(), Some(3));
+        assert_eq!(app.tasks, original);
+        assert!(!app.can_undo());
+        assert_eq!(std::fs::read(fixture.task_path()).unwrap(), bytes);
+    }
+
+    #[test]
+    fn search_input_reuses_cursor_editing_and_paste_normalization() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(1);
+        press(&mut app, &fixture, KeyCode::Char('/'));
+        app.paste("α beta");
+        for (code, modifiers, text, cursor) in [
+            (KeyCode::Left, KeyModifiers::CONTROL, "α beta", 3),
+            (KeyCode::Backspace, KeyModifiers::CONTROL, "beta", 0),
+            (KeyCode::Delete, KeyModifiers::NONE, "eta", 0),
+            (KeyCode::Right, KeyModifiers::NONE, "eta", 1),
+            (KeyCode::Backspace, KeyModifiers::NONE, "ta", 0),
+            (KeyCode::Char('e'), KeyModifiers::NONE, "eta", 1),
+            (
+                KeyCode::Char('\u{301}'),
+                KeyModifiers::NONE,
+                "e\u{301}ta",
+                3,
+            ),
+            (KeyCode::End, KeyModifiers::NONE, "e\u{301}ta", 5),
+            (KeyCode::Home, KeyModifiers::NONE, "e\u{301}ta", 0),
+            (KeyCode::Right, KeyModifiers::CONTROL, "e\u{301}ta", 5),
+            (KeyCode::Char('a'), KeyModifiers::CONTROL, "e\u{301}ta", 0),
+            (KeyCode::Char('e'), KeyModifiers::CONTROL, "e\u{301}ta", 5),
+        ] {
+            repeat(&mut app, &fixture, code, modifiers);
+            let Mode::Searching { input, .. } = &app.mode else {
+                panic!()
+            };
+            assert_eq!(input.text(), text);
+            assert_eq!(input.cursor(), cursor);
+        }
+        repeat(&mut app, &fixture, KeyCode::Left, KeyModifiers::CONTROL);
+        repeat(&mut app, &fixture, KeyCode::Right, KeyModifiers::NONE);
+        app.paste("X\r\n\tY");
+        assert_eq!(app.search_query(), Some("e\u{301}X  Yta"));
+        app.key(
+            KeyEvent::new(
+                KeyCode::Char('€'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ),
+            &fixture.storage,
+        )
+        .unwrap();
+        assert_eq!(
+            app.search_query(),
+            Some(if cfg!(windows) {
+                "e\u{301}X  Y€ta"
+            } else {
+                "e\u{301}X  Yta"
+            })
+        );
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Searching { .. }));
+        assert_eq!(app.list.selected(), None);
+        press(&mut app, &fixture, KeyCode::Esc);
+        assert_eq!(app.list.selected(), Some(0));
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn empty_and_single_result_search_preserve_existing_undo_and_ignore_mouse() {
+        let fixture = Fixture::new();
+        for count in [0, 1] {
+            let mut app = app_with_tasks(count);
+            if count == 1 {
+                press(&mut app, &fixture, KeyCode::Char(' '));
+            }
+            let original = app.tasks.clone();
+            let selection = app.list.selected();
+            let history = app.history.len();
+            press(&mut app, &fixture, KeyCode::Char('/'));
+            press(&mut app, &fixture, KeyCode::Enter);
+            assert_eq!(app.mode, Mode::Normal);
+            assert_eq!(app.list.selected(), selection);
+            press(&mut app, &fixture, KeyCode::Char('/'));
+            app.paste("task");
+            press(&mut app, &fixture, KeyCode::Enter);
+            for code in [
+                KeyCode::Char('n'),
+                KeyCode::Char('N'),
+                KeyCode::Down,
+                KeyCode::Up,
+            ] {
+                press(&mut app, &fixture, code);
+            }
+            assert_eq!(app.list.selected(), selection);
+            let rows = Rect::new(0, 0, 20, 3);
+            for kind in [
+                MouseEventKind::Down(MouseButton::Left),
+                MouseEventKind::ScrollDown,
+            ] {
+                app.mouse(
+                    MouseEvent {
+                        kind,
+                        column: 1,
+                        row: 1,
+                        modifiers: KeyModifiers::NONE,
+                    },
+                    rows,
+                    &fixture.storage,
+                )
+                .unwrap();
+            }
+            app.key(
+                KeyEvent::new_with_kind(KeyCode::Esc, KeyModifiers::NONE, KeyEventKind::Release),
+                &fixture.storage,
+            )
+            .unwrap();
+            assert!(app.search_query().is_some());
+            press(&mut app, &fixture, KeyCode::Esc);
+            assert_eq!(app.tasks, original);
+            assert_eq!(app.list.selected(), selection);
+            assert_eq!(app.history.len(), history);
+            if count == 1 {
+                press(&mut app, &fixture, KeyCode::Char('u'));
+                assert!(!app.tasks[0].completed);
+            }
+        }
     }
 
     #[test]

@@ -37,6 +37,10 @@ pseudo-terminal.
 cargo install --git https://github.com/zmeadows/sati --locked
 ```
 
+Press `/` to search as you type. `Enter` confirms the query; `n` / `N` or
+arrow keys navigate results, and `Enter` selects a task. `Esc` cancels search
+and restores the previous selection.
+
 ## Options
 
 | Flag | Description |

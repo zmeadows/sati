@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -19,7 +21,13 @@ const BORDER: Color = Color::Rgb(80, 73, 69);
 
 pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let area = frame.area();
-    let entering_text = matches!(app.mode, Mode::Adding(_) | Mode::Editing { .. });
+    let entering_text = matches!(
+        app.mode,
+        Mode::Adding(_)
+            | Mode::Editing { .. }
+            | Mode::Searching { .. }
+            | Mode::SearchResults { .. }
+    );
     // Give the checklist priority when height is limited; input always gets a row.
     let input_height = u16::from(entering_text && area.height > 0);
     let mut shortcuts = shortcut_lines(app, area.width);
@@ -56,6 +64,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     match &app.mode {
         Mode::Adding(input) => draw_input(frame, sections[1], input, "add", app.accent),
         Mode::Editing { input, .. } => draw_input(frame, sections[1], input, "edit", app.accent),
+        Mode::Searching { input, .. } | Mode::SearchResults { input, .. } => {
+            let no_matches = !input.text().is_empty() && app.list.selected().is_none();
+            let label = if no_matches && sections[1].width >= 28 {
+                "search (No matches)"
+            } else {
+                "search"
+            };
+            draw_input_line(
+                frame,
+                sections[1],
+                input,
+                label,
+                app.accent,
+                matches!(app.mode, Mode::Searching { .. }),
+            );
+        }
         _ => {}
     }
     frame.render_widget(
@@ -87,18 +111,23 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
             .chars()
             .map(|c| if c.is_control() { ' ' } else { c })
             .collect();
-        let mut tag_graphemes = text
+        let tag_end = text
             .find(':')
             .filter(|&end| end > 0 && !text[..end].chars().any(char::is_whitespace))
             .map_or(0, |end| {
                 text.grapheme_indices(true)
                     .take_while(|(index, _)| *index <= end)
-                    .count()
+                    .last()
+                    .map_or(0, |(index, grapheme)| index + grapheme.len())
             });
+        let searching = app.search_query().is_some();
+        let matches = app
+            .search_query()
+            .map_or_else(Vec::new, |query| crate::search::match_ranges(&text, query));
         let wrapped = if app.wrap && text_width > 0 {
             wrap_text(&text, text_width)
         } else {
-            vec![text]
+            vec![(0..text.len(), text.as_str())]
         };
         let text_style = if task.completed {
             Style::default()
@@ -107,16 +136,28 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             Style::default().fg(TEXT)
         };
-        for (row, mut text) in wrapped.into_iter().enumerate() {
+        for (row, (source, text)) in wrapped.into_iter().enumerate() {
             app.row_tasks.push(index);
             let prefix = if row > 0 {
                 "     "
+            } else if searching {
+                if matches.is_empty() {
+                    "  □  "
+                } else {
+                    "  ■  "
+                }
             } else if task.completed {
                 " [x] "
             } else {
                 " [ ] "
             };
-            let color = if app.list.selected() == Some(index) {
+            let color = if searching {
+                if matches.is_empty() {
+                    MUTED
+                } else {
+                    app.accent
+                }
+            } else if app.list.selected() == Some(index) {
                 app.accent
             } else if task.completed {
                 MUTED
@@ -134,18 +175,14 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 Span::styled(prefix, Style::default().fg(color)),
             ]);
-            if tag_graphemes > 0 {
-                let mut end = 0;
-                for (index, grapheme) in text.grapheme_indices(true).take(tag_graphemes) {
-                    end = index + grapheme.len();
-                    tag_graphemes -= 1;
-                }
-                let suffix = text.split_off(end);
-                line.push_span(Span::styled(text, text_style.add_modifier(Modifier::BOLD)));
-                line.push_span(Span::styled(suffix, text_style));
-            } else {
-                line.push_span(Span::styled(text, text_style));
-            }
+            line.spans.extend(task_spans(
+                text,
+                source.start,
+                tag_end,
+                &matches,
+                text_style,
+                app.accent,
+            ));
             lines.push(line);
         }
     }
@@ -187,10 +224,11 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
+fn wrap_text(text: &str, width: usize) -> Vec<(Range<usize>, &str)> {
     let mut lines = Vec::new();
     let mut remaining = text;
     while !remaining.is_empty() {
+        let offset = text.len() - remaining.len();
         let mut used = 0;
         let mut word_break = None;
         let mut split = None;
@@ -199,7 +237,7 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
             if used + size > width {
                 // A glyph wider than the entire text column cannot be drawn intact.
                 if index == 0 {
-                    lines.push("�".to_owned());
+                    lines.push((offset..offset + grapheme.len(), "�"));
                     split = Some(grapheme.len());
                 } else {
                     let boundary = if grapheme.chars().all(char::is_whitespace) {
@@ -214,7 +252,7 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
                         .rev()
                         .find(|(_, grapheme)| !grapheme.chars().all(char::is_whitespace))
                         .map_or(0, |(index, grapheme)| index + grapheme.len());
-                    lines.push(remaining[..end].to_owned());
+                    lines.push((offset..offset + end, &remaining[..end]));
                 }
                 break;
             }
@@ -224,7 +262,7 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
             used += size;
         }
         let Some(split) = split else {
-            lines.push(remaining.to_owned());
+            lines.push((offset..text.len(), remaining));
             break;
         };
         remaining = &remaining[split..];
@@ -235,9 +273,70 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         remaining = &remaining[start..];
     }
     if lines.is_empty() {
-        lines.push(String::new());
+        lines.push((0..0, ""));
     }
     lines
+}
+
+fn highlight_foreground(accent: Color) -> Color {
+    let Color::Rgb(r, g, b) = accent else {
+        return Color::Rgb(0, 0, 0);
+    };
+    let linear = |value: u8| {
+        let srgb = f64::from(value) / 255.0;
+        if srgb <= 0.04045 {
+            srgb / 12.92
+        } else {
+            ((srgb + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+    let black = (luminance + 0.05) / 0.05;
+    let white = 1.05 / (luminance + 0.05);
+    if black >= white {
+        Color::Rgb(0, 0, 0)
+    } else {
+        Color::Rgb(255, 255, 255)
+    }
+}
+
+fn task_spans(
+    text: &str,
+    offset: usize,
+    tag_end: usize,
+    matches: &[Range<usize>],
+    base: Style,
+    accent: Color,
+) -> Vec<Span<'static>> {
+    let highlight = base.bg(accent).fg(highlight_foreground(accent));
+    let mut spans = Vec::new();
+    let mut start = 0;
+    let mut style = base;
+    let mut matching = 0;
+    for (index, _) in text.grapheme_indices(true) {
+        let source = offset + index;
+        while matching < matches.len() && matches[matching].end <= source {
+            matching += 1;
+        }
+        let mut next = if matches
+            .get(matching)
+            .is_some_and(|range| range.contains(&source))
+        {
+            highlight
+        } else {
+            base
+        };
+        if source < tag_end {
+            next = next.add_modifier(Modifier::BOLD);
+        }
+        if index > start && next != style {
+            spans.push(Span::styled(text[start..index].to_owned(), style));
+            start = index;
+        }
+        style = next;
+    }
+    spans.push(Span::styled(text[start..].to_owned(), style));
+    spans
 }
 
 fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
@@ -253,6 +352,13 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     // The full aligned legend occupies 54 columns; pack smaller contexts by action.
     if app.mode != Mode::Normal || app.tasks.is_empty() || width < 54 {
         let mut rows: Vec<Vec<(&str, &str)>> = match app.mode {
+            Mode::Searching { .. } => vec![vec![("Enter", "Results"), ("Esc", "Cancel")]],
+            Mode::SearchResults { .. } => vec![vec![
+                ("n/N", "Next/prev"),
+                ("↑/↓", "Navigate"),
+                ("Enter", "Select"),
+                ("Esc", "Cancel"),
+            ]],
             Mode::Adding(_) | Mode::Editing { .. } => {
                 vec![vec![("Enter", "Confirm"), ("Esc", "Cancel")]]
             }
@@ -268,7 +374,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         }
         let mut lines = wrap_shortcuts(&rows, width);
         // Keep at most three hint rows, dropping secondary actions first.
-        for omit in ["x", "D", "w", "u", "d", "j/k"] {
+        for omit in ["x", "D", "w", "u", "d", "j/k", "↑/↓"] {
             if lines.len() <= 3 {
                 break;
             }
@@ -311,7 +417,13 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         }
     }
     let [first, second, third] = rows;
-    vec![Line::from(first), Line::from(second), Line::from(third)]
+    let mut lines = vec![Line::from(first), Line::from(second), Line::from(third)];
+    if lines[0].width() + "  / Search".width() <= usize::from(width) {
+        lines[0].push_span(Span::raw("  "));
+        lines[0].push_span(Span::styled("/", keys));
+        lines[0].push_span(Span::raw(" Search"));
+    }
+    lines
 }
 
 fn wrap_shortcuts(rows: &[Vec<(&str, &str)>], width: u16) -> Vec<Line<'static>> {
@@ -377,6 +489,17 @@ fn wrap_shortcuts(rows: &[Vec<(&str, &str)>], width: u16) -> Vec<Line<'static>> 
 }
 
 fn draw_input(frame: &mut Frame, area: Rect, input: &TextInput, label: &str, accent: Color) {
+    draw_input_line(frame, area, input, label, accent, true);
+}
+
+fn draw_input_line(
+    frame: &mut Frame,
+    area: Rect,
+    input: &TextInput,
+    label: &str,
+    accent: Color,
+    show_cursor: bool,
+) {
     if area.is_empty() {
         return;
     }
@@ -423,7 +546,9 @@ fn draw_input(frame: &mut Frame, area: Rect, input: &TextInput, label: &str, acc
     line.push_span(Span::styled(visible, Style::default().fg(TEXT)));
     frame.render_widget(Paragraph::new(line), area);
     let cursor = (prefix_width + width).min(usize::from(area.width - 1));
-    frame.set_cursor_position((area.x + cursor as u16, area.y));
+    if show_cursor {
+        frame.set_cursor_position((area.x + cursor as u16, area.y));
+    }
 }
 
 fn draw_confirmation(frame: &mut Frame, area: Rect) {
@@ -465,8 +590,281 @@ fn draw_confirmation(frame: &mut Frame, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wrapped_strings(text: &str, width: usize) -> Vec<&str> {
+        wrap_text(text, width)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect()
+    }
     use crate::app::Task;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn search_markers_highlights_and_exit_preserve_text_and_alignment() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = App::new(
+            [
+                ("work: İfoo İFOO e\u{301} 👩‍💻", false),
+                ("İfoo completed", true),
+                ("unrelated", false),
+            ]
+            .map(|(text, completed)| Task {
+                text: text.into(),
+                completed,
+            })
+            .into(),
+        );
+        let original = app.tasks.clone();
+        app.keybinds = false;
+        app.list.select(Some(2));
+        app.accent = Color::Rgb(20, 40, 60);
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let key = |app: &mut App, code| {
+            app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
+                .unwrap()
+        };
+        key(&mut app, KeyCode::Char('/'));
+        app.paste("i\u{307}foo");
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(1, 1)].symbol(), "›");
+        assert_eq!(buffer[(1, 3)].symbol(), " ");
+        for y in [1, 2] {
+            assert_eq!(buffer[(4, y)].symbol(), "■");
+            assert_eq!(buffer[(4, y)].fg, app.accent);
+        }
+        assert_eq!(buffer[(4, 3)].symbol(), "□");
+        assert_eq!(buffer[(4, 3)].fg, MUTED);
+        assert_eq!(buffer[(7, 1)].symbol(), "w");
+        assert!(buffer[(7, 1)].modifier.contains(Modifier::BOLD));
+        for (y, expected) in [(1, "İfooİFOO"), (2, "İfoo")] {
+            let mut highlighted = String::new();
+            for x in 7..39 {
+                let cell = &buffer[(x, y)];
+                if cell.bg == app.accent {
+                    highlighted.push_str(cell.symbol());
+                    assert_eq!(cell.fg, Color::Rgb(255, 255, 255));
+                    assert_eq!(cell.modifier.contains(Modifier::CROSSED_OUT), y == 2);
+                }
+            }
+            assert_eq!(highlighted, expected);
+        }
+        key(&mut app, KeyCode::Enter);
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        assert!(screen(&terminal).contains("search › i\u{307}foo"));
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Enter);
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        assert_eq!(app.list.selected(), Some(1));
+        assert_eq!(app.tasks, original);
+        assert_eq!(terminal.backend().buffer()[(4, 1)].symbol(), " ");
+        assert_eq!(terminal.backend().buffer()[(4, 2)].symbol(), "x");
+        for y in 1..4 {
+            for x in 7..39 {
+                assert_eq!(terminal.backend().buffer()[(x, y)].bg, Color::Reset);
+            }
+        }
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn search_spanning_wrapped_rows_preserves_mapping_and_reveals_results_after_resize() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = App::new(vec![
+            Task {
+                text: "tag: abCDef abcdef".into(),
+                completed: false,
+            },
+            Task {
+                text: "nonmatching".into(),
+                completed: false,
+            },
+            Task {
+                text: format!("{}tag: abcdef", "long ".repeat(50)),
+                completed: true,
+            },
+        ]);
+        app.keybinds = false;
+        let original = app.tasks.clone();
+        let mut terminal = Terminal::new(TestBackend::new(14, 9)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        let mapping = app.row_tasks.clone();
+        app.key(
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+            &fixture.storage,
+        )
+        .unwrap();
+        app.paste("tag: abcd");
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        assert_eq!(app.row_tasks, mapping);
+        for (y, length) in [(1, 4), (2, 4)] {
+            for x in 7..7 + length {
+                assert_eq!(terminal.backend().buffer()[(x, y)].bg, app.accent);
+            }
+            assert_eq!(
+                terminal.backend().buffer()[(7 + length, y)].bg,
+                Color::Reset
+            );
+        }
+        app.key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &fixture.storage,
+        )
+        .unwrap();
+        for (width, height, wrap) in [
+            (18, 8, true),
+            (40, 12, false),
+            (9, 3, true),
+            (1, 1, true),
+            (0, 0, false),
+            (14, 9, true),
+        ] {
+            app.wrap = wrap;
+            terminal.backend_mut().resize(width, height);
+            terminal
+                .draw(|frame| {
+                    draw(frame, &mut app);
+                })
+                .unwrap();
+            app.key(
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                &fixture.storage,
+            )
+            .unwrap();
+            terminal
+                .draw(|frame| {
+                    draw(frame, &mut app);
+                })
+                .unwrap();
+            let selected = app.list.selected().unwrap();
+            if app.viewport_height > 0 {
+                let end = (app.scroll + usize::from(app.viewport_height)).min(app.row_tasks.len());
+                assert!(app.row_tasks[app.scroll..end].contains(&selected));
+            }
+        }
+        app.key(
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &fixture.storage,
+        )
+        .unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        assert_eq!(app.list.selected(), Some(0));
+        assert_eq!(app.tasks, original);
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn search_feedback_legends_and_contrast_remain_compact() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = App::new(vec![Task {
+            text: "ordinary".into(),
+            completed: true,
+        }]);
+        app.mode = Mode::Searching {
+            input: "missing".into(),
+            original: Some(0),
+        };
+        app.list.select(None);
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        assert!(screen(&terminal).contains("No matches"));
+        assert_eq!(terminal.backend().buffer()[(1, 1)].symbol(), " ");
+        assert_eq!(terminal.backend().buffer()[(4, 1)].symbol(), "□");
+        for results in [false, true] {
+            app.mode = if results {
+                Mode::SearchResults {
+                    input: "ordinary".into(),
+                    original: Some(0),
+                }
+            } else {
+                Mode::Searching {
+                    input: "ordinary".into(),
+                    original: Some(0),
+                }
+            };
+            let text = shortcut_lines(&app, 80)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(text.contains("Esc") && text.contains("Cancel"));
+            assert!(text.contains(if results { "Select" } else { "Results" }));
+            assert!(!text.contains("Page"));
+            for width in [0, 1, 12, 18, 30, 40, 60, 80] {
+                let lines = shortcut_lines(&app, width);
+                assert!(lines.len() <= 3);
+                assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
+            }
+            app.keybinds = false;
+            assert!(shortcut_lines(&app, 80).is_empty());
+            app.keybinds = true;
+        }
+        assert_eq!(
+            highlight_foreground(Color::Rgb(0, 0, 0)),
+            Color::Rgb(255, 255, 255)
+        );
+        assert_eq!(
+            highlight_foreground(Color::Rgb(255, 255, 255)),
+            Color::Rgb(0, 0, 0)
+        );
+        assert_eq!(highlight_foreground(DEFAULT_ACCENT), Color::Rgb(0, 0, 0));
+        // Independent contrast check across a small RGB cube, including midtones.
+        for r in [0, 64, 128, 192, 255] {
+            for g in [0, 64, 128, 192, 255] {
+                for b in [0, 64, 128, 192, 255] {
+                    let linear = |v| {
+                        let s = f64::from(v) / 255.0;
+                        if s <= 0.04045 {
+                            s / 12.92
+                        } else {
+                            ((s + 0.055) / 1.055).powf(2.4)
+                        }
+                    };
+                    let l = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+                    let ratio = if highlight_foreground(Color::Rgb(r, g, b)) == Color::Rgb(0, 0, 0)
+                    {
+                        (l + 0.05) / 0.05
+                    } else {
+                        1.05 / (l + 0.05)
+                    };
+                    assert!(ratio >= 4.5);
+                }
+            }
+        }
+        assert!(!fixture.task_path().exists());
+    }
 
     #[test]
     fn legends_follow_mode_availability_and_terminal_width() {
@@ -623,6 +1021,14 @@ mod tests {
                     Mode::Editing {
                         index: 0,
                         input: "Existing text 日本語 🪷".into(),
+                    },
+                    Mode::Searching {
+                        input: "Long search 日本語 🪷".into(),
+                        original: Some(0),
+                    },
+                    Mode::SearchResults {
+                        input: "日本語".into(),
+                        original: Some(0),
                     },
                     Mode::ConfirmClear,
                 ] {
@@ -1196,13 +1602,19 @@ mod tests {
 
     #[test]
     fn wrapping_preserves_words_and_unicode_clusters() {
-        assert_eq!(wrap_text("alpha beta gamma", 10), ["alpha beta", "gamma"]);
-        assert_eq!(wrap_text("abcdefgh", 3), ["abc", "def", "gh"]);
-        assert_eq!(wrap_text("日本語", 4), ["日本", "語"]);
-        assert_eq!(wrap_text("e\u{301}e\u{301}", 1), ["e\u{301}", "e\u{301}"]);
-        assert_eq!(wrap_text("👩‍💻👩‍💻", 2), ["👩‍💻", "👩‍💻"]);
-        assert_eq!(wrap_text("界a", 1), ["�", "a"]);
-        assert_eq!(wrap_text("", 4), [""]);
+        assert_eq!(
+            wrapped_strings("alpha beta gamma", 10),
+            ["alpha beta", "gamma"]
+        );
+        assert_eq!(wrapped_strings("abcdefgh", 3), ["abc", "def", "gh"]);
+        assert_eq!(wrapped_strings("日本語", 4), ["日本", "語"]);
+        assert_eq!(
+            wrapped_strings("e\u{301}e\u{301}", 1),
+            ["e\u{301}", "e\u{301}"]
+        );
+        assert_eq!(wrapped_strings("👩‍💻👩‍💻", 2), ["👩‍💻", "👩‍💻"]);
+        assert_eq!(wrapped_strings("界a", 1), ["�", "a"]);
+        assert_eq!(wrapped_strings("", 4), [""]);
     }
 
     #[test]
@@ -1214,7 +1626,7 @@ mod tests {
             ("ab\u{600}  cde", 4, vec!["ab\u{600} ", "cde"]),
             ("abcd \u{a0}\u{2003}X", 4, vec!["abcd", "X"]),
         ] {
-            assert_eq!(wrap_text(text, width), expected, "{text:?}");
+            assert_eq!(wrapped_strings(text, width), expected, "{text:?}");
         }
     }
 

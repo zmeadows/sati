@@ -1,5 +1,6 @@
 mod app;
 mod input;
+mod search;
 mod storage;
 mod ui;
 
