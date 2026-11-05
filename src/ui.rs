@@ -267,7 +267,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn focus_marker(unicode: bool) -> &'static str {
-    if unicode { "▸" } else { ">" }
+    if unicode { "›" } else { ">" }
 }
 
 fn task_checkbox(task: &Task, unicode: bool) -> &'static str {
@@ -686,11 +686,11 @@ mod tests {
 
     #[test]
     fn unicode_checkboxes_are_single_cell_and_preserve_rendering_and_search() {
-        for glyph in ["\u{2713}", "\u{21aa}", ">", "\u{25b8}"] {
+        for glyph in ["\u{2713}", "\u{21aa}", ">", "\u{203a}"] {
             assert_eq!(glyph.width(), 1);
         }
         assert_eq!(focus_marker(false), ">");
-        assert_eq!(focus_marker(true), "\u{25b8}");
+        assert_eq!(focus_marker(true), "\u{203a}");
         let tasks = vec![
             Task {
                 text: "ordinary task wraps here".into(),
@@ -754,9 +754,9 @@ mod tests {
                     assert_eq!(app.row_tasks, mapping);
                     assert_eq!(app.scroll, scroll);
                     let mut unicode = terminal.backend().buffer().clone();
-                    for cell in &mut unicode.content {
+                    for (offset, cell) in unicode.content.iter_mut().enumerate() {
                         match cell.symbol() {
-                            "▸" => {
+                            "›" if offset % usize::from(width) == usize::from(rows.x) => {
                                 cell.set_symbol(">");
                             }
                             "✓" if !searching => {
