@@ -733,7 +733,8 @@ mod tests {
                 ] {
                     let searching = mode != Mode::Normal;
                     let mut app = App::new(tasks.clone());
-                    assert!(!app.unicode_markers);
+                    assert!(app.unicode_markers);
+                    app.unicode_markers = false;
                     app.mode = mode;
                     app.list.select(Some(1));
                     app.wrap = wrap;
@@ -795,7 +796,7 @@ mod tests {
             .unwrap();
         let mapping = app.row_tasks.clone();
         assert!(mapping.len() > 1);
-        assert!(screen(&terminal).contains("> [>] carry"));
+        assert!(screen(&terminal).contains("› [↪] carry"));
         assert_eq!(terminal.backend().buffer()[(3, 1)].fg, app.accent);
         assert_eq!(terminal.backend().buffer()[(1, 2)].symbol(), " ");
         app.key(
@@ -811,7 +812,7 @@ mod tests {
             .unwrap();
         assert_eq!(app.row_tasks, mapping);
         assert!(screen(&terminal).contains('■'));
-        assert!(!screen(&terminal).contains("[>]"));
+        assert!(!screen(&terminal).contains("[↪]"));
         app.key(
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
             &fixture.storage,
@@ -823,7 +824,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(app.row_tasks, mapping);
-        assert!(screen(&terminal).contains("[>]"));
+        assert!(screen(&terminal).contains("[↪]"));
         assert!(app.tasks[0].carried);
         app.keybinds = true;
         for width in [1, 18, 40, 60, 80] {
@@ -1192,7 +1193,7 @@ mod tests {
                 draw(frame, &mut app);
             })
             .unwrap();
-        assert!(screen(&terminal).contains("[x] needle"));
+        assert!(screen(&terminal).contains("[✓] needle"));
         assert!(!screen(&terminal).contains("search ›"));
         assert!(app.tasks[0].completed);
         assert!(!fixture.task_path().exists());
@@ -1232,7 +1233,7 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(1, 1)].symbol(), ">");
+        assert_eq!(buffer[(1, 1)].symbol(), "›");
         assert_eq!(buffer[(1, 3)].symbol(), " ");
         for y in [1, 2] {
             assert_eq!(buffer[(4, y)].symbol(), "■");
@@ -1271,7 +1272,7 @@ mod tests {
         assert_eq!(app.list.selected(), Some(1));
         assert_eq!(app.tasks, original);
         assert_eq!(terminal.backend().buffer()[(4, 1)].symbol(), " ");
-        assert_eq!(terminal.backend().buffer()[(4, 2)].symbol(), "x");
+        assert_eq!(terminal.backend().buffer()[(4, 2)].symbol(), "✓");
         for y in 1..4 {
             for x in 7..39 {
                 assert_eq!(terminal.backend().buffer()[(x, y)].bg, Color::Reset);
@@ -1958,7 +1959,7 @@ mod tests {
         assert!(app.tasks[1].completed);
         terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
         assert_eq!(app.row_tasks[app.scroll], Some(1));
-        assert!(screen(&terminal).contains("> [x] long"));
+        assert!(screen(&terminal).contains("› [✓] long"));
         app.key(
             KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
             &fixture.storage,
@@ -2048,7 +2049,7 @@ mod tests {
         let marker = &buffer[(1, 1)];
         let checkbox = &buffer[(3, 1)];
         let text = &buffer[(7, 1)];
-        assert_eq!(marker.symbol(), ">");
+        assert_eq!(marker.symbol(), "›");
         assert_eq!(marker.fg, app.accent);
         assert_eq!(marker.bg, Color::Reset);
         assert_eq!(checkbox.fg, app.accent);
@@ -2391,11 +2392,11 @@ mod tests {
         terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
         assert_eq!(app.row_tasks, [0, 0, 0, 1].map(Some));
         let rendered = screen(&terminal);
-        assert!(rendered.contains("> [ ] alpha beta"));
+        assert!(rendered.contains("› [ ] alpha beta"));
         assert!(rendered.contains("      gamma"));
         assert!(rendered.contains("      delta"));
         assert!(rendered.contains("  [ ] next"));
-        assert_eq!(rendered.matches('>').count(), 1);
+        assert_eq!(rendered.matches('›').count(), 1);
         assert_eq!(terminal.backend().buffer()[(1, 1)].fg, DEFAULT_ACCENT);
         let click = |row| MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),

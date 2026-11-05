@@ -139,7 +139,7 @@ impl App {
             logo: true,
             keybinds: true,
             rounded: false,
-            unicode_markers: false,
+            unicode_markers: true,
             completed_at_bottom: false,
             accent: crate::ui::DEFAULT_ACCENT,
             scroll: 0,

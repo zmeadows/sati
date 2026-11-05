@@ -23,7 +23,7 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 - **One local list.** Changes are saved automatically, without accounts or synchronization.
 - **Keyboard-first, with mouse support.** Navigate, reorder, and complete tasks from the keyboard. Click a task to toggle it, or scroll with the mouse wheel.
 - **Search in place.** Find tasks as you type, see matching text highlighted, and jump to a result without filtering or rearranging the list.
-- **Carryover.** Mark unfinished tasks with `m` (`[>]`) to keep them when clearing the list.
+- **Carryover.** Mark unfinished tasks with `m` (`[↪]`) to keep them when clearing the list.
 - **Undo and redo.** Up to 256 changes in either direction, with history still available after restarting the program.
 - **Display options.** Wrap long tasks, group completed items, and change some style settings with command-line flags.
 
@@ -93,9 +93,11 @@ The add, edit, and search prompts share these shortcuts:
 | `--no-logo` | Hide the title in the border. |
 | `--no-keybinds` | Hide the shortcut hints. |
 | `--round-corners` | Use rounded borders. |
-| `--unicode-markers` | Use `[ ]`, `[✓]`, and `[↪]` for ordinary, completed, and carried tasks. |
+| `--ascii-markers` | Use `>`, `[x]`, and `[>]` as compatibility fallbacks for task markers. |
 | `--completed-at-bottom` | Keep completed tasks below unfinished ones. |
 | `--accent '#RRGGBB'` | Set the accent color (default `#e78a4e`). |
+
+Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--ascii-markers` changes only task markers; other UI symbols remain Unicode.
 
 Run `sati --help` for the full command-line help.
 
