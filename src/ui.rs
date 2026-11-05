@@ -62,7 +62,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     }
     if let Some(notice) = &app.copy_notice {
         let available = usize::from(sections[0].width).saturating_sub(counter.width() + 3);
-        let short = if notice.starts_with("Copy failed") {
+        let short = if notice == "Copied task" {
+            notice.as_str()
+        } else if notice.starts_with("Copy failed") {
             "Copy failed"
         } else {
             "Copy sent"
@@ -720,7 +722,11 @@ mod tests {
                         .draw(|frame| before = draw(frame, &mut app))
                         .unwrap();
                     app.copy_markdown(&mut Vec::new());
-                    for notice in ["Copy sent to terminal", "Copy failed: output unavailable"] {
+                    for notice in [
+                        "Copy sent to terminal",
+                        "Copy failed: output unavailable",
+                        "Copied task",
+                    ] {
                         app.copy_notice = Some(notice.into());
                         let mut after = Rect::default();
                         terminal
@@ -734,7 +740,9 @@ mod tests {
                         if width >= 40 {
                             assert!(text.contains(notice));
                         } else if width == 24 {
-                            assert!(text.contains(if notice.starts_with("Copy failed") {
+                            assert!(text.contains(if notice == "Copied task" {
+                                "Copied task"
+                            } else if notice.starts_with("Copy failed") {
                                 "Copy failed"
                             } else {
                                 "Copy sent"

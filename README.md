@@ -67,6 +67,8 @@ Then run `sati`.
 | Reorder task | `J` / `K`, `Shift+↓` / `Shift+↑` |
 | Group tasks by prefix | `s` |
 | Copy checklist as Markdown | `c` |
+| Copy selected task internally | `y`, `Alt+W` |
+| Paste task below / above | `p` / `P` (`Ctrl+Y` also pastes below) |
 | Append task | `a` |
 | Insert below selection | `o` |
 | Insert above selection | `O` |
@@ -77,13 +79,18 @@ Then run `sati`.
 | Clear completed | `x` |
 | Clear unmarked tasks (preserve carried) | `D` |
 | Undo | `u`, `Ctrl+Z` |
-| Redo | `Ctrl+R`, `Ctrl+Y` |
+| Redo | `Ctrl+R` |
 | Search | `/`, `Ctrl+F` |
 | Resume previous search forward / backward | `n` / `N` |
 | Toggle wrapping | `w` |
 | Quit | `q` |
 
 With `--completed-at-bottom`, new tasks stay in the incomplete section.
+
+Task copies use one in-memory register, separate from the system clipboard. Pasted
+tasks start incomplete and unmarked; the register remains available for repeated
+pastes until exit. `c` still copies the entire checklist as Markdown to the system
+clipboard.
 
 Press `s` to group tasks manually by their leading prefix (such as `Work:`). Unprefixed tasks come first, followed by case-insensitive alphabetical prefix groups; order within each group is preserved. With `--completed-at-bottom`, unfinished and completed tasks are grouped separately.
 

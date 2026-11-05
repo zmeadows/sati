@@ -131,6 +131,7 @@ pub struct App {
     pub viewport_height: u16,
     pub reveal_selection: bool,
     pub copy_notice: Option<String>,
+    task_register: Option<String>,
     last_search_query: Option<String>,
     history: VecDeque<UndoState>,
     redo_history: VecDeque<UndoState>,
@@ -155,6 +156,7 @@ impl App {
             viewport_height: 0,
             reveal_selection: true,
             copy_notice: None,
+            task_register: None,
             last_search_query: None,
             history: VecDeque::new(),
             redo_history: VecDeque::new(),
@@ -551,6 +553,30 @@ impl App {
         self.replace(tasks, selected, storage)
     }
 
+    fn yank_task(&mut self) {
+        if let Some(task) = self.list.selected().and_then(|index| self.tasks.get(index)) {
+            self.task_register = Some(task.text.clone());
+            self.copy_notice = Some("Copied task".into());
+        }
+    }
+
+    fn paste_task(&mut self, placement: AddPlacement, storage: &Storage) -> Result<()> {
+        let Some(text) = self.task_register.clone() else {
+            return Ok(());
+        };
+        let index = self.insertion_index(placement);
+        let mut tasks = self.tasks.clone();
+        tasks.insert(
+            index,
+            Task {
+                text,
+                completed: false,
+                carried: false,
+            },
+        );
+        self.replace(tasks, Some(index), storage)
+    }
+
     pub fn copy_markdown(&mut self, output: &mut impl std::io::Write) {
         self.copy_notice = Some(match crate::export::copy(&self.tasks, output) {
             Ok(()) => "Copy sent to terminal".into(),
@@ -661,6 +687,13 @@ impl App {
             self.refresh_search();
             return Ok(false);
         }
+        if self.mode == Mode::Normal
+            && key.modifiers == KeyModifiers::ALT
+            && matches!(key.code, KeyCode::Char('w' | 'W'))
+        {
+            self.yank_task();
+            return Ok(false);
+        }
         // Only the explicitly supported input shortcuts may consume other Control events.
         if key
             .modifiers
@@ -673,7 +706,10 @@ impl App {
                 if self.mode == Mode::Normal {
                     match key.code {
                         KeyCode::Char('z' | 'Z') => self.undo(storage)?,
-                        KeyCode::Char('r' | 'R' | 'y' | 'Y') => self.redo(storage)?,
+                        KeyCode::Char('r' | 'R') => self.redo(storage)?,
+                        KeyCode::Char('y' | 'Y') => {
+                            self.paste_task(AddPlacement::Below, storage)?
+                        }
                         KeyCode::Char('f' | 'F') => self.start_search(),
                         _ => {}
                     }
@@ -812,6 +848,19 @@ impl App {
                         key.code == KeyCode::Char('n')
                             && !key.modifiers.contains(KeyModifiers::SHIFT),
                     );
+                }
+                KeyCode::Char('y') => self.yank_task(),
+                KeyCode::Char('p' | 'P') => {
+                    let above = key.code == KeyCode::Char('P')
+                        || key.modifiers.contains(KeyModifiers::SHIFT);
+                    self.paste_task(
+                        if above {
+                            AddPlacement::Above
+                        } else {
+                            AddPlacement::Below
+                        },
+                        storage,
+                    )?;
                 }
                 KeyCode::Char('c') => self.copy_markdown(&mut std::io::stdout().lock()),
                 KeyCode::Char('q') => return Ok(true),
@@ -1062,6 +1111,137 @@ mod tests {
             assert!(!app.can_undo() && !app.can_redo());
         }
         assert!(fixture.storage.load().unwrap().is_empty());
+    }
+
+    #[test]
+    fn task_register_copies_literal_text_and_pastes_unmarked_with_shared_placement() {
+        let fixture = Fixture::new();
+        let text = "Work: *日本語* [literal]";
+        for (completed, carried) in [(false, false), (true, false), (false, true)] {
+            for copy in [
+                KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT),
+                KeyEvent::new(KeyCode::Char('W'), KeyModifiers::ALT),
+            ] {
+                for grouped in [false, true] {
+                    for (paste, placement) in [
+                        (
+                            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+                            AddPlacement::Below,
+                        ),
+                        (
+                            KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT),
+                            AddPlacement::Above,
+                        ),
+                        (
+                            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
+                            AddPlacement::Below,
+                        ),
+                    ] {
+                        let mut app = app_with_tasks(3);
+                        app.tasks[2] = Task {
+                            text: text.into(),
+                            completed,
+                            carried,
+                        };
+                        app.completed_at_bottom = grouped;
+                        app.list.select(Some(2));
+                        fixture.storage.save(&app.tasks).unwrap();
+                        let before = app.tasks.clone();
+                        app.key(copy, &fixture.storage).unwrap();
+                        assert_eq!(app.copy_notice.as_deref(), Some("Copied task"));
+                        assert_eq!(app.tasks, before);
+                        assert_eq!(fixture.storage.load().unwrap(), before);
+                        assert!(!app.can_undo() && !app.can_redo());
+                        let index = app.insertion_index(placement);
+                        app.key(paste, &fixture.storage).unwrap();
+                        assert!(app.copy_notice.is_none());
+                        assert_eq!(
+                            app.tasks[index],
+                            Task {
+                                text: text.into(),
+                                completed: false,
+                                carried: false
+                            }
+                        );
+                        assert_eq!(app.list.selected(), Some(index));
+                        assert!(app.reveal_selection);
+                        assert_eq!(app.history.len(), 1);
+                        let pasted = app.tasks.clone();
+                        app.undo(&fixture.storage).unwrap();
+                        assert_eq!(app.tasks, before);
+                        app.key(
+                            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+                            &fixture.storage,
+                        )
+                        .unwrap();
+                        assert_eq!(app.tasks, pasted);
+                        assert_eq!(app.task_register.as_deref(), Some(text));
+                        app.undo(&fixture.storage).unwrap();
+                        app.key(paste, &fixture.storage).unwrap();
+                        assert!(!app.can_redo());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn register_survives_deletion_and_handles_no_selection_repeats_and_failed_saves() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(1);
+        press(&mut app, &fixture, KeyCode::Char('p'));
+        assert!(!app.can_undo());
+        press(&mut app, &fixture, KeyCode::Char('y'));
+        press(&mut app, &fixture, KeyCode::Char('d'));
+        press(&mut app, &fixture, KeyCode::Char('y'));
+        assert!(app.copy_notice.is_none());
+        assert_eq!(app.task_register.as_deref(), Some("task 0"));
+        press(&mut app, &fixture, KeyCode::Char('P'));
+        assert_eq!(app.list.selected(), Some(0));
+        app.list.select(None);
+        press(&mut app, &fixture, KeyCode::Char('p'));
+        assert_eq!(app.list.selected(), Some(1));
+        press(&mut app, &fixture, KeyCode::Char('p'));
+        assert_eq!(app.list.selected(), Some(2));
+        for (code, modifiers) in [
+            (KeyCode::Char('p'), KeyModifiers::NONE),
+            (KeyCode::Char('P'), KeyModifiers::SHIFT),
+            (KeyCode::Char('y'), KeyModifiers::CONTROL),
+            (KeyCode::Char('w'), KeyModifiers::ALT),
+        ] {
+            repeat(&mut app, &fixture, code, modifiers);
+        }
+        assert_eq!(app.tasks.len(), 3);
+        app.undo(&fixture.storage).unwrap();
+        let before = serde_json::to_value((
+            &app.tasks,
+            app.list.selected(),
+            &app.history,
+            &app.redo_history,
+        ))
+        .unwrap();
+        let data = fixture.directory.join("data");
+        std::fs::rename(&data, fixture.directory.join("backup")).unwrap();
+        std::fs::write(data, "blocked").unwrap();
+        assert!(
+            app.key(
+                KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
+                &fixture.storage
+            )
+            .is_err()
+        );
+        assert_eq!(
+            serde_json::to_value((
+                &app.tasks,
+                app.list.selected(),
+                &app.history,
+                &app.redo_history
+            ))
+            .unwrap(),
+            before
+        );
+        assert_eq!(app.task_register.as_deref(), Some("task 0"));
     }
 
     fn reopen_with_history(app: App, fixture: &Fixture) -> App {
@@ -2185,10 +2365,6 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('z'), ctrl),
             ),
             (
-                KeyEvent::new(KeyCode::Char('r'), ctrl),
-                KeyEvent::new(KeyCode::Char('y'), ctrl),
-            ),
-            (
                 KeyEvent::new(KeyCode::Char('/'), none),
                 KeyEvent::new(KeyCode::Char('f'), ctrl),
             ),
@@ -2319,7 +2495,7 @@ mod tests {
         std::fs::write(data, "blocked").unwrap();
         for event in [
             KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
-            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
             KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
         ] {
             assert!(app.key(event, &fixture.storage).is_err());
