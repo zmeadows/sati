@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod export;
 mod input;
 mod notification;
@@ -33,7 +34,7 @@ use ratatui::crossterm::event::EnableBracketedPaste;
 use app::App;
 use storage::{Result, Storage};
 
-const USAGE: &str = "Usage: sati [--no-wrap] [--no-logo] [--no-keybinds] [--round-corners] [--ascii-markers] [--completed-at-bottom] [--accent COLOR] [--version]\n       sati export [--output PATH | -o PATH] [--force]";
+const USAGE: &str = "Usage: sati [--config PATH] [--wrap | --no-wrap] [--logo | --no-logo] [--keybinds | --no-keybinds] [--round-corners | --square-corners] [--ascii-markers | --unicode-markers] [--completed-at-bottom | --no-completed-at-bottom] [--accent COLOR] [--version]\n       sati export [--output PATH | -o PATH] [--force]";
 
 // Report repeats for plain characters and Enter too; alternate keys preserve shifted text.
 const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
@@ -52,6 +53,45 @@ struct Options {
     completed_at_bottom: bool,
     accent: ratatui::style::Color,
     print_version: bool,
+}
+
+#[derive(Debug, PartialEq)]
+struct CliOptions {
+    display: config::Display,
+    accent: ratatui::style::Color,
+    print_version: bool,
+    config: Option<std::path::PathBuf>,
+}
+
+impl CliOptions {
+    fn resolve(self, config: config::Config) -> Options {
+        Options {
+            wrap: self.display.wrap.or(config.display.wrap).unwrap_or(true),
+            logo: self.display.logo.or(config.display.logo).unwrap_or(true),
+            keybinds: self
+                .display
+                .keybinds
+                .or(config.display.keybinds)
+                .unwrap_or(true),
+            rounded: self
+                .display
+                .rounded_corners
+                .or(config.display.rounded_corners)
+                .unwrap_or(false),
+            ascii_markers: self
+                .display
+                .ascii_markers
+                .or(config.display.ascii_markers)
+                .unwrap_or(false),
+            completed_at_bottom: self
+                .display
+                .completed_at_bottom
+                .or(config.display.completed_at_bottom)
+                .unwrap_or(false),
+            accent: self.accent,
+            print_version: self.print_version,
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -75,7 +115,7 @@ fn run() -> Result<()> {
     }
     let Some(options) = parse_arguments(arguments)? else {
         println!(
-            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--no-keybinds      Hide the keybind list.\n--round-corners    Use rounded checklist corners (default: sharp).\n--ascii-markers    Use >, [x], and [>] instead of Unicode task markers.\n--completed-at-bottom Keep completed tasks below unfinished tasks.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: lightyellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file."
+            "{USAGE}\n\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--logo / --no-logo  Show / hide the sati border title.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--completed-at-bottom / --no-completed-at-bottom  Enable / disable grouping.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: lightyellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, logo, keybinds, rounded_corners, ascii_markers, completed_at_bottom.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file."
         );
         return Ok(());
     };
@@ -83,6 +123,8 @@ fn run() -> Result<()> {
         println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    let config = config::Config::load(options.config.as_deref())?;
+    let options = options.resolve(config);
     let storage = Storage::discover()?;
     let _instance_lock = storage.lock()?;
     let mut app = App::new(load_tasks(&storage, options.completed_at_bottom)?);
@@ -299,34 +341,57 @@ fn load_tasks(storage: &Storage, completed_at_bottom: bool) -> Result<Vec<app::T
 
 fn parse_arguments(
     arguments: impl IntoIterator<Item = std::ffi::OsString>,
-) -> Result<Option<Options>> {
-    let mut options = Options {
-        wrap: true,
-        logo: true,
-        keybinds: true,
-        rounded: false,
-        ascii_markers: false,
-        completed_at_bottom: false,
+) -> Result<Option<CliOptions>> {
+    let mut options = CliOptions {
+        display: config::Display::default(),
         accent: ui::DEFAULT_ACCENT,
         print_version: false,
+        config: None,
     };
     let mut help = false;
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
-        if argument == "--no-wrap" {
-            options.wrap = false;
-        } else if argument == "--no-logo" {
-            options.logo = false;
-        } else if argument == "--no-keybinds" {
-            options.keybinds = false;
-        } else if argument == "--round-corners" {
-            options.rounded = true;
-        } else if argument == "--ascii-markers" {
-            options.ascii_markers = true;
+        let flag = argument.to_str().unwrap_or("");
+        let setting = match flag {
+            "--wrap" | "--no-wrap" => Some((&mut options.display.wrap, flag == "--wrap")),
+            "--logo" | "--no-logo" => Some((&mut options.display.logo, flag == "--logo")),
+            "--keybinds" | "--no-keybinds" => {
+                Some((&mut options.display.keybinds, flag == "--keybinds"))
+            }
+            "--round-corners" | "--square-corners" => Some((
+                &mut options.display.rounded_corners,
+                flag == "--round-corners",
+            )),
+            "--ascii-markers" | "--unicode-markers" => Some((
+                &mut options.display.ascii_markers,
+                flag == "--ascii-markers",
+            )),
+            "--completed-at-bottom" | "--no-completed-at-bottom" => Some((
+                &mut options.display.completed_at_bottom,
+                flag == "--completed-at-bottom",
+            )),
+            _ => None,
+        };
+        if let Some((setting, value)) = setting {
+            if setting.is_some_and(|previous| previous != value) {
+                return Err(format!("contradictory display flags: {flag}").into());
+            }
+            *setting = Some(value);
+        } else if argument == "--config" {
+            if options.config.is_some() {
+                return Err("--config specified more than once".into());
+            }
+            let path = arguments.next().ok_or("--config requires a path")?;
+            if path.is_empty()
+                || path
+                    .to_str()
+                    .is_some_and(|value| value.starts_with("--") || value == "-h")
+            {
+                return Err("--config requires a path".into());
+            }
+            options.config = Some(path.into());
         } else if argument == "--add-to-bottom" {
             // Accepted for compatibility with v0.1.0; insertion is now key-specific.
-        } else if argument == "--completed-at-bottom" {
-            options.completed_at_bottom = true;
         } else if argument == "--version" {
             options.print_version = true;
         } else if argument == "--accent" {
@@ -355,6 +420,72 @@ fn parse_accent(value: &std::ffi::OsStr) -> Result<ratatui::style::Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_arguments(
+        arguments: impl IntoIterator<Item = std::ffi::OsString>,
+    ) -> Result<Option<Options>> {
+        super::parse_arguments(arguments)
+            .map(|options| options.map(|cli| cli.resolve(config::Config::default())))
+    }
+
+    #[test]
+    fn display_precedence_and_conflicts_cover_both_boolean_directions() {
+        let fields = [
+            "wrap",
+            "logo",
+            "keybinds",
+            "rounded_corners",
+            "ascii_markers",
+            "completed_at_bottom",
+        ];
+        let flags = [
+            ("--wrap", "--no-wrap"),
+            ("--logo", "--no-logo"),
+            ("--keybinds", "--no-keybinds"),
+            ("--round-corners", "--square-corners"),
+            ("--ascii-markers", "--unicode-markers"),
+            ("--completed-at-bottom", "--no-completed-at-bottom"),
+        ];
+        let values = |options: Options| {
+            [
+                options.wrap,
+                options.logo,
+                options.keybinds,
+                options.rounded,
+                options.ascii_markers,
+                options.completed_at_bottom,
+            ]
+        };
+        for (index, (yes, no)) in flags.into_iter().enumerate() {
+            for configured in [true, false] {
+                let text = format!("[display]\n{} = {configured}", fields[index]);
+                let config = || toml::from_str::<config::Config>(&text).unwrap();
+                assert_eq!(
+                    values(
+                        super::parse_arguments([])
+                            .unwrap()
+                            .unwrap()
+                            .resolve(config())
+                    )[index],
+                    configured
+                );
+                for (flag, expected) in [(yes, true), (no, false)] {
+                    let options = super::parse_arguments([flag.into()])
+                        .unwrap()
+                        .unwrap()
+                        .resolve(config());
+                    assert_eq!(values(options)[index], expected);
+                }
+            }
+            for pair in [[yes, no], [no, yes]] {
+                assert!(super::parse_arguments(pair.map(Into::into)).is_err());
+            }
+        }
+        assert!(
+            super::parse_arguments(["--config", "one", "--config", "two"].map(Into::into)).is_err()
+        );
+        assert!(super::parse_arguments(["--config"].map(Into::into)).is_err());
+    }
 
     #[test]
     fn history_is_compatible_with_decoded_tasks_not_json_formatting() {

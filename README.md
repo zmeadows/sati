@@ -117,12 +117,13 @@ The add, edit, and search prompts share these shortcuts:
 
 | Flag | Effect |
 | --- | --- |
-| `--no-wrap` | Keep each task on one row. |
-| `--no-logo` | Hide the title in the border. |
-| `--no-keybinds` | Hide the shortcut hints. |
-| `--round-corners` | Use rounded borders. |
-| `--ascii-markers` | Use `>`, `[x]`, and `[>]` as compatibility fallbacks for task markers. |
-| `--completed-at-bottom` | Keep completed tasks below unfinished ones. |
+| `--config PATH` | Use an explicit configuration file. |
+| `--wrap` / `--no-wrap` | Enable / disable task wrapping. |
+| `--logo` / `--no-logo` | Show / hide the border title. |
+| `--keybinds` / `--no-keybinds` | Show / hide shortcut hints. |
+| `--round-corners` / `--square-corners` | Use rounded / sharp borders. |
+| `--ascii-markers` / `--unicode-markers` | Use ASCII / Unicode task markers. |
+| `--completed-at-bottom` / `--no-completed-at-bottom` | Enable / disable completion grouping. |
 | `--accent COLOR` | Set an ANSI color name, hex RGB, or palette index 0–255 (default `lightyellow`). |
 
 Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--ascii-markers` changes only task markers; other UI symbols remain Unicode.
@@ -138,6 +139,37 @@ sati --accent 3
 ```
 
 Run `sati --help` for the full command-line help.
+
+## Configuration
+
+Configuration is optional. Precedence is **CLI > TOML > built-in defaults**.
+
+| Platform | Default file |
+| --- | --- |
+| Linux | `$XDG_CONFIG_HOME/sati/config.toml`, falling back to `~/.config/sati/config.toml` |
+| macOS | `~/Library/Application Support/sati/config.toml` |
+| Windows | `%APPDATA%\sati\config.toml` |
+
+Every section and key is optional. This example shows the built-in display defaults:
+
+```toml
+[display]
+wrap = true
+logo = true
+keybinds = true
+rounded_corners = false
+ascii_markers = false
+completed_at_bottom = false
+```
+
+Use `sati --config ./sati.toml` for another file. sati never creates or edits
+configuration files. A missing default file is harmless; an explicit file must
+exist. Invalid files and unknown keys are errors. Environment directory paths
+must be absolute; `--config` also accepts relative paths without expanding `~`.
+
+CLI pairs override either TOML value: `--no-wrap` disables wrapping, and `--wrap`
+re-enables it. Contradictory pairs are rejected. Accent remains CLI-only.
+Help, version output, and Markdown export do not load display configuration.
 
 ## Export
 

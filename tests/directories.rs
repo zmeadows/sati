@@ -31,6 +31,7 @@ fn command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_sati"));
     command
         .env_remove("XDG_DATA_HOME")
+        .env_remove("XDG_CONFIG_HOME")
         .env_remove("HOME")
         .env_remove("APPDATA")
         .stdin(Stdio::null());
