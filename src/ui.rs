@@ -188,7 +188,13 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
                         word_break.filter(|&offset| offset > 0).unwrap_or(index)
                     };
                     split = Some(boundary);
-                    lines.push(remaining[..boundary].trim_end().to_owned());
+                    // Trim only complete whitespace clusters, preserving marks attached to spaces.
+                    let end = remaining[..boundary]
+                        .grapheme_indices(true)
+                        .rev()
+                        .find(|(_, grapheme)| !grapheme.chars().all(char::is_whitespace))
+                        .map_or(0, |(index, grapheme)| index + grapheme.len());
+                    lines.push(remaining[..end].to_owned());
                 }
                 break;
             }
@@ -201,7 +207,12 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
             lines.push(remaining.to_owned());
             break;
         };
-        remaining = remaining[split..].trim_start();
+        remaining = &remaining[split..];
+        let start = remaining
+            .grapheme_indices(true)
+            .find(|(_, grapheme)| !grapheme.chars().all(char::is_whitespace))
+            .map_or(remaining.len(), |(index, _)| index);
+        remaining = &remaining[start..];
     }
     if lines.is_empty() {
         lines.push(String::new());
@@ -1059,6 +1070,75 @@ mod tests {
         assert_eq!(wrap_text("👩‍💻👩‍💻", 2), ["👩‍💻", "👩‍💻"]);
         assert_eq!(wrap_text("界a", 1), ["�", "a"]);
         assert_eq!(wrap_text("", 4), [""]);
+    }
+
+    #[test]
+    fn wrapping_trims_only_whole_whitespace_graphemes() {
+        for (text, width, expected) in [
+            ("abcd \u{301}X", 4, vec!["abcd", " \u{301}X"]),
+            ("abcd  \u{301}X", 4, vec!["abcd", " \u{301}X"]),
+            ("ab\u{600} cde", 4, vec!["ab\u{600} ", "cde"]),
+            ("ab\u{600}  cde", 4, vec!["ab\u{600} ", "cde"]),
+            ("abcd \u{a0}\u{2003}X", 4, vec!["abcd", "X"]),
+        ] {
+            assert_eq!(wrap_text(text, width), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn wrapped_whitespace_cluster_stays_visible_and_maps_to_its_task() {
+        use ratatui::crossterm::event::{
+            KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = App::new(
+            ["abcd \u{301}X", "last"]
+                .map(|text| Task {
+                    text: text.into(),
+                    completed: false,
+                })
+                .into(),
+        );
+        app.keybinds = false;
+        let mut terminal = Terminal::new(TestBackend::new(12, 5)).unwrap();
+        let mut rows = Rect::default();
+        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        assert_eq!(app.row_tasks, [0, 0, 1]);
+        assert_eq!(terminal.backend().buffer()[(7, 2)].symbol(), " \u{301}");
+        assert_eq!(terminal.backend().buffer()[(8, 2)].symbol(), "X");
+        app.mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 7,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            },
+            rows,
+            &fixture.storage,
+        )
+        .unwrap();
+        assert!(app.tasks[0].completed);
+        assert!(!app.tasks[1].completed);
+        assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+        assert_eq!(app.tasks[0].text, "abcd \u{301}X");
+        for (code, selected) in [(KeyCode::PageDown, 1), (KeyCode::PageUp, 0)] {
+            app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
+                .unwrap();
+            terminal
+                .draw(|frame| {
+                    draw(frame, &mut app);
+                })
+                .unwrap();
+            assert_eq!(app.list.selected(), Some(selected));
+        }
+        terminal.backend_mut().resize(13, 5);
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        assert_eq!(app.row_tasks, [0, 0, 1]);
+        assert_eq!(terminal.backend().buffer()[(11, 1)].symbol(), " \u{301}");
     }
 
     #[test]
