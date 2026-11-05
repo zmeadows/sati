@@ -130,6 +130,7 @@ pub struct App {
     pub row_tasks: Vec<Option<usize>>,
     pub viewport_height: u16,
     pub reveal_selection: bool,
+    pub copy_notice: Option<String>,
     last_search_query: Option<String>,
     history: VecDeque<UndoState>,
     redo_history: VecDeque<UndoState>,
@@ -153,6 +154,7 @@ impl App {
             row_tasks: Vec::new(),
             viewport_height: 0,
             reveal_selection: true,
+            copy_notice: None,
             last_search_query: None,
             history: VecDeque::new(),
             redo_history: VecDeque::new(),
@@ -549,6 +551,13 @@ impl App {
         self.replace(tasks, selected, storage)
     }
 
+    pub fn copy_markdown(&mut self, output: &mut impl std::io::Write) {
+        self.copy_notice = Some(match crate::export::copy(&self.tasks, output) {
+            Ok(()) => "Copy sent to terminal".into(),
+            Err(error) => format!("Copy failed: {error}"),
+        });
+    }
+
     pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
         // Route cancellation through Esc, including its press/repeat policy.
         let key = if self.mode != Mode::Normal
@@ -619,6 +628,7 @@ impl App {
         {
             return Ok(false);
         }
+        self.copy_notice = None;
         // Windows reports AltGr text as Ctrl+Alt; the backend cannot distinguish
         // it from a literal Ctrl+Alt character shortcut. Accept it only in input modes.
         if cfg!(windows)
@@ -803,6 +813,7 @@ impl App {
                             && !key.modifiers.contains(KeyModifiers::SHIFT),
                     );
                 }
+                KeyCode::Char('c') => self.copy_markdown(&mut std::io::stdout().lock()),
                 KeyCode::Char('q') => return Ok(true),
                 KeyCode::Char('u') => self.undo(storage)?,
                 KeyCode::Char('w') => {
@@ -889,6 +900,7 @@ impl App {
     }
 
     pub fn paste(&mut self, text: &str) {
+        self.copy_notice = None;
         if let Mode::Adding(input, _)
         | Mode::Editing { input, .. }
         | Mode::Searching { input, .. } = &mut self.mode
@@ -910,6 +922,7 @@ impl App {
     }
 
     pub fn mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
+        self.copy_notice = None;
         if self.mode != Mode::Normal || !rows.contains((event.column, event.row).into()) {
             return Ok(());
         }
@@ -956,6 +969,100 @@ impl App {
 mod tests {
     use super::*;
     use crate::storage::tests::Fixture;
+
+    #[test]
+    fn clipboard_output_and_errors_leave_tasks_selection_and_histories_unchanged() {
+        struct BrokenOutput;
+        impl std::io::Write for BrokenOutput {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("output unavailable"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        press(&mut app, &fixture, KeyCode::Char(' '));
+        press(&mut app, &fixture, KeyCode::Char('j'));
+        press(&mut app, &fixture, KeyCode::Char('m'));
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert!(app.can_undo() && app.can_redo());
+        let tasks = app.tasks.clone();
+        let selected = app.list.selected();
+        let undo = serde_json::to_value(&app.history).unwrap();
+        let redo = serde_json::to_value(&app.redo_history).unwrap();
+        let saved = fixture.storage.load().unwrap();
+        app.scroll = 2;
+        let mut output = Vec::new();
+        app.copy_markdown(&mut output);
+        let mut expected = Vec::new();
+        crate::export::copy(&tasks, &mut expected).unwrap();
+        assert_eq!(output, expected);
+        assert_eq!(app.copy_notice.as_deref(), Some("Copy sent to terminal"));
+        for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+            app.key(
+                KeyEvent {
+                    kind,
+                    ..KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)
+                },
+                &fixture.storage,
+            )
+            .unwrap();
+            assert_eq!(app.copy_notice.as_deref(), Some("Copy sent to terminal"));
+        }
+        app.copy_markdown(&mut BrokenOutput);
+        assert_eq!(
+            app.copy_notice.as_deref(),
+            Some("Copy failed: output unavailable")
+        );
+        assert_eq!(app.tasks, tasks);
+        assert_eq!(app.list.selected(), selected);
+        assert_eq!(app.scroll, 2);
+        assert_eq!(serde_json::to_value(&app.history).unwrap(), undo);
+        assert_eq!(serde_json::to_value(&app.redo_history).unwrap(), redo);
+        assert_eq!(fixture.storage.load().unwrap(), saved);
+        press(&mut app, &fixture, KeyCode::Down);
+        assert!(app.copy_notice.is_none());
+    }
+
+    #[test]
+    fn copy_key_remains_text_or_is_ignored_outside_normal_mode() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(1);
+        let tasks = app.tasks.clone();
+        for mode in [
+            Mode::Adding("".into(), AddPlacement::End),
+            Mode::Editing {
+                index: 0,
+                input: "".into(),
+            },
+            Mode::Searching {
+                input: "".into(),
+                original: Some(0),
+            },
+            Mode::SearchResults {
+                input: "task".into(),
+                original: Some(0),
+            },
+            Mode::ConfirmClear,
+        ] {
+            app.mode = mode;
+            press(&mut app, &fixture, KeyCode::Char('c'));
+            match &app.mode {
+                Mode::Adding(input, _)
+                | Mode::Editing { input, .. }
+                | Mode::Searching { input, .. } => assert_eq!(input.text(), "c"),
+                Mode::SearchResults { input, .. } => assert_eq!(input.text(), "task"),
+                Mode::ConfirmClear => {}
+                Mode::Normal => panic!("copy changed mode"),
+            }
+            assert!(app.copy_notice.is_none());
+            assert_eq!(app.tasks, tasks);
+            assert!(!app.can_undo() && !app.can_redo());
+        }
+        assert!(fixture.storage.load().unwrap().is_empty());
+    }
 
     fn reopen_with_history(app: App, fixture: &Fixture) -> App {
         let grouped = app.completed_at_bottom;

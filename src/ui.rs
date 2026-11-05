@@ -56,8 +56,26 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let completed = app.tasks.iter().filter(|task| task.completed).count();
     let counter = format!("[{completed}/{}]", app.tasks.len());
     if sections[0].height >= 2 && counter.width() + 2 <= usize::from(sections[0].width) {
-        block =
-            block.title_bottom(Line::styled(counter, Style::default().fg(MUTED)).right_aligned());
+        block = block.title_bottom(
+            Line::styled(counter.as_str(), Style::default().fg(MUTED)).right_aligned(),
+        );
+    }
+    if let Some(notice) = &app.copy_notice {
+        let available = usize::from(sections[0].width).saturating_sub(counter.width() + 3);
+        let short = if notice.starts_with("Copy failed") {
+            "Copy failed"
+        } else {
+            "Copy sent"
+        };
+        let message = if notice.width() <= available {
+            notice.as_str()
+        } else {
+            short
+        };
+        if sections[0].height >= 2 && message.width() <= available {
+            block = block
+                .title_bottom(Line::styled(message, Style::default().fg(MUTED)).left_aligned());
+        }
     }
     let rows = block.inner(sections[0]);
     frame.render_widget(block, sections[0]);
@@ -687,6 +705,64 @@ mod tests {
     }
     use crate::app::{AddPlacement, Task};
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn copy_feedback_uses_the_border_without_changing_the_viewport_or_counter() {
+        for width in [0, 1, 2, 8, 15, 17, 24, 80] {
+            for keybinds in [false, true] {
+                for rounded in [false, true] {
+                    let mut app = App::new(Vec::new());
+                    app.keybinds = keybinds;
+                    app.rounded = rounded;
+                    let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+                    let mut before = Rect::default();
+                    terminal
+                        .draw(|frame| before = draw(frame, &mut app))
+                        .unwrap();
+                    app.copy_markdown(&mut Vec::new());
+                    for notice in ["Copy sent to terminal", "Copy failed: output unavailable"] {
+                        app.copy_notice = Some(notice.into());
+                        let mut after = Rect::default();
+                        terminal
+                            .draw(|frame| after = draw(frame, &mut app))
+                            .unwrap();
+                        assert_eq!(before, after);
+                        let text = screen(&terminal);
+                        if width >= 7 {
+                            assert!(text.contains("[0/0]"));
+                        }
+                        if width >= 40 {
+                            assert!(text.contains(notice));
+                        } else if width == 24 {
+                            assert!(text.contains(if notice.starts_with("Copy failed") {
+                                "Copy failed"
+                            } else {
+                                "Copy sent"
+                            }));
+                        }
+                        if width >= 2 {
+                            let buffer = terminal.backend().buffer();
+                            assert_eq!(
+                                buffer[(0, after.bottom())].symbol(),
+                                if rounded { "╰" } else { "└" }
+                            );
+                            assert_eq!(
+                                buffer[(width - 1, after.bottom())].symbol(),
+                                if rounded { "╯" } else { "┘" }
+                            );
+                        }
+                    }
+                    app.copy_notice = None;
+                    terminal
+                        .draw(|frame| {
+                            draw(frame, &mut app);
+                        })
+                        .unwrap();
+                    assert!(!screen(&terminal).contains("Copy"));
+                }
+            }
+        }
+    }
 
     #[test]
     fn completion_counter_fits_the_bottom_border_in_all_modes_and_styles() {

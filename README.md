@@ -66,6 +66,7 @@ Then run `sati`.
 | Move one page | `PageDown` / `PageUp` |
 | Reorder task | `J` / `K`, `Shift+↓` / `Shift+↑` |
 | Group tasks by prefix | `s` |
+| Copy checklist as Markdown | `c` |
 | Append task | `a` |
 | Insert below selection | `o` |
 | Insert above selection | `O` |
@@ -120,6 +121,25 @@ The add, edit, and search prompts share these shortcuts:
 Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--ascii-markers` changes only task markers; other UI symbols remain Unicode.
 
 Run `sati --help` for the full command-line help.
+
+## Export
+
+Export Markdown to stdout or a file, even while the TUI is running:
+
+```sh
+sati export
+sati export > tasks.md
+sati export -o tasks.md
+sati export -o tasks.md --force
+```
+
+Use `--output PATH` or `-o PATH` for file output. Existing files require `--force`;
+sati's own state files are protected. Carried tasks export as ordinary unchecked
+items, with task order and literal text preserved.
+
+Press `c` in the checklist to send the same Markdown to the terminal clipboard
+using OSC 52. The brief “Copy sent to terminal” message clears on subsequent
+activity; clipboard acceptance depends on terminal and multiplexer support.
 
 ## Data
 

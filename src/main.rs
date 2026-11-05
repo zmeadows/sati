@@ -1,4 +1,5 @@
 mod app;
+mod export;
 mod input;
 mod search;
 mod storage;
@@ -31,7 +32,7 @@ use ratatui::crossterm::event::EnableBracketedPaste;
 use app::App;
 use storage::{Result, Storage};
 
-const USAGE: &str = "Usage: sati [--no-wrap] [--no-logo] [--no-keybinds] [--round-corners] [--ascii-markers] [--completed-at-bottom] [--accent '#RRGGBB'] [--version]";
+const USAGE: &str = "Usage: sati [--no-wrap] [--no-logo] [--no-keybinds] [--round-corners] [--ascii-markers] [--completed-at-bottom] [--accent '#RRGGBB'] [--version]\n       sati export [--output PATH | -o PATH] [--force]";
 
 // Report repeats for plain characters and Enter too; alternate keys preserve shifted text.
 const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
@@ -63,9 +64,17 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
-    let Some(options) = parse_arguments(std::env::args_os().skip(1))? else {
+    let mut arguments = std::env::args_os().skip(1).peekable();
+    if arguments
+        .peek()
+        .is_some_and(|argument| argument == "export")
+    {
+        arguments.next();
+        return export::run(arguments);
+    }
+    let Some(options) = parse_arguments(arguments)? else {
         println!(
-            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--no-keybinds      Hide the keybind list.\n--round-corners    Use rounded checklist corners (default: sharp).\n--ascii-markers    Use >, [x], and [>] instead of Unicode task markers.\n--completed-at-bottom Keep completed tasks below unfinished tasks.\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e).\n--version          Print the version.\n--help, -h         Show this help."
+            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--no-keybinds      Hide the keybind list.\n--round-corners    Use rounded checklist corners (default: sharp).\n--ascii-markers    Use >, [x], and [>] instead of Unicode task markers.\n--completed-at-bottom Keep completed tasks below unfinished tasks.\n--accent '#RRGGBB' Set the selection accent (default: #e78a4e).\n--version          Print the version.\n--help, -h         Show this help.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file."
         );
         return Ok(());
     };
@@ -118,6 +127,7 @@ fn run() -> Result<()> {
                 }
                 Event::Mouse(mouse) => app.mouse(mouse, rows, &storage)?,
                 Event::Paste(text) => app.paste(&text),
+                Event::Resize(_, _) => app.copy_notice = None,
                 _ => {}
             }
         }
