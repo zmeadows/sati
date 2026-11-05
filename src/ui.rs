@@ -185,7 +185,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
             let mut line = Line::from(vec![
                 Span::styled(
                     if row == 0 && selected == Some(index) {
-                        "›"
+                        focus_marker(app.unicode_markers)
                     } else {
                         " "
                     },
@@ -264,6 +264,10 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
             app.accent,
         );
     }
+}
+
+fn focus_marker(unicode: bool) -> &'static str {
+    if unicode { "▸" } else { ">" }
 }
 
 fn task_checkbox(task: &Task, unicode: bool) -> &'static str {
@@ -682,9 +686,11 @@ mod tests {
 
     #[test]
     fn unicode_checkboxes_are_single_cell_and_preserve_rendering_and_search() {
-        for glyph in ["\u{2713}", "\u{21aa}"] {
+        for glyph in ["\u{2713}", "\u{21aa}", ">", "\u{25b8}"] {
             assert_eq!(glyph.width(), 1);
         }
+        assert_eq!(focus_marker(false), ">");
+        assert_eq!(focus_marker(true), "\u{25b8}");
         let tasks = vec![
             Task {
                 text: "ordinary task wraps here".into(),
@@ -748,17 +754,18 @@ mod tests {
                     assert_eq!(app.row_tasks, mapping);
                     assert_eq!(app.scroll, scroll);
                     let mut unicode = terminal.backend().buffer().clone();
-                    if !searching {
-                        for cell in &mut unicode.content {
-                            match cell.symbol() {
-                                "✓" => {
-                                    cell.set_symbol("x");
-                                }
-                                "↪" => {
-                                    cell.set_symbol(">");
-                                }
-                                _ => {}
+                    for cell in &mut unicode.content {
+                        match cell.symbol() {
+                            "▸" => {
+                                cell.set_symbol(">");
                             }
+                            "✓" if !searching => {
+                                cell.set_symbol("x");
+                            }
+                            "↪" if !searching => {
+                                cell.set_symbol(">");
+                            }
+                            _ => {}
                         }
                     }
                     assert_eq!(ascii, unicode);
@@ -788,7 +795,7 @@ mod tests {
             .unwrap();
         let mapping = app.row_tasks.clone();
         assert!(mapping.len() > 1);
-        assert!(screen(&terminal).contains("› [>] carry"));
+        assert!(screen(&terminal).contains("> [>] carry"));
         assert_eq!(terminal.backend().buffer()[(3, 1)].fg, app.accent);
         assert_eq!(terminal.backend().buffer()[(1, 2)].symbol(), " ");
         app.key(
@@ -1225,7 +1232,7 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(1, 1)].symbol(), "›");
+        assert_eq!(buffer[(1, 1)].symbol(), ">");
         assert_eq!(buffer[(1, 3)].symbol(), " ");
         for y in [1, 2] {
             assert_eq!(buffer[(4, y)].symbol(), "■");
@@ -1951,7 +1958,7 @@ mod tests {
         assert!(app.tasks[1].completed);
         terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
         assert_eq!(app.row_tasks[app.scroll], Some(1));
-        assert!(screen(&terminal).contains("› [x] long"));
+        assert!(screen(&terminal).contains("> [x] long"));
         app.key(
             KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
             &fixture.storage,
@@ -2041,7 +2048,7 @@ mod tests {
         let marker = &buffer[(1, 1)];
         let checkbox = &buffer[(3, 1)];
         let text = &buffer[(7, 1)];
-        assert_eq!(marker.symbol(), "›");
+        assert_eq!(marker.symbol(), ">");
         assert_eq!(marker.fg, app.accent);
         assert_eq!(marker.bg, Color::Reset);
         assert_eq!(checkbox.fg, app.accent);
@@ -2384,11 +2391,11 @@ mod tests {
         terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
         assert_eq!(app.row_tasks, [0, 0, 0, 1].map(Some));
         let rendered = screen(&terminal);
-        assert!(rendered.contains("› [ ] alpha beta"));
+        assert!(rendered.contains("> [ ] alpha beta"));
         assert!(rendered.contains("      gamma"));
         assert!(rendered.contains("      delta"));
         assert!(rendered.contains("  [ ] next"));
-        assert_eq!(rendered.matches('›').count(), 1);
+        assert_eq!(rendered.matches('>').count(), 1);
         assert_eq!(terminal.backend().buffer()[(1, 1)].fg, DEFAULT_ACCENT);
         let click = |row| MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
