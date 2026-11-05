@@ -61,6 +61,12 @@ Tasks are saved automatically to:
 | macOS | `~/Library/Application Support/sati/tasks.json` |
 | Windows | `%APPDATA%\sati\tasks.json` |
 
+## Credits
+
+Inspired by [Meowdo](https://github.com/Sycorlax/Meowdo).
+
+Built with [Ratatui](https://ratatui.rs).
+
 ## License
 
 [MIT](LICENSE).
