@@ -27,6 +27,15 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 - **Undo and redo.** Up to 256 changes in either direction, with history still available after restarting the program.
 - **Display options.** Wrap long tasks, group completed items, and change some style settings with command-line flags.
 
+## Suggested usage
+
+There's no prescribed way to use `sati`, but a few habits have worked well for me:
+
+- **Keep it always one keystroke away.** I leave `sati` running in a dedicated terminal and use `Alt+grave` to show or hide it through my window manager. It's always available without occupying screen space.
+- **Keep tasks short and actionable.** Think of it as a checklist, not a place for detailed notes or project plans.
+- **Start fresh regularly.** At the end of the day, clear the list and plan for tomorrow. Carry over the handful of unfinished tasks that still matter. The carryover marker (`m`) protects them from being cleared.
+- **Use ordering however you like.** Move important tasks toward the top, or place tasks in the order you know you'll want to complete them.
+
 ## Installation
 
 Prebuilt executables are available from [GitHub Releases](https://github.com/zmeadows/sati/releases).
