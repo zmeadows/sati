@@ -342,6 +342,7 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
         let tasks: Vec<_> = [("one 日本語", false), ("two 🪷", true)]
             .map(|(text, completed)| app::Task {
+                carried: false,
                 text: text.into(),
                 completed,
             })
@@ -383,6 +384,7 @@ mod tests {
         let mut app = App::new(
             [("done", true), ("active", false)]
                 .map(|(text, completed)| app::Task {
+                    carried: false,
                     text: text.into(),
                     completed,
                 })
@@ -414,6 +416,7 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
         let tasks: Vec<_> = ["one", "two"]
             .map(|text| app::Task {
+                carried: false,
                 text: text.into(),
                 completed: false,
             })
@@ -459,6 +462,7 @@ mod tests {
             ("active 2", false),
         ]
         .map(|(text, completed)| app::Task {
+            carried: false,
             text: text.into(),
             completed,
         })

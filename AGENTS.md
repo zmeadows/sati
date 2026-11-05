@@ -25,7 +25,7 @@
 
 ### Tasks and app state
 
-- A task has only `text` and `completed`; list order is meaningful. Do not add a persistent schema field casually.
+- A task has `text`, `completed`, and optional `carried` (default false); list order is meaningful. Completed tasks cannot be carried. `m` toggles carryover on unfinished tasks; `D` preserves carried tasks.
 - Task text is a nonempty, trimmed, single-line description. Preserve arbitrary valid Unicode; reject corrupt persisted data rather than silently repairing or overwriting it.
 - The normal list selection refers to a **task**, not a wrapped display row. Keep indices valid after deletion, reordering, clearing, and undo.
 - `a` appends, `o` inserts below selection, and `O` inserts above selection. With `--completed-at-bottom`, new tasks stay in the incomplete section. Keep insertion, navigation, and undo coherent with this grouping.

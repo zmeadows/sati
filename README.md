@@ -23,6 +23,7 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 - **One local list.** Changes are saved automatically, without accounts or synchronization.
 - **Keyboard-first, with mouse support.** Navigate, reorder, and complete tasks from the keyboard. Click a task to toggle it, or scroll with the mouse wheel.
 - **Search in place.** Find tasks as you type, see matching text highlighted, and jump to a result without filtering or rearranging the list.
+- **Carryover.** Mark unfinished tasks with `m` (`[>]`) to keep them when clearing the list.
 - **Undo and redo.** Up to 256 changes in either direction, with history still available after restarting the program.
 - **Display options.** Wrap long tasks, group completed items, and change some style settings with command-line flags.
 
@@ -60,7 +61,9 @@ Then run `sati`.
 | Edit task | `e` |
 | Check / uncheck | `Space`, `Enter` |
 | Delete task | `d`, `Delete` |
-| Clear completed / clear all | `x` / `D` |
+| Toggle carryover | `m` |
+| Clear completed | `x` |
+| Clear unmarked tasks (preserve carried) | `D` |
 | Undo | `u`, `Ctrl+Z` |
 | Redo | `Ctrl+R`, `Ctrl+Y` |
 | Search | `/`, `Ctrl+F` |

@@ -98,7 +98,7 @@ impl Storage {
         let tasks: Vec<Task> =
             serde_json::from_slice(&contents).map_err(|error| invalid_file(error.to_string()))?;
         for (index, task) in tasks.iter().enumerate() {
-            if let Some(problem) = task.text_error() {
+            if let Some(problem) = task.validation_error() {
                 return Err(invalid_file(format!("task {} {problem}", index + 1)).into());
             }
         }
@@ -268,6 +268,43 @@ pub mod tests {
     }
 
     #[test]
+    fn legacy_tasks_default_to_unmarked_and_invalid_carryover_is_left_untouched() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+        let legacy = r#"[{"text":"old","completed":false},{"text":"done","completed":true}]"#;
+        fs::write(fixture.task_path(), legacy).unwrap();
+        let mut tasks = fixture.storage.load().unwrap();
+        assert!(tasks.iter().all(|task| !task.carried));
+        let ordinary = serde_json::to_value(&tasks).unwrap();
+        assert!(
+            ordinary
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|task| task.get("carried").is_none())
+        );
+        tasks[0].carried = true;
+        fixture.storage.save(&tasks).unwrap();
+        assert_eq!(fixture.storage.load().unwrap(), tasks);
+        let json = serde_json::to_value(&tasks).unwrap();
+        assert_eq!(json[0]["carried"], true);
+        assert!(json[1].get("carried").is_none());
+        for invalid in [
+            r#"[{"text":"bad","completed":true,"carried":true}]"#,
+            r#"[{"text":"bad","completed":false,"carried":null}]"#,
+            r#"[{"text":"bad","completed":false,"carried":"true"}]"#,
+        ] {
+            fs::write(fixture.task_path(), invalid).unwrap();
+            let error = fixture.storage.load().unwrap_err().to_string();
+            assert!(error.contains("invalid task file"));
+            if invalid.contains(r#""completed":true"#) {
+                assert!(error.contains("task 1 cannot be both completed and carried"));
+            }
+            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), invalid);
+        }
+    }
+
+    #[test]
     fn history_io_is_optional_atomic_private_and_independent_of_tasks() {
         let fixture = Fixture::new();
         let directory = fixture.task_path().parent().unwrap();
@@ -307,6 +344,7 @@ pub mod tests {
         fixture
             .storage
             .save(&[Task {
+                carried: false,
                 text: "external edit".into(),
                 completed: false,
             }])
@@ -407,6 +445,7 @@ pub mod tests {
             fixture
                 .storage
                 .save(&[Task {
+                    carried: false,
                     text: "Private task".into(),
                     completed: false,
                 }])
@@ -518,6 +557,7 @@ pub mod tests {
                 .contains("already running")
         );
         let tasks = vec![Task {
+            carried: false,
             text: "Keep me".into(),
             completed: false,
         }];
@@ -598,10 +638,12 @@ pub mod tests {
         assert!(fixture.storage.load().unwrap().is_empty());
         let tasks = vec![
             Task {
+                carried: false,
                 text: "Read 日本語 🪷".into(),
                 completed: false,
             },
             Task {
+                carried: false,
                 text: "Keep this position".into(),
                 completed: true,
             },
@@ -633,6 +675,7 @@ pub mod tests {
     fn temporary_collisions_preserve_existing_files_and_live_data() {
         let fixture = Fixture::new();
         let tasks = vec![Task {
+            carried: false,
             text: "Keep the original".into(),
             completed: true,
         }];
@@ -703,10 +746,12 @@ pub mod tests {
         for text in invalid {
             let tasks = vec![
                 Task {
+                    carried: false,
                     text: "valid".into(),
                     completed: false,
                 },
                 Task {
+                    carried: false,
                     text,
                     completed: true,
                 },
@@ -731,11 +776,11 @@ pub mod tests {
     fn valid_unicode_and_long_task_text_loads_unchanged() {
         let fixture = Fixture::new();
         let tasks = vec![
-            Task {
+            Task { carried: false,
                 text: "日本語 e\u{301} 👩‍💻 👍🏽 — [punctuation!]  spaces\u{a0}inside\u{2003}text\u{2028}and\u{2029}text".into(),
                 completed: true,
             },
-            Task { text: "long🪷".repeat(100_000), completed: false },
+            Task { carried: false, text: "long🪷".repeat(100_000), completed: false },
         ];
         fixture.storage.save(&tasks).unwrap();
         let original = fs::read(fixture.task_path()).unwrap();
@@ -748,6 +793,7 @@ pub mod tests {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path()).unwrap();
         let tasks = vec![Task {
+            carried: false,
             text: "Recover me".into(),
             completed: false,
         }];
@@ -779,6 +825,7 @@ pub mod tests {
         fixture
             .storage
             .save(&[Task {
+                carried: false,
                 text: "Original tasks".into(),
                 completed: true,
             }])
@@ -791,6 +838,7 @@ pub mod tests {
             .open(fixture.task_path())
             .unwrap();
         let replacement = vec![Task {
+            carried: false,
             text: "Recover me".into(),
             completed: false,
         }];
@@ -821,6 +869,7 @@ pub mod tests {
         fixture
             .storage
             .save(&[Task {
+                carried: false,
                 text: "Old list".into(),
                 completed: false,
             }])
@@ -834,6 +883,7 @@ pub mod tests {
             return;
         }
         let replacement = vec![Task {
+            carried: false,
             text: "New list".into(),
             completed: true,
         }];

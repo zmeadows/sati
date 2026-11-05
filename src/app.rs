@@ -16,11 +16,15 @@ const HISTORY_LIMIT: usize = 256;
 pub struct Task {
     pub text: String,
     pub completed: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub carried: bool,
 }
 
 impl Task {
-    pub(crate) fn text_error(&self) -> Option<&'static str> {
-        if self.text.is_empty() {
+    pub(crate) fn validation_error(&self) -> Option<&'static str> {
+        if self.completed && self.carried {
+            Some("cannot be both completed and carried")
+        } else if self.text.is_empty() {
             Some("text is empty")
         } else if self.text.trim() != self.text {
             Some("text has leading or trailing whitespace")
@@ -85,7 +89,7 @@ impl HistoryCache {
     fn valid_for(&self, tasks: &[Task], completed_at_bottom: bool) -> bool {
         let valid_state = |tasks: &[Task], selected: Option<usize>| {
             selected.is_none_or(|index| index < tasks.len())
-                && tasks.iter().all(|task| task.text_error().is_none())
+                && tasks.iter().all(|task| task.validation_error().is_none())
                 && (!completed_at_bottom
                     || !tasks
                         .windows(2)
@@ -377,6 +381,7 @@ impl App {
     fn toggle(&mut self, index: usize, storage: &Storage) -> Result<()> {
         let mut tasks = self.tasks.clone();
         tasks[index].completed = !tasks[index].completed;
+        tasks[index].carried = false;
         let selected = if self.completed_at_bottom {
             let task = tasks.remove(index);
             let boundary = tasks
@@ -391,6 +396,41 @@ impl App {
         self.replace(tasks, Some(selected), storage)?;
         self.reveal_selection = selected != index;
         Ok(())
+    }
+
+    fn toggle_carryover(&mut self, storage: &Storage) -> Result<()> {
+        let Some(index) = self.list.selected() else {
+            return Ok(());
+        };
+        if self.tasks[index].completed {
+            return Ok(());
+        }
+        let mut tasks = self.tasks.clone();
+        tasks[index].carried = !tasks[index].carried;
+        self.replace(tasks, Some(index), storage)
+    }
+
+    fn clear_unmarked(&mut self, storage: &Storage) -> Result<()> {
+        if self.tasks.iter().all(|task| task.carried) {
+            return Ok(());
+        }
+        // Keep a surviving selection, otherwise choose the closest original position.
+        let anchor = self.list.selected().unwrap_or(0);
+        let selected = self
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| task.carried)
+            .enumerate()
+            .min_by_key(|(_, (index, _))| index.abs_diff(anchor))
+            .map(|(index, _)| index);
+        let tasks = self
+            .tasks
+            .iter()
+            .filter(|task| task.carried)
+            .cloned()
+            .collect();
+        self.replace(tasks, selected, storage)
     }
 
     fn move_selected(&mut self, down: bool, storage: &Storage) -> Result<()> {
@@ -588,6 +628,7 @@ impl App {
                             tasks.insert(
                                 index,
                                 Task {
+                                    carried: false,
                                     text,
                                     completed: false,
                                 },
@@ -602,7 +643,7 @@ impl App {
             },
             Mode::ConfirmClear => match key.code {
                 KeyCode::Enter => {
-                    self.replace(Vec::new(), None, storage)?;
+                    self.clear_unmarked(storage)?;
                     self.mode = Mode::Normal;
                 }
                 KeyCode::Esc => self.mode = Mode::Normal,
@@ -616,6 +657,7 @@ impl App {
                     self.wrap = !self.wrap;
                     self.reveal_selection = true;
                 }
+                KeyCode::Char('m') => self.toggle_carryover(storage)?,
                 KeyCode::Char('x') => self.clear_completed(storage)?,
                 KeyCode::Char('J') => self.move_selected(true, storage)?,
                 KeyCode::Char('K') => self.move_selected(false, storage)?,
@@ -675,7 +717,9 @@ impl App {
                         self.replace(tasks, selected, storage)?;
                     }
                 }
-                KeyCode::Char('D') if !self.tasks.is_empty() => self.mode = Mode::ConfirmClear,
+                KeyCode::Char('D') if self.tasks.iter().any(|task| !task.carried) => {
+                    self.mode = Mode::ConfirmClear
+                }
                 _ => {}
             },
             Mode::SearchResults { .. } => unreachable!("results keys handled above"),
@@ -763,6 +807,269 @@ mod tests {
         reopened.completed_at_bottom = grouped;
         reopened.restore_history(fixture.storage.load_history().unwrap());
         reopened
+    }
+
+    #[test]
+    fn carryover_no_ops_preserve_redo_and_completed_clearing_keeps_carried_tasks() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(1);
+        for _ in 0..2 {
+            press(&mut app, &fixture, KeyCode::Char('m'));
+        }
+        app.undo(&fixture.storage).unwrap();
+        let snapshot = |app: &App| {
+            serde_json::to_value((
+                &app.tasks,
+                app.list.selected(),
+                &app.history,
+                &app.redo_history,
+            ))
+            .unwrap()
+        };
+        let carried = snapshot(&app);
+        let bytes = std::fs::read(fixture.task_path()).unwrap();
+        for code in [KeyCode::Char('D'), KeyCode::Char('x')] {
+            press(&mut app, &fixture, code);
+            assert_eq!(app.mode, Mode::Normal);
+            assert_eq!(snapshot(&app), carried);
+            assert_eq!(std::fs::read(fixture.task_path()).unwrap(), bytes);
+        }
+        press(&mut app, &fixture, KeyCode::Enter);
+        press(&mut app, &fixture, KeyCode::Char('a'));
+        app.paste("temporary");
+        press(&mut app, &fixture, KeyCode::Enter);
+        app.undo(&fixture.storage).unwrap();
+        let completed = snapshot(&app);
+        assert!(app.can_redo());
+        press(&mut app, &fixture, KeyCode::Char('m'));
+        assert_eq!(snapshot(&app), completed);
+        let mut mixed = app_with_tasks(2);
+        mixed.tasks[0].carried = true;
+        mixed.tasks[1].completed = true;
+        press(&mut mixed, &fixture, KeyCode::Char('x'));
+        assert_eq!(mixed.tasks.len(), 1);
+        assert!(mixed.tasks[0].carried);
+        mixed.undo(&fixture.storage).unwrap();
+        assert!(mixed.tasks[0].carried && mixed.tasks[1].completed);
+        let mut empty = App::new(Vec::new());
+        press(&mut empty, &fixture, KeyCode::Char('m'));
+        assert!(empty.tasks.is_empty() && !empty.can_undo());
+    }
+
+    #[test]
+    fn carryover_completion_history_and_restart_are_coherent() {
+        for grouped in [false, true] {
+            for action in [KeyCode::Enter, KeyCode::Char(' '), KeyCode::Null] {
+                let fixture = Fixture::new();
+                let mut app = app_with_tasks(2);
+                app.completed_at_bottom = grouped;
+                press(&mut app, &fixture, KeyCode::Char('m'));
+                assert!(app.tasks[0].carried);
+                assert_eq!(app.history.len(), 1);
+                press(&mut app, &fixture, KeyCode::Char('m'));
+                assert!(!app.tasks[0].carried);
+                app.undo(&fixture.storage).unwrap();
+                assert!(app.tasks[0].carried);
+                app = reopen_with_history(app, &fixture);
+                assert!(app.tasks[0].carried && app.can_redo());
+                if action == KeyCode::Null {
+                    app.row_tasks = vec![Some(0), Some(1)];
+                    app.mouse(
+                        MouseEvent {
+                            kind: MouseEventKind::Down(MouseButton::Left),
+                            column: 1,
+                            row: 1,
+                            modifiers: KeyModifiers::NONE,
+                        },
+                        Rect::new(1, 1, 20, 2),
+                        &fixture.storage,
+                    )
+                    .unwrap();
+                } else {
+                    press(&mut app, &fixture, action);
+                }
+                let index = app.list.selected().unwrap();
+                assert!(app.tasks[index].completed && !app.tasks[index].carried);
+                let history = app.history.len();
+                press(&mut app, &fixture, KeyCode::Char('m'));
+                assert_eq!(app.history.len(), history);
+                app.undo(&fixture.storage).unwrap();
+                assert!(app.tasks[0].carried && !app.tasks[0].completed);
+                app = reopen_with_history(app, &fixture);
+                app.redo(&fixture.storage).unwrap();
+                let index = app.list.selected().unwrap();
+                assert!(app.tasks[index].completed && !app.tasks[index].carried);
+                press(&mut app, &fixture, KeyCode::Enter);
+                assert!(
+                    app.tasks
+                        .iter()
+                        .all(|task| !task.completed && !task.carried)
+                );
+                assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+            }
+        }
+    }
+
+    #[test]
+    fn clearing_preserves_carried_order_selection_and_repeated_resets() {
+        for selection in [None, Some(0), Some(1), Some(2), Some(3), Some(4)] {
+            let fixture = Fixture::new();
+            let mut app = app_with_tasks(5);
+            app.tasks[1].carried = true;
+            app.tasks[2].completed = true;
+            app.tasks[3].carried = true;
+            app.list.select(selection);
+            let original = app.tasks.clone();
+            let survivors = vec![original[1].clone(), original[3].clone()];
+            press(&mut app, &fixture, KeyCode::Char('D'));
+            assert_eq!(app.mode, Mode::ConfirmClear);
+            assert_eq!(app.tasks, original);
+            press(&mut app, &fixture, KeyCode::Enter);
+            assert_eq!(app.tasks, survivors);
+            assert_eq!(app.history.len(), 1);
+            let expected = if selection.is_some_and(|index| index >= 3) {
+                1
+            } else {
+                0
+            };
+            assert_eq!(app.list.selected(), Some(expected));
+            for _ in 0..3 {
+                press(&mut app, &fixture, KeyCode::Char('D'));
+            }
+            assert_eq!(app.mode, Mode::Normal);
+            assert_eq!(app.history.len(), 1);
+            app.undo(&fixture.storage).unwrap();
+            assert_eq!(app.tasks, original);
+            assert_eq!(app.list.selected(), selection);
+            app.redo(&fixture.storage).unwrap();
+            assert_eq!(app.tasks, survivors);
+            app = reopen_with_history(app, &fixture);
+            assert_eq!(app.tasks, survivors);
+            press(&mut app, &fixture, KeyCode::Char('x'));
+            assert_eq!(app.tasks, survivors);
+            for key in [KeyCode::Char('d'), KeyCode::Delete] {
+                press(&mut app, &fixture, key);
+            }
+            assert!(app.tasks.is_empty());
+        }
+    }
+
+    #[test]
+    fn carryover_survives_other_operations_and_failed_saves_preserve_history() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(2);
+        press(&mut app, &fixture, KeyCode::Char('m'));
+        press(&mut app, &fixture, KeyCode::Char('J'));
+        assert!(app.tasks[1].carried);
+        press(&mut app, &fixture, KeyCode::Char('e'));
+        app.paste(" edited");
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert!(app.tasks[1].carried);
+        press(&mut app, &fixture, KeyCode::Char('a'));
+        app.paste("new");
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert!(!app.tasks[2].carried);
+        app.undo(&fixture.storage).unwrap();
+        let snapshot = |app: &App| {
+            serde_json::to_value((
+                &app.tasks,
+                app.list.selected(),
+                &app.history,
+                &app.redo_history,
+            ))
+            .unwrap()
+        };
+        let original = snapshot(&app);
+        let data = fixture.directory.join("data");
+        let backup = fixture.directory.join("backup");
+        std::fs::rename(&data, &backup).unwrap();
+        std::fs::write(&data, "blocked").unwrap();
+        assert!(app.toggle_carryover(&fixture.storage).is_err());
+        assert_eq!(snapshot(&app), original);
+        press(&mut app, &fixture, KeyCode::Char('D'));
+        assert!(
+            app.key(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &fixture.storage
+            )
+            .is_err()
+        );
+        assert_eq!(snapshot(&app), original);
+        std::fs::remove_file(&data).unwrap();
+        std::fs::rename(backup, data).unwrap();
+        assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+        app.mode = Mode::Normal;
+        app.list.select(None);
+        let before = snapshot(&app);
+        press(&mut app, &fixture, KeyCode::Char('m'));
+        assert_eq!(snapshot(&app), before);
+        for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+            app.key(
+                KeyEvent::new_with_kind(KeyCode::Char('m'), KeyModifiers::NONE, kind),
+                &fixture.storage,
+            )
+            .unwrap();
+            assert_eq!(snapshot(&app), before);
+        }
+        for mode in [
+            Mode::Adding("".into(), AddPlacement::End),
+            Mode::Editing {
+                index: 0,
+                input: "".into(),
+            },
+            Mode::Searching {
+                input: "".into(),
+                original: None,
+            },
+            Mode::SearchResults {
+                input: "".into(),
+                original: None,
+            },
+            Mode::ConfirmClear,
+        ] {
+            app.mode = mode;
+            press(&mut app, &fixture, KeyCode::Char('m'));
+            assert_eq!(app.tasks, fixture.storage.load().unwrap());
+            assert_eq!(app.history.len(), original[2].as_array().unwrap().len());
+            assert_eq!(
+                app.redo_history.len(),
+                original[3].as_array().unwrap().len()
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_history_defaults_carryover_and_invalid_snapshots_are_rejected() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(1);
+        app.toggle(0, &fixture.storage).unwrap();
+        app.undo(&fixture.storage).unwrap();
+        let tasks = app.tasks.clone();
+        let legacy = serde_json::to_value(app.into_history_cache()).unwrap();
+        assert!(!legacy.to_string().contains("carried"));
+        let cache: HistoryCache = serde_json::from_value(legacy).unwrap();
+        assert!(cache.valid_for(&tasks, false));
+        let mut app = App::new(tasks.clone());
+        app.restore_history(cache);
+        app.redo(&fixture.storage).unwrap();
+        assert!(app.tasks[0].completed && !app.tasks[0].carried);
+        app.undo(&fixture.storage).unwrap();
+        let valid = serde_json::to_value(app.into_history_cache()).unwrap();
+        for stack in ["tasks", "undo", "redo"] {
+            let mut invalid = valid.clone();
+            if stack == "tasks" {
+                invalid[stack][0]["completed"] = serde_json::json!(true);
+                invalid[stack][0]["carried"] = serde_json::json!(true);
+            } else {
+                invalid[stack] = serde_json::json!([{"tasks":[{"text":"bad","completed":true,"carried":true}],"selected":0}]);
+            }
+            let cache: HistoryCache = serde_json::from_value(invalid).unwrap();
+            assert!(!cache.valid_for(&tasks, false));
+            let mut app = App::new(tasks.clone());
+            app.restore_history(cache);
+            assert!(!app.can_undo() && !app.can_redo());
+            assert_eq!(app.tasks, tasks);
+        }
     }
 
     #[test]
@@ -1053,6 +1360,7 @@ mod tests {
         App::new(
             (0..count)
                 .map(|index| Task {
+                    carried: false,
                     text: format!("task {index}"),
                     completed: false,
                 })
@@ -1232,6 +1540,7 @@ mod tests {
                 ("alpha last", true),
             ]
             .map(|(text, completed)| Task {
+                carried: false,
                 text: text.into(),
                 completed,
             })
@@ -1430,6 +1739,7 @@ mod tests {
         let fixture = Fixture::new();
         let original: Vec<_> = [("a", false), ("b", false), ("c", true), ("d", true)]
             .map(|(text, completed)| Task {
+                carried: false,
                 text: text.into(),
                 completed,
             })
@@ -2704,6 +3014,7 @@ mod tests {
                     expected.insert(
                         expected_index,
                         Task {
+                            carried: false,
                             text: "New task".into(),
                             completed: false,
                         },

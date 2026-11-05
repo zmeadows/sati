@@ -168,6 +168,8 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
                 }
             } else if task.completed {
                 " [x] "
+            } else if task.carried {
+                " [>] "
             } else {
                 " [ ] "
             };
@@ -388,7 +390,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         return Vec::new();
     }
     let keys = Style::default().fg(TEXT).add_modifier(Modifier::BOLD);
-    let redo_hint = |lines: &mut [Line<'static>]| {
+    let extra_hints = |lines: &mut [Line<'static>]| {
         if app.mode == Mode::Normal
             && app.can_redo()
             && let Some(line) = lines
@@ -399,8 +401,22 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             line.push_span(Span::styled("Ctrl+R", keys));
             line.push_span(Span::raw(" Redo"));
         }
+        if app.mode == Mode::Normal
+            && app
+                .list
+                .selected()
+                .is_some_and(|index| !app.tasks[index].completed)
+            && let Some(line) = lines
+                .iter_mut()
+                .find(|line| line.width() + "  m Carry".width() <= usize::from(width))
+        {
+            line.push_span(Span::raw("  "));
+            line.push_span(Span::styled("m", keys));
+            line.push_span(Span::raw(" Carry"));
+        }
     };
     let available = |key: &str| match key {
+        "D" => app.tasks.iter().any(|task| !task.carried),
         "u" => app.can_undo(),
         "x" => app.tasks.iter().any(|task| task.completed),
         _ => true,
@@ -422,7 +438,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             _ => vec![
                 vec![("j/k", "Navigate"), ("Space", "Toggle"), ("w", "Wrap")],
                 vec![("a/e", "Add/edit"), ("d", "Delete"), ("u", "Undo")],
-                vec![("x", "Clear done"), ("D", "Clear all"), ("q", "Quit")],
+                vec![("x", "Clear done"), ("D", "Clear"), ("q", "Quit")],
             ],
         };
         for row in &mut rows {
@@ -439,13 +455,13 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             }
             lines = wrap_shortcuts(&rows, width);
         }
-        redo_hint(&mut lines);
+        extra_hints(&mut lines);
         return lines;
     }
     let columns = [
         [("j/k", "Navigate"), ("a", "Add"), ("d", "Delete")],
         [("g/G", "First/last"), ("e", "Edit"), ("x", "Clear done")],
-        [("J/K", "Move"), ("Space", "Toggle"), ("D", "Clear all")],
+        [("J/K", "Move"), ("Space", "Toggle"), ("D", "Clear")],
         [("w", "Wrap"), ("u", "Undo"), ("q", "Quit")],
     ];
     let mut rows = [
@@ -480,7 +496,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         lines[0].push_span(Span::styled("/", keys));
         lines[0].push_span(Span::raw(" Search"));
     }
-    redo_hint(&mut lines);
+    extra_hints(&mut lines);
     lines
 }
 
@@ -625,17 +641,17 @@ fn draw_confirmation(frame: &mut Frame, area: Rect) {
     let lines = if inner.height >= 5 {
         vec![
             Line::raw(""),
-            Line::raw("Clear all tasks?"),
+            Line::raw("Clear unmarked tasks?"),
             Line::raw(""),
             Line::raw("Enter: Confirm    Esc: Cancel"),
         ]
     } else if inner.height >= 2 {
         vec![
-            Line::raw("Clear all tasks?"),
+            Line::raw("Clear unmarked tasks?"),
             Line::raw("Enter: Confirm  Esc: Cancel"),
         ]
     } else {
-        vec![Line::raw("Clear all tasks?")]
+        vec![Line::raw("Clear unmarked tasks?")]
     };
     frame.render_widget(
         Paragraph::new(lines)
@@ -659,6 +675,69 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
+    fn carryover_checkboxes_preserve_layout_and_search_markers() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = App::new(vec![Task {
+            text: "carry words across wrapped lines".into(),
+            completed: false,
+            carried: true,
+        }]);
+        app.keybinds = false;
+        app.accent = Color::Rgb(169, 182, 101);
+        let mut terminal = Terminal::new(TestBackend::new(24, 12)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        let mapping = app.row_tasks.clone();
+        assert!(mapping.len() > 1);
+        assert!(screen(&terminal).contains("› [>] carry"));
+        assert_eq!(terminal.backend().buffer()[(3, 1)].fg, app.accent);
+        assert_eq!(terminal.backend().buffer()[(1, 2)].symbol(), " ");
+        app.key(
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+            &fixture.storage,
+        )
+        .unwrap();
+        app.paste("carry");
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        assert_eq!(app.row_tasks, mapping);
+        assert!(screen(&terminal).contains('■'));
+        assert!(!screen(&terminal).contains("[>]"));
+        app.key(
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &fixture.storage,
+        )
+        .unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        assert_eq!(app.row_tasks, mapping);
+        assert!(screen(&terminal).contains("[>]"));
+        assert!(app.tasks[0].carried);
+        app.keybinds = true;
+        for width in [1, 18, 40, 60, 80] {
+            let lines = shortcut_lines(&app, width);
+            assert!(lines.len() <= 3);
+            assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
+        }
+        assert!(
+            shortcut_lines(&app, 80)
+                .iter()
+                .any(|line| line.to_string().contains("m Carry"))
+        );
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
     fn inline_add_preview_matches_saved_position_without_changing_tasks() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         for count in [0usize, 4] {
@@ -673,6 +752,7 @@ mod tests {
                         let mut app = App::new(
                             (0..count)
                                 .map(|index| Task {
+                                    carried: false,
                                     text: format!("task {index}"),
                                     completed: if grouped { index >= 2 } else { index % 2 == 0 },
                                 })
@@ -768,14 +848,17 @@ mod tests {
             let fixture = crate::storage::tests::Fixture::new();
             let mut app = App::new(vec![
                 Task {
+                    carried: false,
                     text: "before".into(),
                     completed: false,
                 },
                 Task {
+                    carried: false,
                     text: format!("{} end", "original e\u{301}界👩‍💻 ".repeat(30)),
                     completed: true,
                 },
                 Task {
+                    carried: false,
                     text: "after".into(),
                     completed: true,
                 },
@@ -873,6 +956,7 @@ mod tests {
             let mut app = App::new(
                 (0..20)
                     .map(|index| Task {
+                        carried: false,
                         text: format!("task {index} {}end", "e\u{301}界👩‍💻 ".repeat(12)),
                         completed: index >= 10,
                     })
@@ -966,6 +1050,7 @@ mod tests {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = App::new(vec![Task {
+            carried: false,
             text: "needle".into(),
             completed: true,
         }]);
@@ -1022,6 +1107,7 @@ mod tests {
                 ("unrelated", false),
             ]
             .map(|(text, completed)| Task {
+                carried: false,
                 text: text.into(),
                 completed,
             })
@@ -1098,14 +1184,17 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = App::new(vec![
             Task {
+                carried: false,
                 text: "tag: abCDef abcdef".into(),
                 completed: false,
             },
             Task {
+                carried: false,
                 text: "nonmatching".into(),
                 completed: false,
             },
             Task {
+                carried: false,
                 text: format!("{}tag: abcdef", "long ".repeat(50)),
                 completed: true,
             },
@@ -1196,6 +1285,7 @@ mod tests {
     fn search_feedback_legends_and_contrast_remain_compact() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = App::new(vec![Task {
+            carried: false,
             text: "ordinary".into(),
             completed: true,
         }]);
@@ -1283,14 +1373,17 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = App::new(vec![
             Task {
+                carried: false,
                 text: "wrapped task ".repeat(40).trim_end().into(),
                 completed: false,
             },
             Task {
+                carried: false,
                 text: "other active task".into(),
                 completed: false,
             },
             Task {
+                carried: false,
                 text: "done".into(),
                 completed: true,
             },
@@ -1343,6 +1436,7 @@ mod tests {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = App::new(vec![Task {
+            carried: false,
             text: "task".into(),
             completed: false,
         }]);
@@ -1374,7 +1468,7 @@ mod tests {
                 "Space",
                 "Undo",
                 "Clear done",
-                "Clear all",
+                "Clear",
                 "Quit",
                 "Wrap",
             ] {
@@ -1383,7 +1477,7 @@ mod tests {
         }
         assert_eq!(
             text(&app, 40),
-            " j/k Navigate    Space Toggle     w Wrap\n a/e Add/edit    d     Delete     u Undo\n x   Clear done  D     Clear all  q Quit"
+            " j/k Navigate    Space Toggle  w Wrap\n a/e Add/edit    d     Delete  u Undo\n x   Clear done  D     Clear   q Quit"
         );
         for mode in [
             Mode::Adding(TextInput::default(), AddPlacement::End),
@@ -1423,6 +1517,7 @@ mod tests {
         let mut app = App::new(
             (0..12)
                 .map(|index| Task {
+                    carried: false,
                     text: format!("task {index} {}", "wrapped words ".repeat(4)),
                     completed: false,
                 })
@@ -1481,6 +1576,7 @@ mod tests {
     fn tiny_terminals_and_resizing_are_safe_in_every_mode() {
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
         let mut app = App::new(vec![Task {
+            carried: false,
             text: "日本語 🪷".into(),
             completed: false,
         }]);
@@ -1529,6 +1625,7 @@ mod tests {
                 "short",
             ]
             .map(|text| Task {
+                carried: false,
                 text: text.into(),
                 completed: false,
             })
@@ -1565,6 +1662,7 @@ mod tests {
         let mut app = App::new(
             (0..40)
                 .map(|index| Task {
+                    carried: false,
                     text: format!("task {index}"),
                     completed: false,
                 })
@@ -1689,6 +1787,7 @@ mod tests {
         let mut app = App::new(
             (0..1000)
                 .map(|index| Task {
+                    carried: false,
                     text: format!("task {index}"),
                     completed: false,
                 })
@@ -1720,14 +1819,17 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = App::new(vec![
             Task {
+                carried: false,
                 text: "long wrapped task with many words".into(),
                 completed: false,
             },
             Task {
+                carried: false,
                 text: "next".into(),
                 completed: false,
             },
             Task {
+                carried: false,
                 text: "already done".into(),
                 completed: true,
             },
@@ -1787,6 +1889,7 @@ mod tests {
             for completed in [false, true] {
                 for (width, wrap) in [(12, true), (40, true), (40, false)] {
                     let mut app = App::new(vec![Task {
+                        carried: false,
                         text: text.into(),
                         completed,
                     }]);
@@ -1829,6 +1932,7 @@ mod tests {
     fn completed_text_stays_muted_with_accented_marker_and_checkbox() {
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         let mut app = App::new(vec![Task {
+            carried: false,
             text: "Completed".into(),
             completed: true,
         }]);
@@ -1859,10 +1963,12 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(12, 8)).unwrap();
         let mut app = App::new(vec![
             Task {
+                carried: false,
                 text: "日本語".repeat(100),
                 completed: false,
             },
             Task {
+                carried: false,
                 text: "next".into(),
                 completed: false,
             },
@@ -1900,6 +2006,7 @@ mod tests {
         for edit in [false, true] {
             for width in [1, 2, 8, 16, 40] {
                 let mut app = App::new(vec![Task {
+                    carried: false,
                     text: text.clone(),
                     completed: false,
                 }]);
@@ -2113,6 +2220,7 @@ mod tests {
         let mut app = App::new(
             ["abcd \u{301}X", "last"]
                 .map(|text| Task {
+                    carried: false,
                     text: text.into(),
                     completed: false,
                 })
@@ -2167,10 +2275,12 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(18, 12)).unwrap();
         let mut app = App::new(vec![
             Task {
+                carried: false,
                 text: "alpha beta gamma delta".into(),
                 completed: false,
             },
             Task {
+                carried: false,
                 text: "next".into(),
                 completed: false,
             },
@@ -2208,10 +2318,12 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(18, 8)).unwrap();
         let mut app = App::new(vec![
             Task {
+                carried: false,
                 text: format!("{}THE END", "word ".repeat(30)),
                 completed: false,
             },
             Task {
+                carried: false,
                 text: "next".into(),
                 completed: false,
             },
