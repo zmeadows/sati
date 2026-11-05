@@ -137,15 +137,13 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
             .chars()
             .map(|c| if c.is_control() { ' ' } else { c })
             .collect();
-        let tag_end = text
-            .find(':')
-            .filter(|&end| end > 0 && !text[..end].chars().any(char::is_whitespace))
-            .map_or(0, |end| {
-                text.grapheme_indices(true)
-                    .take_while(|(index, _)| *index <= end)
-                    .last()
-                    .map_or(0, |(index, grapheme)| index + grapheme.len())
-            });
+        let tag_end = crate::app::task_prefix(&text).map_or(0, |prefix| {
+            let end = prefix.len();
+            text.grapheme_indices(true)
+                .take_while(|(index, _)| *index <= end)
+                .last()
+                .map_or(0, |(index, grapheme)| index + grapheme.len())
+        });
         let searching = app.search_query().is_some();
         let matches = app
             .search_query()

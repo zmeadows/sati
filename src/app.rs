@@ -36,6 +36,12 @@ impl Task {
     }
 }
 
+pub(crate) fn task_prefix(text: &str) -> Option<&str> {
+    text.find(':')
+        .filter(|&end| end > 0 && !text[..end].chars().any(char::is_whitespace))
+        .map(|end| &text[..end])
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AddPlacement {
     End,
@@ -481,6 +487,32 @@ impl App {
         self.replace(tasks, selected, storage)
     }
 
+    fn group_by_prefix(&mut self, storage: &Storage) -> Result<()> {
+        if self.tasks.len() < 2 {
+            return Ok(());
+        }
+        let mut order: Vec<_> = (0..self.tasks.len()).collect();
+        order.sort_by_cached_key(|&index| {
+            let task = &self.tasks[index];
+            (
+                self.completed_at_bottom && task.completed,
+                task_prefix(&task.text).map(str::to_lowercase),
+            )
+        });
+        if order.iter().copied().eq(0..self.tasks.len()) {
+            return Ok(());
+        }
+        let selected = self
+            .list
+            .selected()
+            .and_then(|before| order.iter().position(|&index| index == before));
+        let tasks = order
+            .into_iter()
+            .map(|index| self.tasks[index].clone())
+            .collect();
+        self.replace(tasks, selected, storage)
+    }
+
     fn move_selected(&mut self, down: bool, storage: &Storage) -> Result<()> {
         let Some(index) = self.list.selected() else {
             return Ok(());
@@ -777,6 +809,7 @@ impl App {
                     self.wrap = !self.wrap;
                     self.reveal_selection = true;
                 }
+                KeyCode::Char('s') => self.group_by_prefix(storage)?,
                 KeyCode::Char('m') => self.toggle_carryover(storage)?,
                 KeyCode::Char('x') => self.clear_completed(storage)?,
                 KeyCode::Char('J') => self.move_selected(true, storage)?,
@@ -934,6 +967,229 @@ mod tests {
         reopened.completed_at_bottom = grouped;
         reopened.restore_history(fixture.storage.load_history().unwrap());
         reopened
+    }
+
+    #[test]
+    fn prefix_recognition_matches_the_existing_leading_colon_rule() {
+        for (text, expected) in [
+            ("Work: Fix bug", Some("Work")),
+            ("Work:Fix bug", Some("Work")),
+            ("Fix the bug: urgent", None),
+            (":empty", None),
+            ("no colon", None),
+            ("one\u{2003}two: task", None),
+            ("家👩‍💻: task", Some("家👩‍💻")),
+            ("e\u{301}:\u{301} task", Some("e\u{301}")),
+            ("foo:bar:baz", Some("foo")),
+        ] {
+            assert_eq!(task_prefix(text), expected);
+        }
+    }
+
+    #[test]
+    fn prefix_grouping_is_stable_and_preserves_duplicate_selection_and_history() {
+        let source: Vec<_> = [
+            (
+                format!("Work: {}", "Z words ".repeat(12)).trim().to_owned(),
+                false,
+                false,
+            ),
+            ("Home: A".into(), false, true),
+            ("wOrk: A".into(), true, false),
+            ("Buy groceries".into(), false, false),
+            ("home: Z".into(), false, false),
+            ("Read book".into(), true, false),
+            (
+                format!("Work: {}", "Z words ".repeat(12)).trim().to_owned(),
+                false,
+                false,
+            ),
+            ("Homely: M".into(), false, false),
+            ("Fix bug: urgent".into(), false, false),
+            (":not a prefix".into(), false, false),
+        ]
+        .into_iter()
+        .map(|(text, completed, carried)| Task {
+            text,
+            completed,
+            carried,
+        })
+        .collect();
+        for (grouped, input, output) in [
+            (
+                false,
+                [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                [3, 5, 8, 9, 1, 4, 7, 0, 2, 6],
+            ),
+            (
+                true,
+                [0, 1, 3, 4, 6, 7, 8, 9, 2, 5],
+                [3, 8, 9, 1, 4, 7, 0, 6, 5, 2],
+            ),
+        ] {
+            for selected in std::iter::once(None).chain((0..source.len()).map(Some)) {
+                let fixture = Fixture::new();
+                let original: Vec<_> = input.iter().map(|&i| source[i].clone()).collect();
+                let expected: Vec<_> = output.iter().map(|&i| source[i].clone()).collect();
+                let mut app = App::new(original.clone());
+                app.completed_at_bottom = grouped;
+                app.list.select(selected);
+                app.keybinds = false;
+                press(&mut app, &fixture, KeyCode::Char('s'));
+                let next =
+                    selected.map(|before| output.iter().position(|&i| i == input[before]).unwrap());
+                assert_eq!(app.tasks, expected);
+                assert_eq!(app.list.selected(), next);
+                assert_eq!(app.history.len(), 1);
+                assert_eq!(fixture.storage.load().unwrap(), expected);
+                let mut terminal =
+                    ratatui::Terminal::new(ratatui::backend::TestBackend::new(24, 6)).unwrap();
+                let mut rows = Rect::default();
+                terminal
+                    .draw(|frame| rows = crate::ui::draw(frame, &mut app))
+                    .unwrap();
+                if let Some(index) = next {
+                    assert!(
+                        app.row_tasks[app.scroll
+                            ..(app.scroll + usize::from(rows.height)).min(app.row_tasks.len())]
+                            .contains(&Some(index))
+                    );
+                }
+                app = reopen_with_history(app, &fixture);
+                app.undo(&fixture.storage).unwrap();
+                assert_eq!(app.tasks, original);
+                assert_eq!(app.list.selected(), selected);
+                app.redo(&fixture.storage).unwrap();
+                assert_eq!(app.tasks, expected);
+                assert_eq!(app.list.selected(), next);
+                press(&mut app, &fixture, KeyCode::Char('s'));
+                assert_eq!(app.history.len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn grouping_no_ops_and_failed_saves_preserve_both_histories() {
+        for sorted in [false, true] {
+            let fixture = Fixture::new();
+            let mut app = app_with_tasks(2);
+            app.tasks[0].text = if sorted { "a: first" } else { "z: first" }.into();
+            app.tasks[1].text = if sorted { "z: last" } else { "a: last" }.into();
+            app.toggle(0, &fixture.storage).unwrap();
+            app.toggle(1, &fixture.storage).unwrap();
+            app.undo(&fixture.storage).unwrap();
+            let state = |app: &App| {
+                serde_json::to_value((
+                    &app.tasks,
+                    app.list.selected(),
+                    &app.history,
+                    &app.redo_history,
+                ))
+                .unwrap()
+            };
+            let before = state(&app);
+            let data = fixture.directory.join("data");
+            let backup = fixture.directory.join("backup");
+            std::fs::rename(&data, &backup).unwrap();
+            std::fs::write(&data, "blocked").unwrap();
+            let result = app.key(
+                KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+                &fixture.storage,
+            );
+            assert_eq!(result.is_ok(), sorted);
+            assert_eq!(state(&app), before);
+            std::fs::remove_file(&data).unwrap();
+            std::fs::rename(backup, data).unwrap();
+            assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+            if !sorted {
+                press(&mut app, &fixture, KeyCode::Char('s'));
+                assert!(!app.can_redo());
+                assert_eq!(app.history.len(), 2);
+            }
+        }
+        for texts in [
+            vec![],
+            vec!["alone"],
+            vec!["one", "two", "three"],
+            vec!["a: Z", "A: A", "aa: x", "b: x"],
+        ] {
+            let fixture = Fixture::new();
+            let mut app = App::new(
+                texts
+                    .into_iter()
+                    .map(|text| Task {
+                        text: text.into(),
+                        completed: false,
+                        carried: false,
+                    })
+                    .collect(),
+            );
+            let before = app.tasks.clone();
+            press(&mut app, &fixture, KeyCode::Char('s'));
+            assert_eq!(app.tasks, before);
+            assert!(!app.can_undo());
+            assert!(!fixture.task_path().exists());
+        }
+        let fixture = Fixture::new();
+        let mut app = App::new(
+            ["z: task", "A: Z", "a: A"]
+                .map(|text| Task {
+                    text: text.into(),
+                    completed: false,
+                    carried: false,
+                })
+                .into(),
+        );
+        press(&mut app, &fixture, KeyCode::Char('s'));
+        assert_eq!(
+            app.tasks
+                .iter()
+                .map(|task| task.text.as_str())
+                .collect::<Vec<_>>(),
+            ["A: Z", "a: A", "z: task"]
+        );
+    }
+
+    #[test]
+    fn prefix_grouping_is_normal_mode_press_only() {
+        let fixture = Fixture::new();
+        for mode in [
+            Mode::Normal,
+            Mode::Adding("".into(), AddPlacement::End),
+            Mode::Editing {
+                index: 0,
+                input: "".into(),
+            },
+            Mode::Searching {
+                input: "".into(),
+                original: Some(0),
+            },
+            Mode::SearchResults {
+                input: "task".into(),
+                original: Some(0),
+            },
+            Mode::ConfirmClear,
+        ] {
+            let mut app = app_with_tasks(2);
+            app.tasks[0].text = "z: task".into();
+            app.tasks[1].text = "a: task".into();
+            app.mode = mode;
+            let original = app.tasks.clone();
+            for kind in [KeyEventKind::Release, KeyEventKind::Repeat] {
+                app.key(
+                    KeyEvent::new_with_kind(KeyCode::Char('s'), KeyModifiers::NONE, kind),
+                    &fixture.storage,
+                )
+                .unwrap();
+                assert_eq!(app.tasks, original);
+            }
+            if app.mode != Mode::Normal {
+                press(&mut app, &fixture, KeyCode::Char('s'));
+                assert_eq!(app.tasks, original);
+            }
+            assert!(!app.can_undo() && !app.can_redo());
+            assert!(!fixture.task_path().exists());
+        }
     }
 
     #[test]

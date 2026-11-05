@@ -65,6 +65,7 @@ Then run `sati`.
 | First / last task | `g` / `G`, `Home` / `End` |
 | Move one page | `PageDown` / `PageUp` |
 | Reorder task | `J` / `K`, `Shift+↓` / `Shift+↑` |
+| Group tasks by prefix | `s` |
 | Append task | `a` |
 | Insert below selection | `o` |
 | Insert above selection | `O` |
@@ -82,6 +83,8 @@ Then run `sati`.
 | Quit | `q` |
 
 With `--completed-at-bottom`, new tasks stay in the incomplete section.
+
+Press `s` to group tasks manually by their leading prefix (such as `Work:`). Unprefixed tasks come first, followed by case-insensitive alphabetical prefix groups; order within each group is preserved. With `--completed-at-bottom`, unfinished and completed tasks are grouped separately.
 
 ### While typing
 
