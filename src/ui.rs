@@ -345,15 +345,15 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     }
     let keys = Style::default().fg(TEXT).add_modifier(Modifier::BOLD);
     let redo_hint = |lines: &mut [Line<'static>]| {
-        if app.mode == Mode::Normal && app.can_redo() {
-            if let Some(line) = lines
+        if app.mode == Mode::Normal
+            && app.can_redo()
+            && let Some(line) = lines
                 .iter_mut()
                 .find(|line| line.width() + "  Ctrl+R Redo".width() <= usize::from(width))
-            {
-                line.push_span(Span::raw("  "));
-                line.push_span(Span::styled("Ctrl+R", keys));
-                line.push_span(Span::raw(" Redo"));
-            }
+        {
+            line.push_span(Span::raw("  "));
+            line.push_span(Span::styled("Ctrl+R", keys));
+            line.push_span(Span::raw(" Redo"));
         }
     };
     let available = |key: &str| match key {

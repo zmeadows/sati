@@ -163,7 +163,7 @@ struct TerminalModes {
 impl TerminalModes {
     fn enable_input(&self, output: &mut impl io::Write, enhanced: bool) -> io::Result<()> {
         enable_optional(output, &self.mouse, EnableMouseCapture)?;
-        // Crossterm 0.28's Windows console reader does not emit Paste events.
+        // Crossterm's Windows console reader does not emit Paste events.
         #[cfg(unix)]
         enable_optional(output, &self.paste, EnableBracketedPaste)?;
         if enhanced {

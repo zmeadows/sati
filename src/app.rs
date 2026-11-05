@@ -442,18 +442,15 @@ impl App {
         if cfg!(windows)
             && key.modifiers.difference(KeyModifiers::SHIFT)
                 == (KeyModifiers::CONTROL | KeyModifiers::ALT)
-        {
-            if let (
+            && let (
                 Mode::Adding(input) | Mode::Editing { input, .. } | Mode::Searching { input, .. },
                 KeyCode::Char(character),
             ) = (&mut self.mode, key.code)
-            {
-                if !character.is_control() {
-                    input.insert(character.encode_utf8(&mut [0; 4]));
-                    self.refresh_search();
-                    return Ok(false);
-                }
-            }
+            && !character.is_control()
+        {
+            input.insert(character.encode_utf8(&mut [0; 4]));
+            self.refresh_search();
+            return Ok(false);
         }
         // Only the explicitly supported input shortcuts may consume other Control events.
         if key
@@ -513,12 +510,11 @@ impl App {
             if key.code == KeyCode::Enter {
                 if self.search_query() == Some("") {
                     self.finish_search(false);
-                } else if self.list.selected().is_some() {
-                    if let Mode::Searching { input, original } =
+                } else if self.list.selected().is_some()
+                    && let Mode::Searching { input, original } =
                         std::mem::replace(&mut self.mode, Mode::Normal)
-                    {
-                        self.mode = Mode::SearchResults { input, original };
-                    }
+                {
+                    self.mode = Mode::SearchResults { input, original };
                 }
                 return Ok(false);
             }
@@ -696,15 +692,15 @@ impl App {
                 .min(self.row_tasks.len().saturating_sub(height));
                 let end = (self.scroll + height).min(self.row_tasks.len());
                 let visible = &self.row_tasks[self.scroll..end];
-                if let Some(selected) = self.list.selected() {
-                    if !visible.contains(&selected) {
-                        self.list
-                            .select(if event.kind == MouseEventKind::ScrollDown {
-                                visible.last().copied()
-                            } else {
-                                visible.first().copied()
-                            });
-                    }
+                if let Some(selected) = self.list.selected()
+                    && !visible.contains(&selected)
+                {
+                    self.list
+                        .select(if event.kind == MouseEventKind::ScrollDown {
+                            visible.last().copied()
+                        } else {
+                            visible.first().copied()
+                        });
                 }
                 self.reveal_selection = false;
             }

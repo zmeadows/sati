@@ -11,8 +11,8 @@
 
 ## Stack and source layout
 
-- Rust 2024 edition; minimum supported Rust version (MSRV) **1.85** (`Cargo.toml`).
-- Ratatui **0.29** with its Crossterm backend. Import Crossterm via **`ratatui::crossterm`**, not an independently versioned direct dependency.
+- Rust 2024 edition; minimum supported Rust version (MSRV) **1.88** (`Cargo.toml`).
+- Ratatui **0.30.2** with its Crossterm backend. Import Crossterm via **`ratatui::crossterm`**, not an independently versioned direct dependency.
 - Serde/JSON for persisted tasks; `fs4` for advisory file locks; `unicode-segmentation` and `unicode-width` for text handling.
 - `src/main.rs`: CLI arguments, startup, terminal lifecycle, event loop, and platform-specific terminal capabilities.
 - `src/app.rs`: `Task`, application modes, key/mouse dispatch, task mutations, selection, scrolling, and bounded undo history.
@@ -73,10 +73,10 @@ cargo build --release --locked
 When possible, also check the declared MSRV:
 
 ```sh
-cargo +1.85.0 check --locked --all-targets
+cargo +1.88.0 check --locked --all-targets
 ```
 
-`.github/workflows/ci.yml` checks Linux, macOS, and Windows; strict Clippy runs on all three, while formatting and Rust 1.85 checks run on Ubuntu. Report commands you could not run, rather than claiming they passed.
+`.github/workflows/ci.yml` checks Linux, macOS, and Windows; strict Clippy runs on all three, while formatting and Rust 1.88 checks run on Ubuntu. Report commands you could not run, rather than claiming they passed.
 
 ## Scope discipline
 
