@@ -241,7 +241,22 @@ impl App {
         {
             return Ok(false);
         }
-        // Only the explicitly supported input shortcuts may consume Control events.
+        // Windows reports AltGr text as Ctrl+Alt; the backend cannot distinguish
+        // it from a literal Ctrl+Alt character shortcut. Accept it only in input modes.
+        if cfg!(windows)
+            && key.modifiers.difference(KeyModifiers::SHIFT)
+                == (KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            if let (Mode::Adding(input) | Mode::Editing { input, .. }, KeyCode::Char(character)) =
+                (&mut self.mode, key.code)
+            {
+                if !character.is_control() {
+                    input.insert(character.encode_utf8(&mut [0; 4]));
+                    return Ok(false);
+                }
+            }
+        }
+        // Only the explicitly supported input shortcuts may consume other Control events.
         if key
             .modifiers
             .intersects(KeyModifiers::ALT | KeyModifiers::SUPER)
@@ -576,10 +591,7 @@ mod tests {
             for (code, modifiers) in [
                 (KeyCode::Delete, KeyModifiers::CONTROL),
                 (KeyCode::Char('u'), KeyModifiers::CONTROL),
-                (
-                    KeyCode::Char('a'),
-                    KeyModifiers::CONTROL | KeyModifiers::ALT,
-                ),
+                (KeyCode::Left, KeyModifiers::CONTROL | KeyModifiers::ALT),
                 (
                     KeyCode::Char('e'),
                     KeyModifiers::CONTROL | KeyModifiers::SHIFT,
@@ -612,6 +624,77 @@ mod tests {
                 app.key(KeyEvent::new(code, KeyModifiers::CONTROL), &fixture.storage)
                     .unwrap();
                 assert_eq!(format!("{:?}", app.mode), original_mode);
+                assert_eq!(app.tasks.len(), 1);
+                assert!(!app.can_undo());
+            }
+        }
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn altgr_characters_are_windows_input_only_and_respect_event_kinds() {
+        let fixture = Fixture::new();
+        let ctrl_alt = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        for edit in [false, true] {
+            for kind in [
+                KeyEventKind::Press,
+                KeyEventKind::Repeat,
+                KeyEventKind::Release,
+            ] {
+                for modifiers in [
+                    ctrl_alt,
+                    ctrl_alt | KeyModifiers::SHIFT,
+                    ctrl_alt | KeyModifiers::SUPER,
+                ] {
+                    for character in ['@', '{', '€', 'ł', 'A', 'a', 'e', '\u{301}', '\n', '\0'] {
+                        let mut app = app_with_tasks(1);
+                        let original = app.tasks.clone();
+                        let mut input = TextInput::from("e\u{301}👩‍💻suffix");
+                        input.set_cursor("e\u{301}".len());
+                        let mut expected = input.clone();
+                        if cfg!(windows)
+                            && kind != KeyEventKind::Release
+                            && !modifiers.contains(KeyModifiers::SUPER)
+                            && !character.is_control()
+                        {
+                            expected.insert(character.encode_utf8(&mut [0; 4]));
+                        }
+                        app.mode = if edit {
+                            Mode::Editing { index: 0, input }
+                        } else {
+                            Mode::Adding(input)
+                        };
+                        assert!(
+                            !app.key(
+                                KeyEvent::new_with_kind(KeyCode::Char(character), modifiers, kind),
+                                &fixture.storage,
+                            )
+                            .unwrap()
+                        );
+                        let actual = match &app.mode {
+                            Mode::Adding(input) | Mode::Editing { input, .. } => input,
+                            _ => panic!("AltGr must not change mode"),
+                        };
+                        assert_eq!(actual, &expected, "{character:?} {modifiers:?} {kind:?}");
+                        assert_eq!(app.tasks, original);
+                        assert!(!app.can_undo());
+                    }
+                }
+            }
+        }
+        for mode in [Mode::Normal, Mode::ConfirmClear] {
+            let mut app = app_with_tasks(1);
+            app.mode = mode;
+            let original = format!("{:?}", app.mode);
+            for character in ['a', 'e', 'd', 'D', 'u', 'q', ' '] {
+                assert!(
+                    !app.key(
+                        KeyEvent::new(KeyCode::Char(character), ctrl_alt),
+                        &fixture.storage
+                    )
+                    .unwrap()
+                );
+                assert_eq!(format!("{:?}", app.mode), original);
                 assert_eq!(app.tasks.len(), 1);
                 assert!(!app.can_undo());
             }
