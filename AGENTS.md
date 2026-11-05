@@ -76,7 +76,7 @@ When possible, also check the declared MSRV:
 cargo +1.85.0 check --locked --all-targets
 ```
 
-`.github/workflows/ci.yml` checks Linux, macOS, and Windows; formatting and Clippy run on Ubuntu, and the Ubuntu job also checks Rust 1.85. Report commands you could not run, rather than claiming they passed.
+`.github/workflows/ci.yml` checks Linux, macOS, and Windows; strict Clippy runs on all three, while formatting and Rust 1.85 checks run on Ubuntu. Report commands you could not run, rather than claiming they passed.
 
 ## Scope discipline
 
