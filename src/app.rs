@@ -168,6 +168,22 @@ impl App {
         self.reveal_selection = true;
     }
 
+    fn navigate_unfinished(&mut self, forward: bool) {
+        let len = self.tasks.len();
+        let unfinished = |&index: &usize| !self.tasks[index].completed;
+        let next = if forward {
+            let start = self.list.selected().map_or(0, |index| index + 1);
+            (start..len).chain(0..start).find(unfinished)
+        } else {
+            let end = self.list.selected().unwrap_or(len);
+            (0..end).rev().chain((end..len).rev()).find(unfinished)
+        };
+        if let Some(index) = next {
+            self.list.select(Some(index));
+            self.reveal_selection = true;
+        }
+    }
+
     pub fn insertion_index(&self, placement: AddPlacement) -> usize {
         let index = match placement {
             AddPlacement::End => self.tasks.len(),
@@ -473,6 +489,9 @@ impl App {
 
     pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
         let repeat_allowed = match &self.mode {
+            Mode::Normal if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) => {
+                key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
+            }
             Mode::Normal => {
                 key.modifiers.is_empty()
                     && matches!(
@@ -683,6 +702,13 @@ impl App {
                 }
                 KeyCode::Char('j') | KeyCode::Down => self.navigate(true),
                 KeyCode::Char('k') | KeyCode::Up => self.navigate(false),
+                KeyCode::Tab | KeyCode::BackTab
+                    if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
+                {
+                    self.navigate_unfinished(
+                        key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT),
+                    );
+                }
                 KeyCode::PageUp => self.page(false),
                 KeyCode::PageDown => self.page(true),
                 KeyCode::Char('g' | 'G') | KeyCode::Home | KeyCode::End
@@ -819,6 +845,163 @@ mod tests {
         reopened.completed_at_bottom = grouped;
         reopened.restore_history(fixture.storage.load_history().unwrap());
         reopened
+    }
+
+    #[test]
+    fn tab_navigation_skips_completed_wraps_and_handles_missing_selection() {
+        let fixture = Fixture::new();
+        for grouped in [false, true] {
+            let mut app = app_with_tasks(5);
+            app.tasks[1].completed = true;
+            app.tasks[3].completed = true;
+            app.tasks[2].carried = true;
+            app.completed_at_bottom = grouped;
+            if grouped {
+                app.tasks.sort_by_key(|task| task.completed);
+            }
+            let cases = if grouped {
+                [
+                    (None, 0, 2),
+                    (Some(0), 1, 2),
+                    (Some(1), 2, 0),
+                    (Some(2), 0, 1),
+                    (Some(3), 0, 2),
+                    (Some(4), 0, 2),
+                ]
+            } else {
+                [
+                    (None, 0, 4),
+                    (Some(0), 2, 4),
+                    (Some(1), 2, 0),
+                    (Some(2), 4, 0),
+                    (Some(3), 4, 2),
+                    (Some(4), 0, 2),
+                ]
+            };
+            let original = app.tasks.clone();
+            for (selected, forward, backward) in cases {
+                for (code, modifiers, expected) in [
+                    (KeyCode::Tab, KeyModifiers::NONE, forward),
+                    (KeyCode::BackTab, KeyModifiers::SHIFT, backward),
+                    (KeyCode::Tab, KeyModifiers::SHIFT, backward),
+                ] {
+                    for kind in [KeyEventKind::Press, KeyEventKind::Repeat] {
+                        app.list.select(selected);
+                        app.reveal_selection = false;
+                        app.key(
+                            KeyEvent::new_with_kind(code, modifiers, kind),
+                            &fixture.storage,
+                        )
+                        .unwrap();
+                        assert_eq!(app.list.selected(), Some(expected));
+                        assert!(app.reveal_selection);
+                    }
+                    app.list.select(selected);
+                    app.key(
+                        KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Release),
+                        &fixture.storage,
+                    )
+                    .unwrap();
+                    assert_eq!(app.list.selected(), selected);
+                }
+            }
+            app.list.select(Some(0));
+            for _ in 0..20 {
+                press(&mut app, &fixture, KeyCode::Tab);
+                assert!(!app.tasks[app.list.selected().unwrap()].completed);
+            }
+            for _ in 0..20 {
+                press(&mut app, &fixture, KeyCode::BackTab);
+                assert!(!app.tasks[app.list.selected().unwrap()].completed);
+            }
+            assert_eq!(app.list.selected(), Some(0));
+            assert_eq!(app.tasks, original);
+            assert!(!app.can_undo() && !app.can_redo());
+        }
+        for count in [0, 1, 3] {
+            let mut app = app_with_tasks(count);
+            for task in &mut app.tasks {
+                task.completed = true;
+            }
+            for selected in [None, count.checked_sub(1)] {
+                app.list.select(selected);
+                app.reveal_selection = false;
+                for code in [KeyCode::Tab, KeyCode::BackTab] {
+                    press(&mut app, &fixture, code);
+                    assert_eq!(app.list.selected(), selected);
+                    assert!(!app.reveal_selection);
+                }
+            }
+            if count > 0 {
+                app.tasks[count - 1].completed = false;
+                for _ in 0..3 {
+                    for code in [KeyCode::Tab, KeyCode::BackTab] {
+                        press(&mut app, &fixture, code);
+                        assert_eq!(app.list.selected(), Some(count - 1));
+                    }
+                }
+            }
+        }
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn tab_navigation_is_mode_specific_and_reveals_distant_wrapped_tasks() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(20);
+        for index in 1..19 {
+            app.tasks[index].completed = true;
+        }
+        app.tasks[19].text = "distant wrapped task ".repeat(10).trim().into();
+        app.keybinds = false;
+        let original = app.tasks.clone();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(24, 6)).unwrap();
+        for (key, selected) in [
+            (KeyCode::Tab, 19),
+            (KeyCode::Tab, 0),
+            (KeyCode::BackTab, 19),
+            (KeyCode::BackTab, 0),
+        ] {
+            press(&mut app, &fixture, key);
+            let mut rows = Rect::default();
+            terminal
+                .draw(|frame| rows = crate::ui::draw(frame, &mut app))
+                .unwrap();
+            assert_eq!(app.list.selected(), Some(selected));
+            let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
+            assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
+        }
+        for mode in [
+            Mode::Adding("text".into(), AddPlacement::End),
+            Mode::Editing {
+                index: 0,
+                input: "text".into(),
+            },
+            Mode::Searching {
+                input: "text".into(),
+                original: Some(0),
+            },
+            Mode::SearchResults {
+                input: "text".into(),
+                original: Some(0),
+            },
+            Mode::ConfirmClear,
+        ] {
+            app.mode = mode;
+            let before = format!("{:?}", app.mode);
+            let selected = app.list.selected();
+            for code in [KeyCode::Tab, KeyCode::BackTab] {
+                press(&mut app, &fixture, code);
+                assert_eq!(format!("{:?}", app.mode), before);
+                if !matches!(app.mode, Mode::Searching { .. }) {
+                    assert_eq!(app.list.selected(), selected);
+                }
+            }
+            assert_eq!(app.tasks, original);
+        }
+        assert!(!app.can_undo() && !app.can_redo());
+        assert!(!fixture.task_path().exists());
     }
 
     #[test]

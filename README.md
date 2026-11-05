@@ -61,6 +61,7 @@ Then run `sati`.
 | Action | Keys |
 | --- | --- |
 | Navigate | `j` / `k`, `↓` / `↑` |
+| Next / previous unfinished task (wraps) | `Tab` / `Shift+Tab` |
 | First / last task | `g` / `G`, `Home` / `End` |
 | Move one page | `PageDown` / `PageUp` |
 | Reorder task | `J` / `K`, `Shift+↓` / `Shift+↑` |
