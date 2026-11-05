@@ -2,107 +2,102 @@
 
 [![CI](https://github.com/zmeadows/sati/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zmeadows/sati/actions/workflows/ci.yml?query=branch%3Amain) [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **sati** (Pāli) — mindfulness, recollection; the act of
-> remembering or keeping something in mind.
+> **sati** (Pāli) — mindfulness, recollection; the act of remembering or keeping something in mind.
 
-sati is a minimalist, persistent terminal checklist. A quiet place for the things you need to do.
+A small, persistent checklist for the terminal.
 
-<p align="center">
-🐧 Linux · 🍎 macOS · 🪟 Windows
-</p>
-
-## Preview
+<p align="center">Linux · macOS · Windows</p>
 
 <p align="center">
-  <img src="sati_screenshot.png" alt="sati showing a checklist and keyboard shortcuts">
+  <img src="sati_screenshot.png" alt="sati displaying a checklist in the terminal">
 </p>
 
 ## Why sati?
 
-I wanted a simple to-do list that worked more like a checklist in a notebook.
+I wanted a to-do list that felt more like a checklist in a notebook. Calendars, priorities, tags, and reminders can be useful, but I usually don't need them for everyday tasks.
 
-Most task managers include features like calendars, priorities, tags, and reminders. These can be useful, but I generally don't need them for keeping track of everyday tasks.
+`sati` is for writing things down, checking them off, and clearing the list when the day is over or priorities change.
 
-`sati` is intended for writing down a few things, checking them off as they're completed, and clearing the list when the day is over or priorities change. That's about it.
+## Features
 
-I was surprised how much I enjoyed using it, so I decided to share it.
+- **One local list.** Changes are saved automatically, without accounts or synchronization.
+- **Keyboard-first, with mouse support.** Navigate, reorder, and complete tasks from the keyboard. Click a task to toggle it, or scroll with the mouse wheel.
+- **Search in place.** Find tasks as you type, see matching text highlighted, and jump to a result without filtering or rearranging the list.
+- **Undo and redo.** Up to 256 changes in either direction, with history still available after restarting the program.
+- **Display options.** Wrap long tasks, group completed items, and change some style settings with command-line flags.
 
 ## Installation
 
-Supports Linux, macOS, and Windows. Requires Rust 1.85 or newer.
-CI builds and tests all three platforms. 
+With [Rust and Cargo](https://www.rust-lang.org/tools/install) (Rust 1.85 or newer):
 
-```bash
+```sh
 cargo install --git https://github.com/zmeadows/sati --locked
 ```
 
-Undo/redo history normally survives closing and reopening sati. It is best-effort and may be
-discarded after crashes or external task-file changes; tasks are saved independently.
-A new change clears redo history.
+Then run `sati`.
+
+## Keyboard shortcuts
+
+### Checklist
+
+| Action | Keys |
+| --- | --- |
+| Navigate | `j` / `k`, `↓` / `↑` |
+| First / last task | `g` / `G`, `Home` / `End` |
+| Move one page | `PageDown` / `PageUp` |
+| Reorder task | `J` / `K`, `Shift+↓` / `Shift+↑` |
+| Add / edit | `a` / `e` |
+| Check / uncheck | `Space`, `Enter` |
+| Delete task | `d`, `Delete` |
+| Clear completed / clear all | `x` / `D` |
+| Undo | `u`, `Ctrl+Z` |
+| Redo | `Ctrl+R`, `Ctrl+Y` |
+| Search | `/`, `Ctrl+F` |
+| Toggle wrapping | `w` |
+| Quit | `q` |
+
+### While typing
+
+The add, edit, and search prompts share these shortcuts:
+
+| Action | Keys |
+| --- | --- |
+| Move cursor | `←` / `→` |
+| Start / end of text | `Home` / `End`, `Ctrl+A` / `Ctrl+E` |
+| Previous / next word | `Ctrl+←` / `Ctrl+→` |
+| Delete previous word | `Ctrl+Backspace` |
+
+**Search:** Press `/` and type to find matches. Press `Enter` to browse them, use `n` / `N` or `↓` / `↑` to move between results, then `Enter` to select one. `Esc` cancels and restores your previous selection.
 
 ## Options
 
-| Flag | Description |
+| Flag | Effect |
 | --- | --- |
-| `--no-wrap` | Keep tasks on one row. |
-| `--no-logo` | Hide the border title. |
-| `--no-keybinds` | Hide keyboard hints. |
+| `--no-wrap` | Keep each task on one row. |
+| `--no-logo` | Hide the title in the border. |
+| `--no-keybinds` | Hide the shortcut hints. |
 | `--round-corners` | Use rounded borders. |
-| `--add-to-bottom` | Append new tasks instead of inserting below selection. |
-| `--completed-at-bottom` | Group completed tasks at the bottom, newly completed first. |
-| `--accent '#RRGGBB'` | Set the selection accent color. |
-| `--version` | Show the version. |
-| `--help`, `-h` | Show help. |
+| `--add-to-bottom` | Add tasks at the end instead of below the selection. |
+| `--completed-at-bottom` | Keep completed tasks below unfinished ones. |
+| `--accent '#RRGGBB'` | Set the accent color (default `#e78a4e`). |
 
-## Keybinds
-
-| Mode | Action | Keybindings |
-| --- | --- | --- |
-| Normal | Select next / previous task | `j` / `k`, `↓` / `↑` |
-| Normal | Select first / last task | `g` / `G`, `Home` / `End` |
-| Normal | Move one visible page up / down | `PageUp` / `PageDown` |
-| Normal | Reorder task up / down | `K` / `J`, `Shift+↑` / `Shift+↓` |
-| Normal | Add / edit task | `a` / `e` |
-| Normal | Toggle completion | `Space`, `Enter` |
-| Normal | Delete selected task | `d`, `Delete` |
-| Normal | Clear completed tasks | `x` |
-| Normal | Request clear-all confirmation | `D` |
-| Normal | Undo (up to 256 changes) | `u`, `Ctrl+Z` |
-| Normal | Redo (up to 256 changes) | `Ctrl+R`, `Ctrl+Y` |
-| Normal | Start incremental search | `/`, `Ctrl+F` |
-| Normal | Toggle line wrapping | `w` |
-| Normal | Quit | `q` |
-| Add/edit/search input | Move by grapheme left / right | `←` / `→` |
-| Add/edit/search input | Move to start / end | `Home` / `End`, `Ctrl+A` / `Ctrl+E` |
-| Add/edit/search input | Move by word left / right | `Ctrl+←` / `Ctrl+→` |
-| Add/edit/search input | Delete previous / next grapheme | `Backspace` / `Delete` |
-| Add/edit/search input | Delete previous word | `Ctrl+Backspace` |
-| Add/edit | Save / cancel input | `Enter` / `Esc` |
-| Search input | Confirm query and show results | `Enter` (stays editable if no matches; exits if empty) |
-| Search input | Cancel and restore previous selection | `Esc` |
-| Search results | Next / previous matching task | `n` / `N`, `↓` / `↑`; `Shift+n` also moves backward |
-| Search results | Select result / cancel and restore previous selection | `Enter` / `Esc` |
-| Clear-all confirmation | Confirm / cancel | `Enter` / `Esc` |
-
-Search updates as you type. Text input accepts Unicode and bracketed paste.
-Words are separated by whitespace. Modified keys and repeat reporting depend on
-terminal support.
+Run `sati --help` for the full command-line help.
 
 ## Data
 
-Tasks are saved automatically to:
+Tasks are saved locally in `tasks.json`:
 
 | Platform | Location |
 | --- | --- |
-| Linux | `~/.local/share/sati/tasks.json` (honors `XDG_DATA_HOME`) |
+| Linux | `~/.local/share/sati/tasks.json` (or `$XDG_DATA_HOME/sati/tasks.json`) |
 | macOS | `~/Library/Application Support/sati/tasks.json` |
 | Windows | `%APPDATA%\sati\tasks.json` |
 
+Undo/redo history is saved separately in `history.json` when you quit normally. If that history is missing or no longer matches your tasks, `sati` starts with an empty history; your saved tasks are unaffected.
+
 ## Credits
 
-Inspired by [Meowdo](https://github.com/Sycorlax/Meowdo).
-
-Built with [Ratatui](https://ratatui.rs).
+Inspired by [Meowdo](https://github.com/Sycorlax/Meowdo). Built with [Ratatui](https://ratatui.rs).
 
 ## License
 
