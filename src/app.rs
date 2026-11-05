@@ -7,6 +7,7 @@ use ratatui::{layout::Rect, widgets::ListState};
 use serde::{Deserialize, Serialize};
 
 use crate::input::TextInput;
+use crate::notification::Notification;
 use crate::storage::{Result, Storage};
 
 const HISTORY_LIMIT: usize = 256;
@@ -130,7 +131,7 @@ pub struct App {
     pub row_tasks: Vec<Option<usize>>,
     pub viewport_height: u16,
     pub reveal_selection: bool,
-    pub copy_notice: Option<String>,
+    pub notification: Option<Notification>,
     task_register: Option<String>,
     last_search_query: Option<String>,
     history: VecDeque<UndoState>,
@@ -155,7 +156,7 @@ impl App {
             row_tasks: Vec::new(),
             viewport_height: 0,
             reveal_selection: true,
-            copy_notice: None,
+            notification: None,
             task_register: None,
             last_search_query: None,
             history: VecDeque::new(),
@@ -556,7 +557,7 @@ impl App {
     fn yank_task(&mut self) {
         if let Some(task) = self.list.selected().and_then(|index| self.tasks.get(index)) {
             self.task_register = Some(task.text.clone());
-            self.copy_notice = Some("Copied task".into());
+            self.notification = Some(Notification::new("Copied task"));
         }
     }
 
@@ -578,10 +579,12 @@ impl App {
     }
 
     pub fn copy_markdown(&mut self, output: &mut impl std::io::Write) {
-        self.copy_notice = Some(match crate::export::copy(&self.tasks, output) {
-            Ok(()) => "Copy sent to terminal".into(),
-            Err(error) => format!("Copy failed: {error}"),
-        });
+        self.notification = Some(Notification::new(
+            match crate::export::copy(&self.tasks, output) {
+                Ok(()) => "Copy sent to terminal".into(),
+                Err(error) => format!("Copy failed: {error}"),
+            },
+        ));
     }
 
     pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
@@ -654,7 +657,7 @@ impl App {
         {
             return Ok(false);
         }
-        self.copy_notice = None;
+        self.notification = None;
         // Windows reports AltGr text as Ctrl+Alt; the backend cannot distinguish
         // it from a literal Ctrl+Alt character shortcut. Accept it only in input modes.
         if cfg!(windows)
@@ -949,7 +952,7 @@ impl App {
     }
 
     pub fn paste(&mut self, text: &str) {
-        self.copy_notice = None;
+        self.notification = None;
         if let Mode::Adding(input, _)
         | Mode::Editing { input, .. }
         | Mode::Searching { input, .. } = &mut self.mode
@@ -971,7 +974,7 @@ impl App {
     }
 
     pub fn mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
-        self.copy_notice = None;
+        self.notification = None;
         if self.mode != Mode::Normal || !rows.contains((event.column, event.row).into()) {
             return Ok(());
         }
@@ -1048,7 +1051,10 @@ mod tests {
         let mut expected = Vec::new();
         crate::export::copy(&tasks, &mut expected).unwrap();
         assert_eq!(output, expected);
-        assert_eq!(app.copy_notice.as_deref(), Some("Copy sent to terminal"));
+        assert_eq!(
+            app.notification.as_ref().map(Notification::message),
+            Some("Copy sent to terminal")
+        );
         for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
             app.key(
                 KeyEvent {
@@ -1058,11 +1064,14 @@ mod tests {
                 &fixture.storage,
             )
             .unwrap();
-            assert_eq!(app.copy_notice.as_deref(), Some("Copy sent to terminal"));
+            assert_eq!(
+                app.notification.as_ref().map(Notification::message),
+                Some("Copy sent to terminal")
+            );
         }
         app.copy_markdown(&mut BrokenOutput);
         assert_eq!(
-            app.copy_notice.as_deref(),
+            app.notification.as_ref().map(Notification::message),
             Some("Copy failed: output unavailable")
         );
         assert_eq!(app.tasks, tasks);
@@ -1072,7 +1081,7 @@ mod tests {
         assert_eq!(serde_json::to_value(&app.redo_history).unwrap(), redo);
         assert_eq!(fixture.storage.load().unwrap(), saved);
         press(&mut app, &fixture, KeyCode::Down);
-        assert!(app.copy_notice.is_none());
+        assert!(app.notification.is_none());
     }
 
     #[test]
@@ -1106,7 +1115,7 @@ mod tests {
                 Mode::ConfirmClear => {}
                 Mode::Normal => panic!("copy changed mode"),
             }
-            assert!(app.copy_notice.is_none());
+            assert!(app.notification.is_none());
             assert_eq!(app.tasks, tasks);
             assert!(!app.can_undo() && !app.can_redo());
         }
@@ -1149,13 +1158,16 @@ mod tests {
                         fixture.storage.save(&app.tasks).unwrap();
                         let before = app.tasks.clone();
                         app.key(copy, &fixture.storage).unwrap();
-                        assert_eq!(app.copy_notice.as_deref(), Some("Copied task"));
+                        assert_eq!(
+                            app.notification.as_ref().map(Notification::message),
+                            Some("Copied task")
+                        );
                         assert_eq!(app.tasks, before);
                         assert_eq!(fixture.storage.load().unwrap(), before);
                         assert!(!app.can_undo() && !app.can_redo());
                         let index = app.insertion_index(placement);
                         app.key(paste, &fixture.storage).unwrap();
-                        assert!(app.copy_notice.is_none());
+                        assert!(app.notification.is_none());
                         assert_eq!(
                             app.tasks[index],
                             Task {
@@ -1195,7 +1207,7 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Char('y'));
         press(&mut app, &fixture, KeyCode::Char('d'));
         press(&mut app, &fixture, KeyCode::Char('y'));
-        assert!(app.copy_notice.is_none());
+        assert!(app.notification.is_none());
         assert_eq!(app.task_register.as_deref(), Some("task 0"));
         press(&mut app, &fixture, KeyCode::Char('P'));
         assert_eq!(app.list.selected(), Some(0));

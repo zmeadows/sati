@@ -1,6 +1,7 @@
 mod app;
 mod export;
 mod input;
+mod notification;
 mod search;
 mod storage;
 mod ui;
@@ -117,8 +118,24 @@ fn run() -> Result<()> {
         let enhanced = keyboard_support(terminal::supports_keyboard_enhancement())?;
         modes.enable_input(&mut io::stdout(), enhanced)?;
         loop {
+            let frame_started = std::time::Instant::now();
+            if app
+                .notification
+                .as_ref()
+                .is_some_and(|notice| notice.next_redraw(frame_started).is_none())
+            {
+                app.notification = None;
+            }
             let mut rows = ratatui::layout::Rect::default();
             terminal.draw(|frame| rows = ui::draw(frame, &mut app))?;
+            if let Some(wait) = app
+                .notification
+                .as_ref()
+                .and_then(|notice| notice.next_redraw(frame_started))
+                && !event::poll(wait.saturating_sub(frame_started.elapsed()))?
+            {
+                continue;
+            }
             match event::read()? {
                 Event::Key(key) => {
                     if app.key(key, &storage)? {
@@ -127,7 +144,7 @@ fn run() -> Result<()> {
                 }
                 Event::Mouse(mouse) => app.mouse(mouse, rows, &storage)?,
                 Event::Paste(text) => app.paste(&text),
-                Event::Resize(_, _) => app.copy_notice = None,
+                Event::Resize(_, _) => app.notification = None,
                 _ => {}
             }
         }

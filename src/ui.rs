@@ -60,23 +60,29 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
             Line::styled(counter.as_str(), Style::default().fg(MUTED)).right_aligned(),
         );
     }
-    if let Some(notice) = &app.copy_notice {
+    // Notifications and completed text currently share MUTED, so the final fade
+    // holds that color until removal without inventing a darker palette color.
+    if let Some(notice) = &app.notification
+        && let Some(foreground) =
+            notice.foreground(std::time::Instant::now(), app.accent, MUTED, MUTED)
+    {
         let available = usize::from(sections[0].width).saturating_sub(counter.width() + 3);
-        let short = if notice == "Copied task" {
-            notice.as_str()
-        } else if notice.starts_with("Copy failed") {
+        let short = if notice.message() == "Copied task" {
+            notice.message()
+        } else if notice.message().starts_with("Copy failed") {
             "Copy failed"
         } else {
             "Copy sent"
         };
-        let message = if notice.width() <= available {
-            notice.as_str()
+        let message = if notice.message().width() <= available {
+            notice.message()
         } else {
             short
         };
         if sections[0].height >= 2 && message.width() <= available {
-            block = block
-                .title_bottom(Line::styled(message, Style::default().fg(MUTED)).left_aligned());
+            block = block.title_bottom(
+                Line::styled(message, Style::default().fg(foreground)).left_aligned(),
+            );
         }
     }
     let rows = block.inner(sections[0]);
@@ -727,7 +733,7 @@ mod tests {
                         "Copy failed: output unavailable",
                         "Copied task",
                     ] {
-                        app.copy_notice = Some(notice.into());
+                        app.notification = Some(crate::notification::Notification::new(notice));
                         let mut after = Rect::default();
                         terminal
                             .draw(|frame| after = draw(frame, &mut app))
@@ -760,7 +766,7 @@ mod tests {
                             );
                         }
                     }
-                    app.copy_notice = None;
+                    app.notification = None;
                     terminal
                         .draw(|frame| {
                             draw(frame, &mut app);
