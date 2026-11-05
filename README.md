@@ -20,7 +20,7 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 
 ## Features
 
-- **One local list.** Changes are saved automatically, without accounts or synchronization.
+- **One local list.** Changes are saved automatically, without accounts or synchronization. The border shows `[completed/total]`.
 - **Keyboard-first, with mouse support.** Navigate, reorder, and complete tasks from the keyboard. Click a task to toggle it, or scroll with the mouse wheel.
 - **Search in place.** Find tasks as you type, see matching text highlighted, and jump to a result without filtering or rearranging the list.
 - **Carryover.** Mark unfinished tasks with `m` (`[↪]`) to keep them when clearing the list.

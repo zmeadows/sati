@@ -53,6 +53,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     if app.logo && sections[0].width >= 8 {
         block = block.title(Line::styled(" sati ", Style::default().fg(MUTED)).right_aligned());
     }
+    let completed = app.tasks.iter().filter(|task| task.completed).count();
+    let counter = format!("[{completed}/{}]", app.tasks.len());
+    if sections[0].height >= 2 && counter.width() + 2 <= usize::from(sections[0].width) {
+        block =
+            block.title_bottom(Line::styled(counter, Style::default().fg(MUTED)).right_aligned());
+    }
     let rows = block.inner(sections[0]);
     frame.render_widget(block, sections[0]);
 
@@ -683,6 +689,175 @@ mod tests {
     }
     use crate::app::{AddPlacement, Task};
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn completion_counter_fits_the_bottom_border_in_all_modes_and_styles() {
+        for (completed, total, carried, expected) in [
+            (0, 0, false, "[0/0]"),
+            (0, 3, false, "[0/3]"),
+            (3, 3, false, "[3/3]"),
+            (1, 3, true, "[1/3]"),
+            (9, 12, true, "[9/12]"),
+        ] {
+            for rounded in [false, true] {
+                for logo in [false, true] {
+                    for keybinds in [false, true] {
+                        for mode in 0..6 {
+                            if mode == 2 && total == 0 {
+                                continue;
+                            }
+                            for width in [0, 1, 2, 6, 7, 8, 24] {
+                                let mut app = App::new(
+                                    (0..total)
+                                        .map(|index| Task {
+                                            text: format!("task {index}"),
+                                            completed: index < completed,
+                                            carried: carried && index == total - 1,
+                                        })
+                                        .collect(),
+                                );
+                                app.rounded = rounded;
+                                app.logo = logo;
+                                app.keybinds = keybinds;
+                                app.mode = match mode {
+                                    0 => Mode::Normal,
+                                    1 => Mode::Adding("draft".into(), AddPlacement::End),
+                                    2 => Mode::Editing {
+                                        index: 0,
+                                        input: "edited".into(),
+                                    },
+                                    3 => Mode::Searching {
+                                        input: "task".into(),
+                                        original: Some(0),
+                                    },
+                                    4 => Mode::SearchResults {
+                                        input: "task".into(),
+                                        original: Some(0),
+                                    },
+                                    _ => Mode::ConfirmClear,
+                                };
+                                let mut terminal =
+                                    Terminal::new(TestBackend::new(width, 12)).unwrap();
+                                let mut rows = Rect::default();
+                                terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+                                if mode == 5 {
+                                    continue;
+                                } // The existing dialog may cover the border.
+                                if width >= 2 {
+                                    let y = rows.bottom();
+                                    let buffer = terminal.backend().buffer();
+                                    assert_eq!(
+                                        buffer[(0, y)].symbol(),
+                                        if rounded { "╰" } else { "└" }
+                                    );
+                                    assert_eq!(
+                                        buffer[(width - 1, y)].symbol(),
+                                        if rounded { "╯" } else { "┘" }
+                                    );
+                                    let fits = expected.width() + 2 <= usize::from(width);
+                                    if fits {
+                                        let start = width - 1 - expected.len() as u16;
+                                        for (offset, character) in expected.chars().enumerate() {
+                                            let cell = &buffer[(start + offset as u16, y)];
+                                            assert_eq!(cell.symbol(), character.to_string());
+                                            assert_eq!(cell.fg, MUTED);
+                                        }
+                                    } else {
+                                        for x in 1..width - 1 {
+                                            assert_eq!(buffer[(x, y)].symbol(), "─");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for height in [0, 1] {
+            let mut app = App::new(Vec::new());
+            let mut terminal = Terminal::new(TestBackend::new(24, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    draw(frame, &mut app);
+                })
+                .unwrap();
+            assert!(!screen(&terminal).contains('['));
+        }
+    }
+
+    #[test]
+    fn completion_counter_tracks_mutations_clearing_and_history() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = App::new(vec![
+            Task {
+                text: "ordinary".into(),
+                completed: false,
+                carried: false,
+            },
+            Task {
+                text: "done".into(),
+                completed: true,
+                carried: false,
+            },
+            Task {
+                text: "carried".into(),
+                completed: false,
+                carried: true,
+            },
+        ]);
+        app.keybinds = false;
+        let mut terminal = Terminal::new(TestBackend::new(30, 10)).unwrap();
+        let mut check = |app: &mut App, expected: &str| {
+            let mut rows = Rect::default();
+            terminal.draw(|frame| rows = draw(frame, app)).unwrap();
+            assert_eq!(rows, Rect::new(1, 1, 28, 8));
+            assert!(
+                screen(&terminal)
+                    .lines()
+                    .last()
+                    .unwrap()
+                    .ends_with(&format!("{expected}┘"))
+            );
+        };
+        check(&mut app, "[1/3]");
+        for (code, modifiers, expected) in [
+            (KeyCode::Char(' '), KeyModifiers::NONE, "[2/3]"),
+            (KeyCode::Char(' '), KeyModifiers::NONE, "[1/3]"),
+        ] {
+            app.key(KeyEvent::new(code, modifiers), &fixture.storage)
+                .unwrap();
+            check(&mut app, expected);
+        }
+        app.key(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            &fixture.storage,
+        )
+        .unwrap();
+        app.paste("new");
+        app.key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &fixture.storage,
+        )
+        .unwrap();
+        check(&mut app, "[1/4]");
+        for (code, modifiers, expected) in [
+            (KeyCode::Char('d'), KeyModifiers::NONE, "[1/3]"),
+            (KeyCode::Char('x'), KeyModifiers::NONE, "[0/2]"),
+            (KeyCode::Char('D'), KeyModifiers::NONE, ""),
+            (KeyCode::Enter, KeyModifiers::NONE, "[0/1]"),
+            (KeyCode::Char('u'), KeyModifiers::NONE, "[0/2]"),
+            (KeyCode::Char('r'), KeyModifiers::CONTROL, "[0/1]"),
+            (KeyCode::Char('d'), KeyModifiers::NONE, "[0/0]"),
+        ] {
+            app.key(KeyEvent::new(code, modifiers), &fixture.storage)
+                .unwrap();
+            if !expected.is_empty() {
+                check(&mut app, expected);
+            }
+        }
+    }
 
     #[test]
     fn remembered_search_is_invisible_until_resumed_and_restores_its_checkpoint() {
