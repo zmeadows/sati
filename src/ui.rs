@@ -685,6 +685,102 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
+    fn search_enter_accepts_one_task_but_keeps_zero_and_multiple_results() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        for grouped in [false, true] {
+            for (query, count) in [("missing", 0), ("task 18", 1), ("task 1", 11)] {
+                let fixture = crate::storage::tests::Fixture::new();
+                let mut app = App::new(
+                    (0..20)
+                        .map(|index| Task {
+                            text: format!("{}end", format!("task {index} ").repeat(12)),
+                            completed: index >= 10,
+                            carried: false,
+                        })
+                        .collect(),
+                );
+                app.completed_at_bottom = grouped;
+                app.keybinds = false;
+                let original = app.tasks.clone();
+                let mut terminal = Terminal::new(TestBackend::new(24, 6)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        draw(frame, &mut app);
+                    })
+                    .unwrap();
+                assert_eq!(app.scroll, 0);
+                for accept in [false, true] {
+                    app.key(
+                        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+                        &fixture.storage,
+                    )
+                    .unwrap();
+                    app.paste(query);
+                    terminal
+                        .draw(|frame| {
+                            draw(frame, &mut app);
+                        })
+                        .unwrap();
+                    let selected = app.list.selected();
+                    app.key(
+                        KeyEvent::new(
+                            if accept { KeyCode::Enter } else { KeyCode::Esc },
+                            KeyModifiers::NONE,
+                        ),
+                        &fixture.storage,
+                    )
+                    .unwrap();
+                    if !accept {
+                        assert_eq!(app.mode, Mode::Normal);
+                        assert_eq!(app.list.selected(), Some(0));
+                    } else {
+                        match count {
+                            0 => assert!(matches!(app.mode, Mode::Searching { .. })),
+                            1 => {
+                                assert_eq!(app.mode, Mode::Normal);
+                                assert_eq!(app.list.selected(), Some(18));
+                                app.key(
+                                    KeyEvent::new_with_kind(
+                                        KeyCode::Enter,
+                                        KeyModifiers::NONE,
+                                        KeyEventKind::Repeat,
+                                    ),
+                                    &fixture.storage,
+                                )
+                                .unwrap();
+                            }
+                            _ => {
+                                assert!(matches!(app.mode, Mode::SearchResults { .. }));
+                                app.key(
+                                    KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+                                    &fixture.storage,
+                                )
+                                .unwrap();
+                                assert_ne!(app.list.selected(), selected);
+                            }
+                        }
+                    }
+                    let mut rows = Rect::default();
+                    terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+                    if let Some(selected) = app.list.selected() {
+                        let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
+                        assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
+                    }
+                    if accept && count == 1 {
+                        let rendered = screen(&terminal);
+                        assert!(rendered.contains("[✓] task 18"));
+                        assert!(!rendered.contains('■') && !rendered.contains('□'));
+                        assert!(!rendered.contains("search ›"));
+                    }
+                    assert_eq!(app.tasks, original);
+                    assert!(!app.can_undo() && !app.can_redo());
+                    assert!(!fixture.task_path().exists());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn unicode_checkboxes_are_single_cell_and_preserve_rendering_and_search() {
         for glyph in ["\u{2713}", "\u{21aa}", ">", "\u{203a}"] {
             assert_eq!(glyph.width(), 1);
@@ -1152,11 +1248,18 @@ mod tests {
     fn search_keeps_its_bottom_prompt_and_read_only_results_cursor() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
-        let mut app = App::new(vec![Task {
-            carried: false,
-            text: "needle".into(),
-            completed: true,
-        }]);
+        let mut app = App::new(vec![
+            Task {
+                carried: false,
+                text: "needle".into(),
+                completed: true,
+            },
+            Task {
+                text: "another needle".into(),
+                carried: false,
+                completed: true,
+            },
+        ]);
         app.keybinds = false;
         app.key(
             KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
@@ -1176,7 +1279,7 @@ mod tests {
                     .unwrap()
                     .starts_with("search › needle")
             );
-            assert_eq!(app.row_tasks, [Some(0)]);
+            assert_eq!(app.row_tasks, [Some(0), Some(1)]);
             assert!(screen(&terminal).contains("■"));
             assert_eq!(terminal.backend().cursor_visible(), !results);
             if !results {

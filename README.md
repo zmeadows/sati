@@ -92,7 +92,7 @@ The add, edit, and search prompts share these shortcuts:
 | Previous / next word | `Ctrl+←` / `Ctrl+→` |
 | Delete previous word | `Ctrl+Backspace` |
 
-**Search:** Press `/` and type to find matches. Press `Enter` to browse them, use `n` / `N` or `↓` / `↑` to move between results, then `Enter` to select one. `Esc` cancels and restores your previous selection.
+**Search:** Press `/` and type to find matches. `Enter` selects a sole matching task immediately; with multiple matches, it opens results. Use `n` / `N` or `↓` / `↑` to move between results, then `Enter` to select one. `Esc` cancels and restores your previous selection.
 
 ## Options
 

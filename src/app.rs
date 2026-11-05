@@ -586,7 +586,17 @@ impl App {
                     && let Mode::Searching { input, original } =
                         std::mem::replace(&mut self.mode, Mode::Normal)
                 {
+                    let single_match = self
+                        .tasks
+                        .iter()
+                        .filter(|task| crate::search::matches(&task.text, input.text()))
+                        .take(2)
+                        .count()
+                        == 1;
                     self.mode = Mode::SearchResults { input, original };
+                    if single_match {
+                        self.finish_search(true);
+                    }
                 }
                 return Ok(false);
             }
@@ -1692,16 +1702,6 @@ mod tests {
             assert_eq!(app.list.selected(), selection);
             press(&mut app, &fixture, KeyCode::Char('/'));
             app.paste("task");
-            press(&mut app, &fixture, KeyCode::Enter);
-            for code in [
-                KeyCode::Char('n'),
-                KeyCode::Char('N'),
-                KeyCode::Down,
-                KeyCode::Up,
-            ] {
-                press(&mut app, &fixture, code);
-            }
-            assert_eq!(app.list.selected(), selection);
             let rows = Rect::new(0, 0, 20, 3);
             for kind in [
                 MouseEventKind::Down(MouseButton::Left),
@@ -1719,12 +1719,23 @@ mod tests {
                 )
                 .unwrap();
             }
+            press(&mut app, &fixture, KeyCode::Enter);
+            assert_eq!(app.mode == Mode::Normal, count == 1);
+            for code in [
+                KeyCode::Char('n'),
+                KeyCode::Char('N'),
+                KeyCode::Down,
+                KeyCode::Up,
+            ] {
+                press(&mut app, &fixture, code);
+            }
+            assert_eq!(app.list.selected(), selection);
             app.key(
                 KeyEvent::new_with_kind(KeyCode::Esc, KeyModifiers::NONE, KeyEventKind::Release),
                 &fixture.storage,
             )
             .unwrap();
-            assert!(app.search_query().is_some());
+            assert_eq!(app.search_query().is_some(), count == 0);
             press(&mut app, &fixture, KeyCode::Esc);
             assert_eq!(app.tasks, original);
             assert_eq!(app.list.selected(), selection);
