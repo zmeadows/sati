@@ -19,13 +19,13 @@ sati is a minimalist, persistent terminal checklist. A quiet place for the thing
 
 ## Why sati?
 
-I wanted a to-do list that worked like a piece of paper.
+I wanted a simple to-do list that worked more like a checklist in a notebook.
 
-Most task managers offer calendars, priorities, tags, reminders, and elaborate ways to organize your work. Those features can be useful, but they can also turn a simple checklist into something that needs managing itself.
+Most task managers include features like calendars, priorities, tags, and reminders. These can be useful, but I generally don't need them for keeping track of everyday tasks.
 
-`sati` takes the opposite approach. Write down what you need to do, check things off as you finish them, and keep going. When the day is over or your priorities change, clear the list and start fresh.
+`sati` is intended for writing down a few things, checking them off as they're completed, and clearing the list when the day is over or priorities change. That's about it.
 
-Nothing more than you need.
+I was surprised how much I enjoyed using it, so I decided to share it.
 
 ## Installation
 
