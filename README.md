@@ -7,13 +7,25 @@
 
 sati is a minimalist, persistent terminal checklist. A quiet place for the things you need to do.
 
-Linux · macOS · Windows
+<p align="center">
+🐧 Linux · 🍎 macOS · 🪟 Windows
+</p>
 
 ## Preview
 
 <p align="center">
   <img src="sati_screenshot.png" alt="sati showing a checklist and keyboard shortcuts">
 </p>
+
+## Why sati?
+
+I wanted a to-do list that worked like a piece of paper.
+
+Most task managers offer calendars, priorities, tags, reminders, and elaborate ways to organize your work. Those features can be useful, but they can also turn a simple checklist into something that needs managing itself.
+
+`sati` takes the opposite approach. Write down what you need to do, check things off as you finish them, and keep going. When the day is over or your priorities change, clear the list and start fresh.
+
+Nothing more than you need.
 
 ## Installation
 
@@ -25,56 +37,19 @@ pseudo-terminal.
 cargo install --git https://github.com/zmeadows/sati --locked
 ```
 
-## Usage
-
-```bash
-sati
-```
-
-| Key | Action |
-| --- | --- |
-| `j` / `Down`, `k` / `Up` | Select next / previous task |
-| `g` / `Home`, `G` / `End` | Select first / last task |
-| `Page Up` / `Page Down` | Select roughly one visible page up / down |
-| `J` / `Shift+Down`, `K` / `Shift+Up` | Move task down / up |
-| `Space` / `Enter` | Toggle completion |
-| `a` / `e` | Add / edit task |
-| `d` | Delete task |
-| `x` | Clear completed tasks |
-| `D` | Clear all tasks |
-| `u` | Undo recent changes (up to 10) |
-| `w` | Toggle line wrapping |
-| `q` | Quit |
-
-When adding, editing, or clearing all tasks, `Enter` confirms and `Esc` cancels.
-New tasks are inserted below the focused task and become selected.
-
-While adding or editing, use Left/Right to move by character, Home/End or
-Ctrl+A/E to reach either end, and Ctrl+Left/Right to move by word.
-Backspace/Delete remove the character before/after the cursor; Ctrl+Backspace
-deletes back to the previous word boundary. Words are separated by whitespace.
-
-Enhanced keyboard reporting, mouse interaction, and bracketed paste depend on
-terminal and platform support; unbracketed paste is treated as ordinary keystrokes.
-
 ## Options
 
-```bash
-sati --no-wrap             # Keep long tasks on one row
-sati --no-logo             # Hide the sati border title
-sati --no-keybinds         # Hide the keybind list
-sati --round-corners       # Use rounded checklist corners (default: sharp)
-sati --add-to-bottom       # Add new tasks at the bottom instead of below selection
-sati --completed-at-bottom # Keep completed tasks at the bottom
-sati --accent '#a9b665'     # Set the selection accent
-sati --version             # Show the version
-```
-
-With `--completed-at-bottom`, existing tasks are grouped and saved at startup,
-preserving their order within each group. Newly completed tasks go above the
-existing completed tasks; reopened tasks move to the end of the unfinished group.
-New tasks stay in the unfinished group, including with `--add-to-bottom`.
-Task reordering stays within each group.
+| Flag | Description |
+| --- | --- |
+| `--no-wrap` | Keep tasks on one row. |
+| `--no-logo` | Hide the border title. |
+| `--no-keybinds` | Hide keyboard hints. |
+| `--round-corners` | Use rounded borders. |
+| `--add-to-bottom` | Append new tasks instead of inserting below selection. |
+| `--completed-at-bottom` | Group completed tasks at the bottom, newly completed first. |
+| `--accent '#RRGGBB'` | Set the selection accent color. |
+| `--version` | Show the version. |
+| `--help`, `-h` | Show help. |
 
 ## Data
 
