@@ -124,6 +124,7 @@ pub struct App {
     pub row_tasks: Vec<Option<usize>>,
     pub viewport_height: u16,
     pub reveal_selection: bool,
+    last_search_query: Option<String>,
     history: VecDeque<UndoState>,
     redo_history: VecDeque<UndoState>,
 }
@@ -146,6 +147,7 @@ impl App {
             row_tasks: Vec::new(),
             viewport_height: 0,
             reveal_selection: true,
+            last_search_query: None,
             history: VecDeque::new(),
             redo_history: VecDeque::new(),
         }
@@ -326,6 +328,9 @@ impl App {
         let Mode::Searching { input, original } = &self.mode else {
             return;
         };
+        if !input.text().is_empty() && self.last_search_query.as_deref() != Some(input.text()) {
+            self.last_search_query = Some(input.text().to_owned());
+        }
         let anchor = original.unwrap_or(0).min(self.tasks.len());
         let selected = (anchor..self.tasks.len())
             .chain(0..anchor)
@@ -334,30 +339,55 @@ impl App {
         self.reveal_selection = true;
     }
 
+    fn find_search_result(&self, query: &str, forward: bool) -> Option<usize> {
+        let len = self.tasks.len();
+        let matches = |&index: &usize| crate::search::matches(&self.tasks[index].text, query);
+        if forward {
+            let start = self.list.selected().map_or(0, |index| index + 1);
+            (start..len).chain(0..start).find(matches)
+        } else {
+            let end = self.list.selected().unwrap_or(len);
+            (0..end).rev().chain((end..len).rev()).find(matches)
+        }
+    }
+
     fn search_next(&mut self, forward: bool) {
+        if self.list.selected().is_none() {
+            return;
+        }
         let Some(query) = self.search_query() else {
             return;
         };
-        let Some(current) = self.list.selected() else {
-            return;
-        };
-        let selected = if forward {
-            (current + 1..self.tasks.len())
-                .chain(0..=current)
-                .find(|&index| crate::search::matches(&self.tasks[index].text, query))
-        } else {
-            (0..current)
-                .rev()
-                .chain((current..self.tasks.len()).rev())
-                .find(|&index| crate::search::matches(&self.tasks[index].text, query))
-        };
+        let selected = self.find_search_result(query, forward);
         self.list.select(selected);
         self.reveal_selection = true;
     }
 
+    fn resume_search(&mut self, forward: bool) {
+        let Some(query) = self.last_search_query.as_deref() else {
+            return;
+        };
+        let original = self.list.selected();
+        let selected = original
+            .filter(|&index| crate::search::matches(&self.tasks[index].text, query))
+            .or_else(|| self.find_search_result(query, forward));
+        if let Some(index) = selected {
+            self.mode = Mode::SearchResults {
+                input: query.into(),
+                original,
+            };
+            self.list.select(Some(index));
+            self.reveal_selection = true;
+        }
+    }
+
     fn finish_search(&mut self, accept: bool) {
         let mode = std::mem::replace(&mut self.mode, Mode::Normal);
-        if let Mode::Searching { original, .. } | Mode::SearchResults { original, .. } = mode {
+        if let Mode::Searching { input, original } | Mode::SearchResults { input, original } = mode
+        {
+            if !input.text().is_empty() {
+                self.last_search_query = Some(input.text().to_owned());
+            }
             if !accept {
                 self.list.select(original);
             }
@@ -489,7 +519,12 @@ impl App {
 
     pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
         let repeat_allowed = match &self.mode {
-            Mode::Normal if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) => {
+            Mode::Normal
+                if matches!(
+                    key.code,
+                    KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('n' | 'N')
+                ) =>
+            {
                 key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
             }
             Mode::Normal => {
@@ -682,6 +717,14 @@ impl App {
             },
             Mode::Normal => match key.code {
                 KeyCode::Char('/') => self.start_search(),
+                KeyCode::Char('n' | 'N')
+                    if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
+                {
+                    self.resume_search(
+                        key.code == KeyCode::Char('n')
+                            && !key.modifiers.contains(KeyModifiers::SHIFT),
+                    );
+                }
                 KeyCode::Char('q') => return Ok(true),
                 KeyCode::Char('u') => self.undo(storage)?,
                 KeyCode::Char('w') => {
@@ -845,6 +888,182 @@ mod tests {
         reopened.completed_at_bottom = grouped;
         reopened.restore_history(fixture.storage.load_history().unwrap());
         reopened
+    }
+
+    #[test]
+    fn remembered_query_survives_accept_cancel_and_empty_input_but_not_restart() {
+        for (query, matches) in [("task 0", 1), ("task", 2), ("missing", 0)] {
+            for accept in [false, true] {
+                let fixture = Fixture::new();
+                let mut app = app_with_tasks(2);
+                fixture.storage.save(&app.tasks).unwrap();
+                for key in ['n', 'N'] {
+                    press(&mut app, &fixture, KeyCode::Char(key));
+                    assert_eq!(app.mode, Mode::Normal);
+                    assert_eq!(app.list.selected(), Some(0));
+                }
+                press(&mut app, &fixture, KeyCode::Char('/'));
+                app.paste(query);
+                assert_eq!(app.last_search_query.as_deref(), Some(query));
+                if accept {
+                    press(&mut app, &fixture, KeyCode::Enter);
+                    if matches == 2 {
+                        press(&mut app, &fixture, KeyCode::Enter);
+                    }
+                    if matches == 0 {
+                        assert!(matches!(app.mode, Mode::Searching { .. }));
+                    }
+                }
+                press(&mut app, &fixture, KeyCode::Esc);
+                assert_eq!(app.mode, Mode::Normal);
+                assert_eq!(app.search_query(), None);
+                assert_eq!(app.last_search_query.as_deref(), Some(query));
+                press(&mut app, &fixture, KeyCode::Char('/'));
+                assert_eq!(app.search_query(), Some(""));
+                press(&mut app, &fixture, KeyCode::Enter);
+                assert_eq!(app.last_search_query.as_deref(), Some(query));
+                press(&mut app, &fixture, KeyCode::Char('/'));
+                app.paste("x");
+                press(&mut app, &fixture, KeyCode::Backspace);
+                press(&mut app, &fixture, KeyCode::Esc);
+                assert_eq!(app.last_search_query.as_deref(), Some("x"));
+                let reopened = reopen_with_history(app, &fixture);
+                assert_eq!(reopened.last_search_query, None);
+                assert_eq!(reopened.search_query(), None);
+            }
+        }
+    }
+
+    #[test]
+    fn resumed_search_keeps_matching_selection_and_cycles_from_a_new_checkpoint() {
+        let fixture = Fixture::new();
+        for grouped in [false, true] {
+            let mut app = app_with_tasks(5);
+            for index in [0, 2, 4] {
+                app.tasks[index].text = format!("HiT {index}");
+            }
+            app.tasks[2].carried = true;
+            app.tasks[4].completed = true;
+            app.completed_at_bottom = grouped;
+            let original = app.tasks.clone();
+            press(&mut app, &fixture, KeyCode::Char('/'));
+            app.paste("hit");
+            press(&mut app, &fixture, KeyCode::Esc);
+            for (selected, forward, backward) in [
+                (None, 0, 4),
+                (Some(0), 0, 0),
+                (Some(1), 2, 0),
+                (Some(2), 2, 2),
+                (Some(3), 4, 2),
+                (Some(4), 4, 4),
+            ] {
+                for (code, modifiers, first, next) in [
+                    (
+                        KeyCode::Char('n'),
+                        KeyModifiers::NONE,
+                        forward,
+                        if forward == 4 { 0 } else { forward + 2 },
+                    ),
+                    (
+                        KeyCode::Char('N'),
+                        KeyModifiers::SHIFT,
+                        backward,
+                        if backward == 0 { 4 } else { backward - 2 },
+                    ),
+                    (
+                        KeyCode::Char('n'),
+                        KeyModifiers::SHIFT,
+                        backward,
+                        if backward == 0 { 4 } else { backward - 2 },
+                    ),
+                ] {
+                    app.list.select(selected);
+                    app.key(
+                        KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Release),
+                        &fixture.storage,
+                    )
+                    .unwrap();
+                    assert_eq!(app.mode, Mode::Normal);
+                    app.key(
+                        KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Repeat),
+                        &fixture.storage,
+                    )
+                    .unwrap();
+                    assert!(matches!(app.mode, Mode::SearchResults { .. }));
+                    assert_eq!(app.list.selected(), Some(first));
+                    app.key(
+                        KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Repeat),
+                        &fixture.storage,
+                    )
+                    .unwrap();
+                    assert_eq!(app.list.selected(), Some(next));
+                    press(&mut app, &fixture, KeyCode::Esc);
+                    assert_eq!(app.list.selected(), selected);
+                    assert_eq!(app.mode, Mode::Normal);
+                    app.key(KeyEvent::new(code, modifiers), &fixture.storage)
+                        .unwrap();
+                    press(&mut app, &fixture, KeyCode::Enter);
+                    assert_eq!(app.list.selected(), Some(first));
+                    assert_eq!(app.search_query(), None);
+                }
+            }
+            assert_eq!(app.tasks, original);
+            assert!(!app.can_undo() && !app.can_redo());
+        }
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn resumed_search_uses_live_tasks_and_leaves_history_and_failed_matches_alone() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        app.tasks[0].text = "hit zero".into();
+        app.tasks[2].text = "hit two".into();
+        press(&mut app, &fixture, KeyCode::Char('/'));
+        app.paste("hit");
+        press(&mut app, &fixture, KeyCode::Esc);
+        press(&mut app, &fixture, KeyCode::Char('d'));
+        press(&mut app, &fixture, KeyCode::Char('N'));
+        assert_eq!(app.list.selected(), Some(1));
+        press(&mut app, &fixture, KeyCode::Esc);
+        assert_eq!(app.list.selected(), Some(0));
+        app.list.select(Some(1));
+        app.mode = Mode::Editing {
+            index: 1,
+            input: "changed".into(),
+        };
+        press(&mut app, &fixture, KeyCode::Enter);
+        let snapshot = |app: &App| {
+            serde_json::to_value((
+                &app.tasks,
+                app.list.selected(),
+                &app.history,
+                &app.redo_history,
+            ))
+            .unwrap()
+        };
+        let changed = snapshot(&app);
+        app.reveal_selection = false;
+        for key in ['n', 'N'] {
+            press(&mut app, &fixture, KeyCode::Char(key));
+            assert_eq!(snapshot(&app), changed);
+            assert_eq!(app.mode, Mode::Normal);
+            assert!(!app.reveal_selection);
+        }
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        press(&mut app, &fixture, KeyCode::Char('K'));
+        let reordered = snapshot(&app);
+        press(&mut app, &fixture, KeyCode::Char('n'));
+        assert_eq!(app.list.selected(), Some(0));
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert_eq!(snapshot(&app), reordered);
+        assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+        assert_eq!(app.last_search_query.as_deref(), Some("hit"));
+        app.tasks.clear();
+        app.list.select(None);
+        press(&mut app, &fixture, KeyCode::Char('n'));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.list.selected(), None);
     }
 
     #[test]
@@ -1918,7 +2137,7 @@ mod tests {
                 &fixture.storage,
             )
             .unwrap();
-            assert_eq!(app.search_query().is_some(), count == 0);
+            assert!(app.search_query().is_some());
             press(&mut app, &fixture, KeyCode::Esc);
             assert_eq!(app.tasks, original);
             assert_eq!(app.list.selected(), selection);

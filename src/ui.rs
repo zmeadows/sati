@@ -685,6 +685,99 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
+    fn remembered_search_is_invisible_until_resumed_and_restores_its_checkpoint() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        for grouped in [false, true] {
+            for single in [false, true] {
+                let fixture = crate::storage::tests::Fixture::new();
+                let mut app = App::new(
+                    (0..20)
+                        .map(|index| Task {
+                            text: if index == 19 || (!single && index == 0) {
+                                "needle words ".repeat(10).trim().into()
+                            } else {
+                                format!("task {index}")
+                            },
+                            completed: index >= 10,
+                            carried: false,
+                        })
+                        .collect(),
+                );
+                app.completed_at_bottom = grouped;
+                app.keybinds = false;
+                app.list.select(Some(4));
+                let original = app.tasks.clone();
+                let key = |app: &mut App, code| {
+                    app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
+                        .unwrap();
+                };
+                key(&mut app, KeyCode::Char('/'));
+                app.paste("needle");
+                key(&mut app, KeyCode::Enter);
+                if !single {
+                    key(&mut app, KeyCode::Enter);
+                }
+                let mut terminal = Terminal::new(TestBackend::new(28, 7)).unwrap();
+                for _ in 0..2 {
+                    let mut rows = Rect::default();
+                    terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+                    assert_eq!(app.mode, Mode::Normal);
+                    assert_eq!(app.list.selected(), Some(19));
+                    let rendered = screen(&terminal);
+                    assert!(
+                        !rendered.contains('■')
+                            && !rendered.contains('□')
+                            && !rendered.contains("search ›")
+                    );
+                    assert!(rendered.contains("› [✓] needle"));
+                    assert!(
+                        terminal
+                            .backend()
+                            .buffer()
+                            .content
+                            .iter()
+                            .all(|cell| cell.bg == Color::Reset)
+                    );
+                    assert!(!terminal.backend().cursor_visible());
+                    let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
+                    assert!(app.row_tasks[app.scroll..end].contains(&Some(19)));
+                    key(&mut app, KeyCode::Char('n'));
+                    assert_eq!(app.list.selected(), Some(19));
+                    terminal
+                        .draw(|frame| {
+                            draw(frame, &mut app);
+                        })
+                        .unwrap();
+                    assert!(screen(&terminal).contains("search › needle"));
+                    assert!(screen(&terminal).contains('■'));
+                    assert!(
+                        terminal
+                            .backend()
+                            .buffer()
+                            .content
+                            .iter()
+                            .any(|cell| cell.bg == app.accent)
+                    );
+                    key(&mut app, KeyCode::Char('n'));
+                    assert_eq!(app.list.selected(), Some(if single { 19 } else { 0 }));
+                    key(&mut app, KeyCode::Esc);
+                    assert_eq!(app.list.selected(), Some(19));
+                }
+                key(&mut app, KeyCode::Char('j'));
+                assert_eq!(app.list.selected(), Some(0));
+                key(&mut app, KeyCode::Char('N'));
+                assert_eq!(app.list.selected(), Some(if single { 19 } else { 0 }));
+                key(&mut app, KeyCode::Enter);
+                assert_eq!(app.mode, Mode::Normal);
+                assert_eq!(app.search_query(), None);
+                assert_eq!(app.tasks, original);
+                assert!(!app.can_undo() && !app.can_redo());
+                assert!(!fixture.task_path().exists());
+            }
+        }
+    }
+
+    #[test]
     fn search_enter_accepts_one_task_but_keeps_zero_and_multiple_results() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
         for grouped in [false, true] {

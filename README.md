@@ -77,6 +77,7 @@ Then run `sati`.
 | Undo | `u`, `Ctrl+Z` |
 | Redo | `Ctrl+R`, `Ctrl+Y` |
 | Search | `/`, `Ctrl+F` |
+| Resume previous search forward / backward | `n` / `N` |
 | Toggle wrapping | `w` |
 | Quit | `q` |
 
@@ -93,7 +94,7 @@ The add, edit, and search prompts share these shortcuts:
 | Previous / next word | `Ctrl+←` / `Ctrl+→` |
 | Delete previous word | `Ctrl+Backspace` |
 
-**Search:** Press `/` and type to find matches. `Enter` selects a sole matching task immediately; with multiple matches, it opens results. Use `n` / `N` or `↓` / `↑` to move between results, then `Enter` to select one. `Esc` cancels and restores your previous selection.
+**Search:** Press `/` and type to find matches. `Enter` selects a sole matching task immediately; with multiple matches, it opens results. Use `n` / `N` or `↓` / `↑` to move between results, then `Enter` to select one. `Esc` cancels and restores your previous selection. Exiting search clears highlighting but remembers the last nonempty query for this session. From the checklist, `n` / `N` resume it, staying on the current task if it matches; subsequent presses cycle through matches.
 
 ## Options
 
