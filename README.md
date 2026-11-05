@@ -28,6 +28,13 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 
 ## Installation
 
+When published, prebuilt executables will be available from [GitHub Releases](https://github.com/zmeadows/sati/releases).
+Download and extract the archive for your platform; Rust is not required. Archives
+include LICENSE, and SHA-256 checksums are provided in `SHA256SUMS`.
+
+Builds target Linux x86_64 (GNU/glibc, built on Ubuntu 24.04; older glibc systems
+are not verified), macOS Apple Silicon (not Intel or universal), and Windows x86_64.
+
 With [Rust and Cargo](https://www.rust-lang.org/tools/install) (Rust 1.85 or newer):
 
 ```sh

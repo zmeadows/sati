@@ -1,0 +1,151 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Build, verify, and package
+        shell: python
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          import hashlib
+          import os
+          from pathlib import Path
+          import subprocess
+          import tarfile
+          import tomllib
+          import zipfile
+
+          version = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
+          tag = os.environ["GITHUB_REF_NAME"]
+          if tag != f"v{version}":
+              raise SystemExit(f"Tag {tag!r} must match Cargo.toml version v{version}")
+          rust = subprocess.check_output(["rustc", "-vV"], text=True)
+          target = next(line.removeprefix("host: ") for line in rust.splitlines() if line.startswith("host: "))
+          if target != os.environ["EXPECTED_TARGET"]:
+              raise SystemExit(f"Unexpected Rust host target: {target}")
+          subprocess.run(["cargo", "build", "--release", "--locked"], check=True)
+          binary = Path("target/release") / ("sati.exe" if os.name == "nt" else "sati")
+          actual = subprocess.check_output([str(binary.resolve()), "--version"], text=True).strip()
+          if actual != f"sati {version}":
+              raise SystemExit(f"Unexpected executable version: {actual!r}")
+          dist = Path("dist")
+          dist.mkdir()
+          extension = "zip" if os.name == "nt" else "tar.gz"
+          archive = dist / f"sati-{tag}-{target}.{extension}"
+          if extension == "zip":
+              with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+                  output.write(binary, binary.name)
+                  output.write("LICENSE", "LICENSE")
+          else:
+              with tarfile.open(archive, "w:gz") as output:
+                  output.add(binary, arcname=binary.name)
+                  output.add("LICENSE", arcname="LICENSE")
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          archive.with_name(archive.name + ".sha256").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sati-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: sati-*
+          merge-multiple: true
+          path: dist
+      - name: Verify release assets and assemble checksums
+        shell: python3 {0}
+        run: |
+          import hashlib
+          import os
+          from pathlib import Path
+          import tarfile
+          import tomllib
+          import zipfile
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          version = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
+          if tag != f"v{version}":
+              raise SystemExit("Tag does not match Cargo.toml")
+          names = [f"sati-{tag}-{target}.{extension}" for target, extension in [
+              ("x86_64-unknown-linux-gnu", "tar.gz"),
+              ("aarch64-apple-darwin", "tar.gz"),
+              ("x86_64-pc-windows-msvc", "zip"),
+          ]]
+          dist = Path("dist")
+          expected = set(names + [name + ".sha256" for name in names])
+          if {path.name for path in dist.iterdir()} != expected:
+              raise SystemExit("Missing or unexpected release assets")
+          checksums = []
+          for name in names:
+              archive = dist / name
+              digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+              line = f"{digest}  {name}\n"
+              if archive.with_name(name + ".sha256").read_text() != line:
+                  raise SystemExit(f"Checksum mismatch: {name}")
+              if name.endswith(".zip"):
+                  with zipfile.ZipFile(archive) as contents:
+                      members = contents.namelist()
+                      if contents.testzip() is not None:
+                          raise SystemExit(f"Corrupt archive: {name}")
+                  binary = "sati.exe"
+              else:
+                  with tarfile.open(archive) as contents:
+                      members = contents.getnames()
+                      if not contents.getmember("sati").mode & 0o111:
+                          raise SystemExit(f"Executable permission missing: {name}")
+                  binary = "sati"
+              if sorted(members) != sorted([binary, "LICENSE"]):
+                  raise SystemExit(f"Incorrect archive contents: {name}")
+              checksums.append(line)
+          (dist / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
+          Path("release-notes.md").write_text(
+              "A small, persistent terminal checklist.\n\n"
+              "Download and extract the archive for your platform; Rust is not required. "
+              "Each archive includes the MIT license. Verify downloads using SHA256SUMS.\n\n"
+              "Linux: x86_64 GNU/glibc, built on Ubuntu 24.04; older glibc systems are not verified.\n"
+              "macOS: Apple Silicon (aarch64), not Intel or universal.\n"
+              "Windows: x86_64 MSVC.\n", encoding="utf-8")
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
+            --verify-tag --draft --title "sati $TAG" --notes-file release-notes.md
