@@ -263,6 +263,15 @@ impl App {
         }
     }
 
+    fn start_search(&mut self) {
+        self.mode = Mode::Searching {
+            input: TextInput::default(),
+            original: self.list.selected(),
+        };
+        self.list.select(None);
+        self.reveal_selection = true;
+    }
+
     fn refresh_search(&mut self) {
         let Mode::Searching { input, original } = &self.mode else {
             return;
@@ -455,8 +464,13 @@ impl App {
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             if key.modifiers == KeyModifiers::CONTROL {
-                if self.mode == Mode::Normal && matches!(key.code, KeyCode::Char('r' | 'R')) {
-                    self.redo(storage)?;
+                if self.mode == Mode::Normal {
+                    match key.code {
+                        KeyCode::Char('z' | 'Z') => self.undo(storage)?,
+                        KeyCode::Char('r' | 'R' | 'y' | 'Y') => self.redo(storage)?,
+                        KeyCode::Char('f' | 'F') => self.start_search(),
+                        _ => {}
+                    }
                     return Ok(false);
                 }
                 if let Mode::Adding(input)
@@ -572,13 +586,7 @@ impl App {
                 _ => {}
             },
             Mode::Normal => match key.code {
-                KeyCode::Char('/') => {
-                    self.mode = Mode::Searching {
-                        input: TextInput::default(),
-                        original: self.list.selected(),
-                    };
-                    self.list.select(None);
-                }
+                KeyCode::Char('/') => self.start_search(),
                 KeyCode::Char('q') => return Ok(true),
                 KeyCode::Char('u') => self.undo(storage)?,
                 KeyCode::Char('w') => {
@@ -624,7 +632,7 @@ impl App {
                         };
                     }
                 }
-                KeyCode::Char('d') => {
+                KeyCode::Char('d') | KeyCode::Delete => {
                     if let Some(index) = self.list.selected() {
                         let mut tasks = self.tasks.clone();
                         tasks.remove(index);
@@ -721,6 +729,167 @@ mod tests {
         reopened.completed_at_bottom = grouped;
         reopened.restore_history(fixture.storage.load_history().unwrap());
         reopened
+    }
+
+    #[test]
+    fn conventional_aliases_match_primary_actions_and_ignore_repeats() {
+        let none = KeyModifiers::NONE;
+        let ctrl = KeyModifiers::CONTROL;
+        for (primary, alias) in [
+            (
+                KeyEvent::new(KeyCode::Char('u'), none),
+                KeyEvent::new(KeyCode::Char('z'), ctrl),
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('r'), ctrl),
+                KeyEvent::new(KeyCode::Char('y'), ctrl),
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('/'), none),
+                KeyEvent::new(KeyCode::Char('f'), ctrl),
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('d'), none),
+                KeyEvent::new(KeyCode::Delete, none),
+            ),
+        ] {
+            for count in [0, 3] {
+                let fixture = Fixture::new();
+                let mut outcomes = Vec::new();
+                for event in [primary, alias] {
+                    let mut app = app_with_tasks(count);
+                    if count > 0 {
+                        app.toggle(0, &fixture.storage).unwrap();
+                        app.toggle(1, &fixture.storage).unwrap();
+                        app.undo(&fixture.storage).unwrap();
+                        app.list.select(Some(2));
+                    }
+                    let before =
+                        serde_json::to_value((&app.tasks, &app.history, &app.redo_history))
+                            .unwrap();
+                    for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+                        app.key(
+                            KeyEvent::new_with_kind(event.code, event.modifiers, kind),
+                            &fixture.storage,
+                        )
+                        .unwrap();
+                        assert_eq!(app.mode, Mode::Normal);
+                        assert_eq!(
+                            serde_json::to_value((&app.tasks, &app.history, &app.redo_history))
+                                .unwrap(),
+                            before
+                        );
+                    }
+                    assert!(!app.key(event, &fixture.storage).unwrap());
+                    let mode = format!("{:?}", app.mode);
+                    outcomes.push((
+                        serde_json::to_value(app.into_history_cache()).unwrap(),
+                        mode,
+                    ));
+                }
+                assert_eq!(outcomes[0], outcomes[1]);
+                if count == 0 {
+                    assert!(!fixture.task_path().exists());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn conventional_aliases_do_not_leak_into_other_modes_or_replace_text_delete() {
+        let fixture = Fixture::new();
+        for mode in [
+            Mode::Adding("abc".into()),
+            Mode::Editing {
+                index: 0,
+                input: "abc".into(),
+            },
+            Mode::Searching {
+                input: "abc".into(),
+                original: Some(0),
+            },
+            Mode::SearchResults {
+                input: "task".into(),
+                original: Some(0),
+            },
+            Mode::ConfirmClear,
+        ] {
+            let mut app = app_with_tasks(2);
+            app.toggle(0, &fixture.storage).unwrap();
+            app.toggle(1, &fixture.storage).unwrap();
+            app.undo(&fixture.storage).unwrap();
+            app.mode = mode;
+            if let Mode::Adding(input)
+            | Mode::Editing { input, .. }
+            | Mode::Searching { input, .. } = &mut app.mode
+            {
+                input.set_cursor(0);
+            }
+            let before =
+                serde_json::to_value((&app.tasks, &app.history, &app.redo_history)).unwrap();
+            let original_mode = format!("{:?}", app.mode);
+            for character in ['z', 'y', 'f'] {
+                app.key(
+                    KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL),
+                    &fixture.storage,
+                )
+                .unwrap();
+                assert_eq!(format!("{:?}", app.mode), original_mode);
+            }
+            app.key(
+                KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
+                &fixture.storage,
+            )
+            .unwrap();
+            if let Mode::Adding(input)
+            | Mode::Editing { input, .. }
+            | Mode::Searching { input, .. } = &app.mode
+            {
+                assert_eq!(input.text(), "bc");
+            } else {
+                assert_eq!(format!("{:?}", app.mode), original_mode);
+            }
+            assert_eq!(
+                serde_json::to_value((&app.tasks, &app.history, &app.redo_history)).unwrap(),
+                before
+            );
+        }
+    }
+
+    #[test]
+    fn alias_save_failures_preserve_current_state_and_both_histories() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(2);
+        app.toggle(0, &fixture.storage).unwrap();
+        app.toggle(1, &fixture.storage).unwrap();
+        app.undo(&fixture.storage).unwrap();
+        let before = serde_json::to_value((
+            &app.tasks,
+            app.list.selected(),
+            &app.history,
+            &app.redo_history,
+        ))
+        .unwrap();
+        let data = fixture.directory.join("data");
+        std::fs::rename(&data, fixture.directory.join("backup")).unwrap();
+        std::fs::write(data, "blocked").unwrap();
+        for event in [
+            KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
+        ] {
+            assert!(app.key(event, &fixture.storage).is_err());
+            assert_eq!(
+                serde_json::to_value((
+                    &app.tasks,
+                    app.list.selected(),
+                    &app.history,
+                    &app.redo_history
+                ))
+                .unwrap(),
+                before
+            );
+        }
     }
 
     #[test]

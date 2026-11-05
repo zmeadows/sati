@@ -36,12 +36,7 @@ CI builds and tests all three platforms.
 cargo install --git https://github.com/zmeadows/sati --locked
 ```
 
-Press `/` to search as you type. `Enter` confirms the query; `n` / `N` or
-arrow keys navigate results, and `Enter` selects a task. `Esc` cancels search
-and restores the previous selection.
-
-In normal mode, `u` undoes a change and `Ctrl+R` redoes it, up to 256 steps each.
-History normally survives closing and reopening sati. It is best-effort and may be
+Undo/redo history normally survives closing and reopening sati. It is best-effort and may be
 discarded after crashes or external task-file changes; tasks are saved independently.
 A new change clears redo history.
 
@@ -58,6 +53,40 @@ A new change clears redo history.
 | `--accent '#RRGGBB'` | Set the selection accent color. |
 | `--version` | Show the version. |
 | `--help`, `-h` | Show help. |
+
+## Keybinds
+
+| Mode | Action | Keybindings |
+| --- | --- | --- |
+| Normal | Select next / previous task | `j` / `k`, `↓` / `↑` |
+| Normal | Select first / last task | `g` / `G`, `Home` / `End` |
+| Normal | Move one visible page up / down | `PageUp` / `PageDown` |
+| Normal | Reorder task up / down | `K` / `J`, `Shift+↑` / `Shift+↓` |
+| Normal | Add / edit task | `a` / `e` |
+| Normal | Toggle completion | `Space`, `Enter` |
+| Normal | Delete selected task | `d`, `Delete` |
+| Normal | Clear completed tasks | `x` |
+| Normal | Request clear-all confirmation | `D` |
+| Normal | Undo (up to 256 changes) | `u`, `Ctrl+Z` |
+| Normal | Redo (up to 256 changes) | `Ctrl+R`, `Ctrl+Y` |
+| Normal | Start incremental search | `/`, `Ctrl+F` |
+| Normal | Toggle line wrapping | `w` |
+| Normal | Quit | `q` |
+| Add/edit/search input | Move by grapheme left / right | `←` / `→` |
+| Add/edit/search input | Move to start / end | `Home` / `End`, `Ctrl+A` / `Ctrl+E` |
+| Add/edit/search input | Move by word left / right | `Ctrl+←` / `Ctrl+→` |
+| Add/edit/search input | Delete previous / next grapheme | `Backspace` / `Delete` |
+| Add/edit/search input | Delete previous word | `Ctrl+Backspace` |
+| Add/edit | Save / cancel input | `Enter` / `Esc` |
+| Search input | Confirm query and show results | `Enter` (stays editable if no matches; exits if empty) |
+| Search input | Cancel and restore previous selection | `Esc` |
+| Search results | Next / previous matching task | `n` / `N`, `↓` / `↑`; `Shift+n` also moves backward |
+| Search results | Select result / cancel and restore previous selection | `Enter` / `Esc` |
+| Clear-all confirmation | Confirm / cancel | `Enter` / `Esc` |
+
+Search updates as you type. Text input accepts Unicode and bracketed paste.
+Words are separated by whitespace. Modified keys and repeat reporting depend on
+terminal support.
 
 ## Data
 
