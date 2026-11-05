@@ -40,6 +40,9 @@ Press `/` to search as you type. `Enter` confirms the query; `n` / `N` or
 arrow keys navigate results, and `Enter` selects a task. `Esc` cancels search
 and restores the previous selection.
 
+In normal mode, `u` undoes a change and `Ctrl+R` redoes it, up to 256 steps each.
+History stays in memory and is cleared on restart. A new change clears redo history.
+
 ## Options
 
 | Flag | Description |

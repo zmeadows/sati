@@ -344,6 +344,18 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         return Vec::new();
     }
     let keys = Style::default().fg(TEXT).add_modifier(Modifier::BOLD);
+    let redo_hint = |lines: &mut [Line<'static>]| {
+        if app.mode == Mode::Normal && app.can_redo() {
+            if let Some(line) = lines
+                .iter_mut()
+                .find(|line| line.width() + "  Ctrl+R Redo".width() <= usize::from(width))
+            {
+                line.push_span(Span::raw("  "));
+                line.push_span(Span::styled("Ctrl+R", keys));
+                line.push_span(Span::raw(" Redo"));
+            }
+        }
+    };
     let available = |key: &str| match key {
         "u" => app.can_undo(),
         "x" => app.tasks.iter().any(|task| task.completed),
@@ -383,6 +395,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             }
             lines = wrap_shortcuts(&rows, width);
         }
+        redo_hint(&mut lines);
         return lines;
     }
     let columns = [
@@ -423,6 +436,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         lines[0].push_span(Span::styled("/", keys));
         lines[0].push_span(Span::raw(" Search"));
     }
+    redo_hint(&mut lines);
     lines
 }
 
@@ -864,6 +878,67 @@ mod tests {
             }
         }
         assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn redo_hint_is_contextual_and_restored_wrapped_selection_is_visible() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = App::new(vec![
+            Task {
+                text: "wrapped task ".repeat(40).trim_end().into(),
+                completed: false,
+            },
+            Task {
+                text: "other active task".into(),
+                completed: false,
+            },
+            Task {
+                text: "done".into(),
+                completed: true,
+            },
+        ]);
+        app.completed_at_bottom = true;
+        let key = |app: &mut App, code, modifiers| {
+            app.key(KeyEvent::new(code, modifiers), &fixture.storage)
+                .unwrap()
+        };
+        assert!(
+            !shortcut_lines(&app, 80)
+                .iter()
+                .any(|line| line.to_string().contains("Redo"))
+        );
+        key(&mut app, KeyCode::Char(' '), KeyModifiers::NONE);
+        let modified = app.tasks.clone();
+        key(&mut app, KeyCode::Char('u'), KeyModifiers::NONE);
+        assert!(
+            shortcut_lines(&app, 80)
+                .iter()
+                .any(|line| line.to_string().contains("Ctrl+R Redo"))
+        );
+        for width in [0, 1, 18, 40, 60, 80] {
+            let lines = shortcut_lines(&app, width);
+            assert!(lines.len() <= 3);
+            assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(18, 7)).unwrap();
+        app.scroll = usize::MAX;
+        key(&mut app, KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(app.tasks, modified);
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        assert_eq!(app.list.selected(), Some(1));
+        assert_eq!(app.row_tasks[app.scroll], 1);
+        assert!(!app.can_redo());
+        key(&mut app, KeyCode::Char('D'), KeyModifiers::NONE);
+        key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        key(&mut app, KeyCode::Char('u'), KeyModifiers::NONE);
+        assert!(app.can_redo());
+        app.keybinds = false;
+        assert!(shortcut_lines(&app, 80).is_empty());
     }
 
     #[test]

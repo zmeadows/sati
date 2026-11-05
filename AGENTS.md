@@ -29,7 +29,7 @@
 - Task text is a nonempty, trimmed, single-line description. Preserve arbitrary valid Unicode; reject corrupt persisted data rather than silently repairing or overwriting it.
 - The normal list selection refers to a **task**, not a wrapped display row. Keep indices valid after deletion, reordering, clearing, and undo.
 - `--add-to-bottom` changes insertion location; `--completed-at-bottom` groups completed items below incomplete ones. Keep behavior, navigation, and undo coherent under both options.
-- Undo holds at most **10 in-memory snapshots** of tasks and selection. Only successful mutations enter history; undo does not create a new history entry. Navigation, cancellation, and no-ops do not create entries.
+- Undo and redo each hold at most **256 in-memory snapshots** of tasks and selection. Only successful mutations enter ordinary history and clear redo. Undo/redo transfer snapshots between stacks after saving. Navigation, cancellation, and no-ops leave both histories unchanged.
 
 ### Storage and failure handling
 

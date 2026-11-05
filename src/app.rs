@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::input::TextInput;
 use crate::storage::{Result, Storage};
 
-const UNDO_LIMIT: usize = 10;
+const HISTORY_LIMIT: usize = 256;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -58,6 +58,7 @@ pub struct App {
     pub viewport_height: u16,
     pub reveal_selection: bool,
     history: VecDeque<UndoState>,
+    redo_history: VecDeque<UndoState>,
 }
 
 impl App {
@@ -79,6 +80,7 @@ impl App {
             viewport_height: 0,
             reveal_selection: true,
             history: VecDeque::new(),
+            redo_history: VecDeque::new(),
         }
     }
 
@@ -154,13 +156,14 @@ impl App {
         storage: &Storage,
     ) -> Result<()> {
         storage.save(&tasks)?;
-        if self.history.len() == UNDO_LIMIT {
+        if self.history.len() == HISTORY_LIMIT {
             self.history.pop_front();
         }
         self.history.push_back(UndoState {
             tasks: std::mem::replace(&mut self.tasks, tasks),
             selected: self.list.selected(),
         });
+        self.redo_history.clear();
         self.list.select(selected);
         self.reveal_selection = true;
         Ok(())
@@ -168,6 +171,10 @@ impl App {
 
     pub fn can_undo(&self) -> bool {
         !self.history.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo_history.is_empty()
     }
 
     pub fn search_query(&self) -> Option<&str> {
@@ -221,12 +228,32 @@ impl App {
     }
 
     fn undo(&mut self, storage: &Storage) -> Result<()> {
-        if let Some(previous) = self.history.back() {
+        self.restore_snapshot(storage, false)
+    }
+
+    fn redo(&mut self, storage: &Storage) -> Result<()> {
+        self.restore_snapshot(storage, true)
+    }
+
+    fn restore_snapshot(&mut self, storage: &Storage, redo: bool) -> Result<()> {
+        let (source, destination) = if redo {
+            (&mut self.redo_history, &mut self.history)
+        } else {
+            (&mut self.history, &mut self.redo_history)
+        };
+        if let Some(previous) = source.back() {
             storage.save(&previous.tasks)?;
-            self.tasks = previous.tasks.clone();
-            self.list.select(previous.selected);
+            let previous = source.pop_back().unwrap();
+            if destination.len() == HISTORY_LIMIT {
+                destination.pop_front();
+            }
+            destination.push_back(UndoState {
+                tasks: std::mem::replace(&mut self.tasks, previous.tasks),
+                selected: self.list.selected(),
+            });
+            self.list
+                .select(previous.selected.filter(|&index| index < self.tasks.len()));
             self.reveal_selection = true;
-            self.history.pop_back();
         }
         Ok(())
     }
@@ -349,6 +376,10 @@ impl App {
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             if key.modifiers == KeyModifiers::CONTROL {
+                if self.mode == Mode::Normal && matches!(key.code, KeyCode::Char('r' | 'R')) {
+                    self.redo(storage)?;
+                    return Ok(false);
+                }
                 if let Mode::Adding(input)
                 | Mode::Editing { input, .. }
                 | Mode::Searching { input, .. } = &mut self.mode
@@ -1644,7 +1675,9 @@ mod tests {
                 press(&mut app, &fixture, key);
             }
             assert_ne!(app.tasks, original);
+            let modified = app.tasks.clone();
             app.navigate(true);
+            let selected_before_undo = app.list.selected();
             press(&mut app, &fixture, Char('u'));
             assert_eq!(app.tasks, original);
             assert_eq!(app.list.selected(), Some(1));
@@ -1653,20 +1686,29 @@ mod tests {
             assert!(app.history.is_empty());
             press(&mut app, &fixture, Char('u'));
             assert_eq!(app.tasks, original);
+            app.key(
+                KeyEvent::new(Char('r'), KeyModifiers::CONTROL),
+                &fixture.storage,
+            )
+            .unwrap();
+            assert_eq!(app.tasks, modified);
+            assert_eq!(app.list.selected(), selected_before_undo);
+            assert_eq!(fixture.storage.load().unwrap(), modified);
+            assert!(!app.can_redo());
         }
     }
 
     #[test]
-    fn undo_history_discards_oldest_entries_after_ten_mutations() {
+    fn undo_and_redo_each_keep_exactly_256_states_and_discard_older_history() {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(0);
-        for index in 0..12 {
+        for index in 0..258 {
             press(&mut app, &fixture, KeyCode::Char('a'));
             app.paste(&format!("task {index}"));
             press(&mut app, &fixture, KeyCode::Enter);
-            assert_eq!(app.history.len(), (index + 1).min(10));
+            assert_eq!(app.history.len(), (index + 1).min(HISTORY_LIMIT));
         }
-        for remaining in (2..12).rev() {
+        for remaining in (2..258).rev() {
             press(&mut app, &fixture, KeyCode::Char('u'));
             assert_eq!(app.tasks.len(), remaining);
             assert_eq!(
@@ -1679,6 +1721,150 @@ mod tests {
         assert!(app.history.is_empty());
         press(&mut app, &fixture, KeyCode::Char('u'));
         assert_eq!(app.tasks.len(), 2);
+        assert_eq!(app.redo_history.len(), HISTORY_LIMIT);
+        for remaining in 3..=258 {
+            app.key(
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+                &fixture.storage,
+            )
+            .unwrap();
+            assert_eq!(app.tasks.len(), remaining);
+            assert_eq!(app.list.selected(), Some(remaining - 1));
+            assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+        }
+        assert!(app.redo_history.is_empty());
+        app.redo(&fixture.storage).unwrap();
+        assert_eq!(app.tasks.len(), 258);
+        let restarted = App::new(fixture.storage.load().unwrap());
+        assert!(!restarted.can_undo() && !restarted.can_redo());
+    }
+
+    #[test]
+    fn redo_is_preserved_by_no_ops_and_failed_saves_but_cleared_by_a_new_branch() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(1);
+        for _ in 0..3 {
+            app.toggle(0, &fixture.storage).unwrap();
+        }
+        app.undo(&fixture.storage).unwrap();
+        let original = app.tasks.clone();
+        let snapshots = |stack: &VecDeque<UndoState>| {
+            stack
+                .iter()
+                .map(|s| (s.tasks.clone(), s.selected))
+                .collect::<Vec<_>>()
+        };
+        let undo = snapshots(&app.history);
+        let redo = snapshots(&app.redo_history);
+        for code in [
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Char('J'),
+            KeyCode::Char('K'),
+            KeyCode::Char('x'),
+            KeyCode::Char('a'),
+            KeyCode::Enter,
+            KeyCode::Char('e'),
+            KeyCode::Enter,
+            KeyCode::Char('D'),
+            KeyCode::Esc,
+            KeyCode::Char('/'),
+        ] {
+            press(&mut app, &fixture, code);
+        }
+        app.paste("task");
+        press(&mut app, &fixture, KeyCode::Enter);
+        press(&mut app, &fixture, KeyCode::Char('n'));
+        press(&mut app, &fixture, KeyCode::Esc);
+        assert_eq!(snapshots(&app.history), undo);
+        assert_eq!(snapshots(&app.redo_history), redo);
+        let data = fixture.directory.join("data");
+        let backup = fixture.directory.join("backup");
+        std::fs::rename(&data, &backup).unwrap();
+        std::fs::write(&data, "blocked").unwrap();
+        for operation in 0..3 {
+            let result = match operation {
+                0 => app.toggle(0, &fixture.storage),
+                1 => app.undo(&fixture.storage),
+                _ => app.redo(&fixture.storage),
+            };
+            assert!(result.is_err());
+            assert_eq!(app.tasks, original);
+            assert_eq!(app.list.selected(), Some(0));
+            assert_eq!(snapshots(&app.history), undo);
+            assert_eq!(snapshots(&app.redo_history), redo);
+        }
+        std::fs::remove_file(&data).unwrap();
+        std::fs::rename(backup, data).unwrap();
+        app.redo(&fixture.storage).unwrap();
+        assert!(app.tasks[0].completed);
+        app.undo(&fixture.storage).unwrap();
+        app.mode = Mode::Adding("new branch".into());
+        press(&mut app, &fixture, KeyCode::Enter);
+        let branched = app.tasks.clone();
+        assert!(!app.can_redo());
+        app.redo(&fixture.storage).unwrap();
+        assert_eq!(app.tasks, branched);
+        app.undo(&fixture.storage).unwrap();
+        assert_eq!(app.tasks, original);
+    }
+
+    #[test]
+    fn redo_shortcut_is_normal_mode_only_and_ignores_repeats_and_releases() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(1);
+        app.toggle(0, &fixture.storage).unwrap();
+        app.undo(&fixture.storage).unwrap();
+        let original = app.tasks.clone();
+        for mode in [
+            Mode::Normal,
+            Mode::Adding("task".into()),
+            Mode::Editing {
+                index: 0,
+                input: "task".into(),
+            },
+            Mode::Searching {
+                input: "task".into(),
+                original: Some(0),
+            },
+            Mode::SearchResults {
+                input: "task".into(),
+                original: Some(0),
+            },
+            Mode::ConfirmClear,
+        ] {
+            app.mode = mode;
+            let before = format!("{:?}", app.mode);
+            for kind in [
+                KeyEventKind::Press,
+                KeyEventKind::Repeat,
+                KeyEventKind::Release,
+            ] {
+                if app.mode == Mode::Normal && kind == KeyEventKind::Press {
+                    continue;
+                }
+                app.key(
+                    KeyEvent::new_with_kind(KeyCode::Char('r'), KeyModifiers::CONTROL, kind),
+                    &fixture.storage,
+                )
+                .unwrap();
+                assert_eq!(app.tasks, original);
+                assert_eq!(format!("{:?}", app.mode), before);
+                assert_eq!(app.redo_history.len(), 1);
+            }
+        }
+        app.mode = Mode::Normal;
+        app.key(
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            &fixture.storage,
+        )
+        .unwrap();
+        assert!(app.tasks[0].completed);
+        let restarted = App::new(fixture.storage.load().unwrap());
+        assert!(!restarted.can_undo() && !restarted.can_redo());
+        app.undo(&fixture.storage).unwrap();
+        let restarted = App::new(fixture.storage.load().unwrap());
+        assert!(!restarted.can_undo() && !restarted.can_redo());
     }
 
     #[test]
