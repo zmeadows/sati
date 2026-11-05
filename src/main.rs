@@ -118,11 +118,11 @@ fn run() -> Result<()> {
         let enhanced = keyboard_support(terminal::supports_keyboard_enhancement())?;
         modes.enable_input(&mut io::stdout(), enhanced)?;
         loop {
-            let frame_started = std::time::Instant::now();
+            let draw_started = std::time::Instant::now();
             if app
                 .notification
                 .as_ref()
-                .is_some_and(|notice| notice.next_redraw(frame_started).is_none())
+                .is_some_and(|notice| notice.next_redraw(draw_started).is_none())
             {
                 app.notification = None;
             }
@@ -131,8 +131,8 @@ fn run() -> Result<()> {
             if let Some(wait) = app
                 .notification
                 .as_ref()
-                .and_then(|notice| notice.next_redraw(frame_started))
-                && !event::poll(wait.saturating_sub(frame_started.elapsed()))?
+                .and_then(|notice| notice.next_redraw(draw_started))
+                && !event::poll(wait.saturating_sub(draw_started.elapsed()))?
             {
                 continue;
             }

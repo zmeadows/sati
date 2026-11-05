@@ -60,11 +60,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
             Line::styled(counter.as_str(), Style::default().fg(MUTED)).right_aligned(),
         );
     }
-    // Notifications and completed text currently share MUTED, so the final fade
-    // holds that color until removal without inventing a darker palette color.
     if let Some(notice) = &app.notification
         && let Some(foreground) =
-            notice.foreground(std::time::Instant::now(), app.accent, MUTED, MUTED)
+            notice.foreground(std::time::Instant::now(), app.accent, TEXT, MUTED)
     {
         let available = usize::from(sections[0].width).saturating_sub(counter.width() + 3);
         let short = if notice.message() == "Copied task" {
