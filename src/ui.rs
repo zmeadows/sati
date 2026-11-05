@@ -13,7 +13,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{App, Mode, Task};
 use crate::input::TextInput;
 
-pub const DEFAULT_ACCENT: Color = Color::Yellow;
+pub const DEFAULT_ACCENT: Color = Color::LightYellow;
 
 fn normal_style() -> Style {
     Style::default()
@@ -222,7 +222,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
                     } else {
                         " "
                     },
-                    accent_style(app.accent),
+                    accent_style(app.accent).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(prefix, marker_style),
             ]);
@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn semantic_styles_and_reverse_highlights_preserve_modifier_hierarchy() {
-        assert_eq!(DEFAULT_ACCENT, Color::Yellow);
+        assert_eq!(DEFAULT_ACCENT, Color::LightYellow);
         assert!(muted_style().add_modifier.contains(Modifier::DIM));
         assert!(
             !muted_style()
@@ -756,6 +756,35 @@ mod tests {
                 .contains(Modifier::ITALIC | Modifier::REVERSED)
         );
         assert!(!spans[1].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn focus_is_bold_accented_in_both_marker_modes_without_bolding_task() {
+        for unicode in [false, true] {
+            for accent in [DEFAULT_ACCENT, Color::Indexed(3), Color::Rgb(12, 34, 56)] {
+                let mut app = App::new(vec![Task {
+                    text: "ordinary text".into(),
+                    completed: false,
+                    carried: false,
+                }]);
+                app.unicode_markers = unicode;
+                app.accent = accent;
+                let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        draw(frame, &mut app);
+                    })
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                let focus = &buffer[(1, 1)];
+                assert_eq!(focus.symbol(), focus_marker(unicode));
+                assert_eq!(focus.fg, accent);
+                assert!(focus.modifier.contains(Modifier::BOLD));
+                for x in [3, 7] {
+                    assert!(!buffer[(x, 1)].modifier.contains(Modifier::BOLD));
+                }
+            }
+        }
     }
 
     fn wrapped_strings(text: &str, width: usize) -> Vec<&str> {

@@ -75,7 +75,7 @@ fn run() -> Result<()> {
     }
     let Some(options) = parse_arguments(arguments)? else {
         println!(
-            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--no-keybinds      Hide the keybind list.\n--round-corners    Use rounded checklist corners (default: sharp).\n--ascii-markers    Use >, [x], and [>] instead of Unicode task markers.\n--completed-at-bottom Keep completed tasks below unfinished tasks.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: yellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file."
+            "{USAGE}\n\n--no-wrap          Keep one row per task.\n--no-logo          Hide the sati border title.\n--no-keybinds      Hide the keybind list.\n--round-corners    Use rounded checklist corners (default: sharp).\n--ascii-markers    Use >, [x], and [>] instead of Unicode task markers.\n--completed-at-bottom Keep completed tasks below unfinished tasks.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: lightyellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file."
         );
         return Ok(());
     };

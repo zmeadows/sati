@@ -123,12 +123,12 @@ The add, edit, and search prompts share these shortcuts:
 | `--round-corners` | Use rounded borders. |
 | `--ascii-markers` | Use `>`, `[x]`, and `[>]` as compatibility fallbacks for task markers. |
 | `--completed-at-bottom` | Keep completed tasks below unfinished ones. |
-| `--accent COLOR` | Set an ANSI color name, hex RGB, or palette index 0–255 (default `yellow`). |
+| `--accent COLOR` | Set an ANSI color name, hex RGB, or palette index 0–255 (default `lightyellow`). |
 
 Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--ascii-markers` changes only task markers; other UI symbols remain Unicode.
 
 Sati uses your terminal’s color scheme: normal text inherits its foreground, muted
-items use dimming, and the default accent uses its ANSI yellow palette entry.
+items use dimming, and the default accent uses its ANSI bright-yellow palette entry.
 
 ```sh
 sati
