@@ -89,10 +89,15 @@ The add, edit, and search prompts share these shortcuts:
 
 | Action | Keys |
 | --- | --- |
-| Move cursor | `←` / `→` |
+| Move cursor | `←` / `→`, `Ctrl+B` / `Ctrl+F` |
 | Start / end of text | `Home` / `End`, `Ctrl+A` / `Ctrl+E` |
 | Previous / next word | `Ctrl+←` / `Ctrl+→` |
-| Delete previous word | `Ctrl+Backspace` |
+| Delete previous word | `Ctrl+Backspace`, `Ctrl+W` |
+| Delete character at cursor | `Delete`, `Ctrl+D` |
+| Delete to end / start of input | `Ctrl+K` / `Ctrl+U` |
+| Cancel current operation | `Esc`, `Ctrl+G` |
+
+`Ctrl+G` also cancels search results and confirmation dialogs; it does nothing in Normal mode.
 
 **Search:** Press `/` and type to find matches. `Enter` selects a sole matching task immediately; with multiple matches, it opens results. Use `n` / `N` or `↓` / `↑` to move between results, then `Enter` to select one. `Esc` cancels and restores your previous selection. Exiting search clears highlighting but remembers the last nonempty query for this session. From the checklist, `n` / `N` resume it, staying on the current task if it matches; subsequent presses cycle through matches.
 

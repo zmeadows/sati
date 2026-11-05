@@ -518,6 +518,19 @@ impl App {
     }
 
     pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
+        // Route cancellation through Esc, including its press/repeat policy.
+        let key = if self.mode != Mode::Normal
+            && key.modifiers == KeyModifiers::CONTROL
+            && matches!(key.code, KeyCode::Char('g' | 'G'))
+        {
+            KeyEvent {
+                code: KeyCode::Esc,
+                modifiers: KeyModifiers::NONE,
+                ..key
+            }
+        } else {
+            key
+        };
         let repeat_allowed = match &self.mode {
             Mode::Normal
                 if matches!(
@@ -605,7 +618,12 @@ impl App {
                         KeyCode::Char('e' | 'E') => input.set_cursor(input.text().len()),
                         KeyCode::Left => input.move_word_left(),
                         KeyCode::Right => input.move_word_right(),
-                        KeyCode::Backspace => input.delete_word_before(),
+                        KeyCode::Backspace | KeyCode::Char('w' | 'W') => input.delete_word_before(),
+                        KeyCode::Char('b' | 'B') => input.move_left(),
+                        KeyCode::Char('f' | 'F') => input.move_right(),
+                        KeyCode::Char('d' | 'D') => input.delete_after(),
+                        KeyCode::Char('k' | 'K') => input.delete_to_end(),
+                        KeyCode::Char('u' | 'U') => input.delete_to_start(),
                         _ => {}
                     }
                 }
@@ -888,6 +906,155 @@ mod tests {
         reopened.completed_at_bottom = grouped;
         reopened.restore_history(fixture.storage.load_history().unwrap());
         reopened
+    }
+
+    #[test]
+    fn readline_shortcuts_edit_only_the_active_input() {
+        let fixture = Fixture::new();
+        for text in [
+            "",
+            "abc",
+            "e\u{301}界 👩‍💻 👍🏽 last",
+            "long text ".repeat(30).as_str(),
+        ] {
+            for cursor in [0, text.len() / 2, text.len()] {
+                for command in ['k', 'u', 'w', 'b', 'f', 'd'] {
+                    for mode in 0..3 {
+                        for kind in [
+                            KeyEventKind::Press,
+                            KeyEventKind::Repeat,
+                            KeyEventKind::Release,
+                        ] {
+                            let mut app = app_with_tasks(1);
+                            app.keybinds = false;
+                            let mut input = TextInput::from(text);
+                            input.set_cursor(cursor);
+                            let mut expected = input.clone();
+                            if kind != KeyEventKind::Release {
+                                match command {
+                                    'k' => expected.delete_to_end(),
+                                    'u' => expected.delete_to_start(),
+                                    'w' => expected.delete_word_before(),
+                                    'b' => expected.move_left(),
+                                    'f' => expected.move_right(),
+                                    'd' => expected.delete_after(),
+                                    _ => unreachable!(),
+                                }
+                            }
+                            app.mode = match mode {
+                                0 => Mode::Adding(input, AddPlacement::End),
+                                1 => Mode::Editing { index: 0, input },
+                                _ => Mode::Searching {
+                                    input,
+                                    original: Some(0),
+                                },
+                            };
+                            app.key(
+                                KeyEvent::new_with_kind(
+                                    KeyCode::Char(command),
+                                    KeyModifiers::CONTROL,
+                                    kind,
+                                ),
+                                &fixture.storage,
+                            )
+                            .unwrap();
+                            let actual = match &app.mode {
+                                Mode::Adding(input, _)
+                                | Mode::Editing { input, .. }
+                                | Mode::Searching { input, .. } => input,
+                                _ => panic!("input shortcut changed mode"),
+                            };
+                            assert_eq!(actual, &expected);
+                            let mut terminal =
+                                ratatui::Terminal::new(ratatui::backend::TestBackend::new(18, 6))
+                                    .unwrap();
+                            let mut rows = Rect::default();
+                            terminal
+                                .draw(|frame| rows = crate::ui::draw(frame, &mut app))
+                                .unwrap();
+                            let cursor = terminal.backend().cursor_position();
+                            assert!(terminal.backend().cursor_visible());
+                            assert!(if mode == 2 {
+                                cursor.y == 5 && cursor.x < 18
+                            } else {
+                                rows.contains(cursor)
+                            });
+                            assert_eq!(app.tasks[0].text, "task 0");
+                            assert!(!app.can_undo() && !app.can_redo());
+                        }
+                    }
+                }
+            }
+        }
+        let mut app = app_with_tasks(1);
+        press(&mut app, &fixture, KeyCode::Char('d'));
+        let tasks = app.tasks.clone();
+        app.key(
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            &fixture.storage,
+        )
+        .unwrap();
+        assert_eq!(app.tasks, tasks);
+        app.key(
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            &fixture.storage,
+        )
+        .unwrap();
+        assert!(matches!(app.mode, Mode::Searching { .. }));
+    }
+
+    #[test]
+    fn control_g_cancels_each_mode_through_esc_without_persisting() {
+        let fixture = Fixture::new();
+        for mode in [
+            Mode::Normal,
+            Mode::Adding("new".into(), AddPlacement::End),
+            Mode::Editing {
+                index: 0,
+                input: "edited".into(),
+            },
+            Mode::Searching {
+                input: "task".into(),
+                original: Some(1),
+            },
+            Mode::SearchResults {
+                input: "task".into(),
+                original: Some(1),
+            },
+            Mode::ConfirmClear,
+        ] {
+            let search = matches!(mode, Mode::Searching { .. } | Mode::SearchResults { .. });
+            let mut app = app_with_tasks(2);
+            app.toggle(0, &fixture.storage).unwrap();
+            app.toggle(1, &fixture.storage).unwrap();
+            app.undo(&fixture.storage).unwrap();
+            app.mode = mode;
+            app.list.select(Some(0));
+            let snapshot =
+                serde_json::to_value((&app.tasks, &app.history, &app.redo_history)).unwrap();
+            let bytes = std::fs::read(fixture.task_path()).unwrap();
+            let mode_before = format!("{:?}", app.mode);
+            for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+                app.key(
+                    KeyEvent::new_with_kind(KeyCode::Char('g'), KeyModifiers::CONTROL, kind),
+                    &fixture.storage,
+                )
+                .unwrap();
+                assert_eq!(format!("{:?}", app.mode), mode_before);
+            }
+            app.key(
+                KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+                &fixture.storage,
+            )
+            .unwrap();
+            assert_eq!(app.mode, Mode::Normal);
+            assert_eq!(app.list.selected(), Some(if search { 1 } else { 0 }));
+            assert_eq!(
+                serde_json::to_value((&app.tasks, &app.history, &app.redo_history)).unwrap(),
+                snapshot
+            );
+            assert_eq!(std::fs::read(fixture.task_path()).unwrap(), bytes);
+        }
     }
 
     #[test]
@@ -1583,7 +1750,7 @@ mod tests {
             let before =
                 serde_json::to_value((&app.tasks, &app.history, &app.redo_history)).unwrap();
             let original_mode = format!("{:?}", app.mode);
-            for character in ['z', 'y', 'f'] {
+            for character in ['z', 'y'] {
                 app.key(
                     KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL),
                     &fixture.storage,
@@ -1901,7 +2068,7 @@ mod tests {
             let original_mode = format!("{:?}", app.mode);
             for (code, modifiers) in [
                 (KeyCode::Delete, KeyModifiers::CONTROL),
-                (KeyCode::Char('u'), KeyModifiers::CONTROL),
+                (KeyCode::Char('q'), KeyModifiers::CONTROL),
                 (KeyCode::Left, KeyModifiers::CONTROL | KeyModifiers::ALT),
                 (
                     KeyCode::Char('e'),

@@ -83,6 +83,15 @@ impl TextInput {
         self.snap_forward();
     }
 
+    pub fn delete_to_end(&mut self) {
+        self.text.truncate(self.cursor);
+    }
+
+    pub fn delete_to_start(&mut self) {
+        self.text.drain(..self.cursor);
+        self.cursor = 0;
+    }
+
     pub fn delete_before(&mut self) {
         if let Some((start, _)) = self.text[..self.cursor].grapheme_indices(true).next_back() {
             self.set_cursor(start);
@@ -137,6 +146,26 @@ mod tests {
                 .chain(std::iter::once(input.text().len()))
                 .any(|index| index == input.cursor())
         );
+    }
+
+    #[test]
+    fn deleting_to_input_ends_preserves_grapheme_boundaries() {
+        for text in ["", "abc", "e\u{301}界👩‍💻👍🏽🇦🇧🇨 last"] {
+            for offset in 0..=text.len() {
+                let mut input = TextInput::from(text);
+                input.set_cursor(offset);
+                let cursor = input.cursor();
+                let mut end = input.clone();
+                end.delete_to_end();
+                assert_eq!(end.text(), &text[..cursor]);
+                assert_eq!(end.cursor(), cursor);
+                assert_boundary(&end);
+                input.delete_to_start();
+                assert_eq!(input.text(), &text[cursor..]);
+                assert_eq!(input.cursor(), 0);
+                assert_boundary(&input);
+            }
+        }
     }
 
     #[test]
