@@ -87,6 +87,14 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
             .chars()
             .map(|c| if c.is_control() { ' ' } else { c })
             .collect();
+        let mut tag_graphemes = text
+            .find(':')
+            .filter(|&end| end > 0 && !text[..end].chars().any(char::is_whitespace))
+            .map_or(0, |end| {
+                text.grapheme_indices(true)
+                    .take_while(|(index, _)| *index <= end)
+                    .count()
+            });
         let wrapped = if app.wrap && text_width > 0 {
             wrap_text(&text, text_width)
         } else {
@@ -99,7 +107,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             Style::default().fg(TEXT)
         };
-        for (row, text) in wrapped.into_iter().enumerate() {
+        for (row, mut text) in wrapped.into_iter().enumerate() {
             app.row_tasks.push(index);
             let prefix = if row > 0 {
                 "     "
@@ -115,7 +123,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 TEXT
             };
-            lines.push(Line::from(vec![
+            let mut line = Line::from(vec![
                 Span::styled(
                     if row == 0 && app.list.selected() == Some(index) {
                         "›"
@@ -125,8 +133,20 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(app.accent),
                 ),
                 Span::styled(prefix, Style::default().fg(color)),
-                Span::styled(text, text_style),
-            ]));
+            ]);
+            if tag_graphemes > 0 {
+                let mut end = 0;
+                for (index, grapheme) in text.grapheme_indices(true).take(tag_graphemes) {
+                    end = index + grapheme.len();
+                    tag_graphemes -= 1;
+                }
+                let suffix = text.split_off(end);
+                line.push_span(Span::styled(text, text_style.add_modifier(Modifier::BOLD)));
+                line.push_span(Span::styled(suffix, text_style));
+            } else {
+                line.push_span(Span::styled(text, text_style));
+            }
+            lines.push(line);
         }
     }
     let height = usize::from(area.height);
@@ -810,6 +830,59 @@ mod tests {
             .unwrap();
         assert_eq!(app.scroll, 0);
         assert!(screen(&terminal).contains("task 0"));
+    }
+
+    #[test]
+    fn only_leading_tags_are_bold_across_wrapping_and_completion_styles() {
+        for (text, tag) in [
+            ("foo: first bar:", "foo:"),
+            ("foo:bar", "foo:"),
+            ("no tag: task", ""),
+            ("task foo:", ""),
+            (":empty", ""),
+            ("e\u{301}👩‍💻: body", "e\u{301}👩‍💻:"),
+            ("abcdefghijkl: body", "abcdefghijkl:"),
+            ("a:\u{301} body", "a:\u{301}"),
+        ] {
+            for completed in [false, true] {
+                for (width, wrap) in [(12, true), (40, true), (40, false)] {
+                    let mut app = App::new(vec![Task {
+                        text: text.into(),
+                        completed,
+                    }]);
+                    let original = app.tasks.clone();
+                    app.keybinds = false;
+                    app.wrap = wrap;
+                    let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+                    terminal
+                        .draw(|frame| {
+                            draw(frame, &mut app);
+                        })
+                        .unwrap();
+                    let buffer = terminal.backend().buffer();
+                    let mut bold = String::new();
+                    for y in 1..19 {
+                        for x in 7..width - 1 {
+                            let cell = &buffer[(x, y)];
+                            if cell.symbol() == " " {
+                                continue;
+                            }
+                            if cell.modifier.contains(Modifier::BOLD) {
+                                bold.push_str(cell.symbol());
+                            }
+                            assert_eq!(cell.fg, if completed { MUTED } else { TEXT });
+                            assert_eq!(cell.modifier.contains(Modifier::CROSSED_OUT), completed);
+                            assert!(!cell.modifier.contains(Modifier::DIM));
+                        }
+                    }
+                    assert_eq!(bold, tag, "{text:?}, width={width}, wrap={wrap}");
+                    assert!(!buffer[(3, 1)].modifier.contains(Modifier::BOLD));
+                    assert_eq!(buffer[(1, 1)].fg, app.accent);
+                    assert_eq!(app.tasks, original);
+                    assert!(!app.can_undo());
+                }
+            }
+        }
     }
 
     #[test]
