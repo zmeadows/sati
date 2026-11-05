@@ -76,6 +76,21 @@ impl TextInput {
         self.cursor = next;
     }
 
+    pub fn delete_word_after(&mut self) {
+        let start = self.cursor;
+        self.move_word_right();
+        // From whitespace, continue through the following word as well.
+        if self.text[start..self.cursor]
+            .chars()
+            .all(char::is_whitespace)
+        {
+            self.move_word_right();
+        }
+        self.text.replace_range(start..self.cursor, "");
+        self.cursor = start;
+        self.snap_forward();
+    }
+
     pub fn delete_word_before(&mut self) {
         let start = self.previous_word_start();
         self.text.replace_range(start..self.cursor, "");
@@ -146,6 +161,28 @@ mod tests {
                 .chain(std::iter::once(input.text().len()))
                 .any(|index| index == input.cursor())
         );
+    }
+
+    #[test]
+    fn forward_word_deletion_handles_whitespace_punctuation_and_joined_graphemes() {
+        for (text, cursor, expected, expected_cursor) in [
+            ("", 0, "", 0),
+            ("one  two", 0, "two", 0),
+            ("  one  two", 0, "two", 0),
+            ("one,word! two", 0, "two", 0),
+            ("one  two", 3, "one", 3),
+            ("one  ", 3, "one", 3),
+            ("one", 3, "one", 3),
+            ("e\u{301}界 👩‍💻 last", 0, "👩‍💻 last", 0),
+            ("🇦x 🇧", "🇦".len(), "🇦🇧", "🇦🇧".len()),
+        ] {
+            let mut input = TextInput::from(text);
+            input.set_cursor(cursor);
+            input.delete_word_after();
+            assert_eq!(input.text(), expected);
+            assert_eq!(input.cursor(), expected_cursor);
+            assert_boundary(&input);
+        }
     }
 
     #[test]

@@ -528,6 +528,19 @@ impl App {
                 modifiers: KeyModifiers::NONE,
                 ..key
             }
+        } else if key.modifiers == KeyModifiers::CONTROL
+            && matches!(self.mode, Mode::Normal | Mode::SearchResults { .. })
+            && matches!(key.code, KeyCode::Char('p' | 'P' | 'n' | 'N'))
+        {
+            KeyEvent {
+                code: if matches!(key.code, KeyCode::Char('p' | 'P')) {
+                    KeyCode::Up
+                } else {
+                    KeyCode::Down
+                },
+                modifiers: KeyModifiers::NONE,
+                ..key
+            }
         } else {
             key
         };
@@ -588,6 +601,21 @@ impl App {
             && !character.is_control()
         {
             input.insert(character.encode_utf8(&mut [0; 4]));
+            self.refresh_search();
+            return Ok(false);
+        }
+        if key.modifiers == KeyModifiers::ALT
+            && matches!(key.code, KeyCode::Char('b' | 'B' | 'f' | 'F' | 'd' | 'D'))
+            && let Mode::Adding(input, _)
+            | Mode::Editing { input, .. }
+            | Mode::Searching { input, .. } = &mut self.mode
+        {
+            match key.code {
+                KeyCode::Char('b' | 'B') => input.move_word_left(),
+                KeyCode::Char('f' | 'F') => input.move_word_right(),
+                KeyCode::Char('d' | 'D') => input.delete_word_after(),
+                _ => unreachable!(),
+            }
             self.refresh_search();
             return Ok(false);
         }
@@ -909,6 +937,122 @@ mod tests {
     }
 
     #[test]
+    fn control_p_n_match_arrow_navigation_and_preserve_task_state() {
+        let fixture = Fixture::new();
+        for results in [false, true] {
+            for selected in [None, Some(0), Some(2), Some(4)] {
+                for (alias, arrow) in [
+                    ('p', KeyCode::Up),
+                    ('P', KeyCode::Up),
+                    ('n', KeyCode::Down),
+                    ('N', KeyCode::Down),
+                ] {
+                    for kind in [
+                        KeyEventKind::Press,
+                        KeyEventKind::Repeat,
+                        KeyEventKind::Release,
+                    ] {
+                        let setup = || {
+                            let mut app = app_with_tasks(5);
+                            for (i, task) in app.tasks.iter_mut().enumerate() {
+                                task.text = if i == 2 {
+                                    "unrelated".into()
+                                } else {
+                                    "hit words ".repeat(8).trim().into()
+                                };
+                                task.completed = i == 1 || i == 3;
+                                task.carried = i == 2;
+                            }
+                            app.list.select(selected);
+                            app.keybinds = false;
+                            if results {
+                                app.mode = Mode::SearchResults {
+                                    input: "hit".into(),
+                                    original: selected,
+                                };
+                            }
+                            app
+                        };
+                        let mut actual = setup();
+                        let mut expected = setup();
+                        let original = actual.tasks.clone();
+                        actual
+                            .key(
+                                KeyEvent::new_with_kind(
+                                    KeyCode::Char(alias),
+                                    KeyModifiers::CONTROL,
+                                    kind,
+                                ),
+                                &fixture.storage,
+                            )
+                            .unwrap();
+                        expected
+                            .key(
+                                KeyEvent::new_with_kind(arrow, KeyModifiers::NONE, kind),
+                                &fixture.storage,
+                            )
+                            .unwrap();
+                        assert_eq!(actual.list.selected(), expected.list.selected());
+                        assert_eq!(actual.mode, expected.mode);
+                        let mut terminal =
+                            ratatui::Terminal::new(ratatui::backend::TestBackend::new(24, 6))
+                                .unwrap();
+                        let mut rows = Rect::default();
+                        terminal
+                            .draw(|frame| rows = crate::ui::draw(frame, &mut actual))
+                            .unwrap();
+                        if let Some(index) = actual.list.selected() {
+                            assert!(
+                                actual.row_tasks[actual.scroll
+                                    ..(actual.scroll + usize::from(rows.height))
+                                        .min(actual.row_tasks.len())]
+                                    .contains(&Some(index))
+                            );
+                        }
+                        assert_eq!(actual.tasks, original);
+                        assert!(!actual.can_undo() && !actual.can_redo());
+                    }
+                }
+            }
+        }
+        for mode in [
+            Mode::Adding("text".into(), AddPlacement::End),
+            Mode::Editing {
+                index: 0,
+                input: "text".into(),
+            },
+            Mode::Searching {
+                input: "text".into(),
+                original: Some(0),
+            },
+            Mode::ConfirmClear,
+        ] {
+            let mut app = app_with_tasks(1);
+            app.mode = mode;
+            let before = format!("{:?}", app.mode);
+            for code in ['p', 'n'] {
+                app.key(
+                    KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL),
+                    &fixture.storage,
+                )
+                .unwrap();
+                assert_eq!(format!("{:?}", app.mode), before);
+            }
+        }
+        let mut empty = App::new(Vec::new());
+        for code in ['p', 'n'] {
+            empty
+                .key(
+                    KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL),
+                    &fixture.storage,
+                )
+                .unwrap();
+            assert_eq!(empty.list.selected(), None);
+        }
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
     fn readline_shortcuts_edit_only_the_active_input() {
         let fixture = Fixture::new();
         for text in [
@@ -918,7 +1062,17 @@ mod tests {
             "long text ".repeat(30).as_str(),
         ] {
             for cursor in [0, text.len() / 2, text.len()] {
-                for command in ['k', 'u', 'w', 'b', 'f', 'd'] {
+                for (command, modifiers) in [
+                    ('k', KeyModifiers::CONTROL),
+                    ('u', KeyModifiers::CONTROL),
+                    ('w', KeyModifiers::CONTROL),
+                    ('b', KeyModifiers::CONTROL),
+                    ('f', KeyModifiers::CONTROL),
+                    ('d', KeyModifiers::CONTROL),
+                    ('b', KeyModifiers::ALT),
+                    ('f', KeyModifiers::ALT),
+                    ('d', KeyModifiers::ALT),
+                ] {
                     for mode in 0..3 {
                         for kind in [
                             KeyEventKind::Press,
@@ -935,8 +1089,17 @@ mod tests {
                                     'k' => expected.delete_to_end(),
                                     'u' => expected.delete_to_start(),
                                     'w' => expected.delete_word_before(),
+                                    'b' if modifiers == KeyModifiers::ALT => {
+                                        expected.move_word_left()
+                                    }
                                     'b' => expected.move_left(),
+                                    'f' if modifiers == KeyModifiers::ALT => {
+                                        expected.move_word_right()
+                                    }
                                     'f' => expected.move_right(),
+                                    'd' if modifiers == KeyModifiers::ALT => {
+                                        expected.delete_word_after()
+                                    }
                                     'd' => expected.delete_after(),
                                     _ => unreachable!(),
                                 }
@@ -950,11 +1113,7 @@ mod tests {
                                 },
                             };
                             app.key(
-                                KeyEvent::new_with_kind(
-                                    KeyCode::Char(command),
-                                    KeyModifiers::CONTROL,
-                                    kind,
-                                ),
+                                KeyEvent::new_with_kind(KeyCode::Char(command), modifiers, kind),
                                 &fixture.storage,
                             )
                             .unwrap();
