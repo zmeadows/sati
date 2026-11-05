@@ -28,7 +28,7 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 
 ## Installation
 
-When published, prebuilt executables will be available from [GitHub Releases](https://github.com/zmeadows/sati/releases).
+Prebuilt executables are available from [GitHub Releases](https://github.com/zmeadows/sati/releases).
 Download and extract the archive for your platform; Rust is not required. Archives
 include LICENSE, and SHA-256 checksums are provided in `SHA256SUMS`.
 
