@@ -30,8 +30,7 @@ I was surprised how much I enjoyed using it, so I decided to share it.
 ## Installation
 
 Supports Linux, macOS, and Windows. Requires Rust 1.85 or newer.
-CI builds and tests all three platforms. Local terminal checks used a Linux
-pseudo-terminal.
+CI builds and tests all three platforms. 
 
 ```bash
 cargo install --git https://github.com/zmeadows/sati --locked
