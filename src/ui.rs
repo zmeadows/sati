@@ -54,7 +54,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         .border_style(Style::default().fg(BORDER));
     // Hide the title when it cannot fit intact between the corners.
     if app.logo && sections[0].width >= 8 {
-        block = block.title(Line::styled(" sati ", Style::default().fg(MUTED)).left_aligned());
+        block = block.title(Line::styled(" sati ", Style::default().fg(MUTED)).right_aligned());
     }
     let rows = block.inner(sections[0]);
     frame.render_widget(block, sections[0]);
