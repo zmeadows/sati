@@ -4,9 +4,7 @@
 
 > **sati** (Pāli) — mindfulness, recollection; the act of remembering or keeping something in mind.
 
-A small, persistent checklist for the terminal.
-
-<p align="center">Linux · macOS · Windows</p>
+A small, persistent checklist for the terminal on Linux, macOS, and Windows.
 
 <p align="center">
   <img src="sati_screenshot.png" alt="sati displaying a checklist in the terminal">
