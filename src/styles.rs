@@ -11,26 +11,99 @@ pub struct Styles {
     pub accent: Style,
 }
 
-impl Default for Styles {
-    fn default() -> Self {
-        // Explicitly clear inherited DIM on normal/accented child spans.
-        let normal = Style::default()
-            .fg(Color::Reset)
-            .remove_modifier(Modifier::DIM);
-        let muted = normal.add_modifier(Modifier::DIM);
+impl Styles {
+    pub fn resolve(overrides: &crate::config::StyleOverrides, cli_accent: Option<Color>) -> Self {
+        let apply = |base: Style, value: &crate::config::StyleOverride| {
+            let style = if let Some(fg) = value.fg {
+                base.fg(fg)
+            } else {
+                base
+            };
+            if let Some(modifiers) = value.modifiers {
+                style
+                    .remove_modifier(Modifier::all())
+                    .add_modifier(modifiers)
+            } else {
+                style
+            }
+        };
+        // Resolved roles explicitly clear absent modifiers so parent widgets cannot
+        // leak their styling into child spans using a different semantic role.
+        let normal = apply(
+            Style::default()
+                .fg(Color::Reset)
+                .remove_modifier(Modifier::all()),
+            &overrides.normal,
+        );
+        let muted = apply(normal.add_modifier(Modifier::DIM), &overrides.muted);
+        let completed = apply(muted, &overrides.completed);
+        let border = apply(muted, &overrides.border);
+        let mut accent = apply(normal.fg(DEFAULT_ACCENT), &overrides.accent);
+        if let Some(fg) = cli_accent {
+            accent = accent.fg(fg);
+        }
         Self {
             normal,
             muted,
-            completed: muted,
-            border: muted,
-            accent: normal.fg(DEFAULT_ACCENT),
+            completed,
+            border,
+            accent,
         }
+    }
+}
+
+impl Default for Styles {
+    fn default() -> Self {
+        Self::resolve(&crate::config::StyleOverrides::default(), None)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn resolve(text: &str) -> Styles {
+        let config: crate::config::Config = toml::from_str(text).unwrap();
+        Styles::resolve(&config.styles, None)
+    }
+
+    #[test]
+    fn cascade_inherits_foregrounds_and_replaces_modifier_sets() {
+        assert_eq!(resolve(""), Styles::default());
+        let styles = resolve("[styles.normal]\nfg='lightblue'\nmodifiers=['bold']");
+        assert_eq!(styles.normal.fg, Some(Color::LightBlue));
+        assert_eq!(styles.muted.fg, Some(Color::LightBlue));
+        assert_eq!(styles.muted.add_modifier, Modifier::BOLD | Modifier::DIM);
+        assert_eq!(styles.completed, styles.muted);
+        assert_eq!(styles.border, styles.muted);
+        assert_eq!(styles.accent.fg, Some(DEFAULT_ACCENT));
+        assert_eq!(styles.accent.add_modifier, Modifier::BOLD);
+        for (text, modifiers) in [("['italic']", Modifier::ITALIC), ("[]", Modifier::empty())] {
+            let styles = resolve(&format!(
+                "[styles.normal]\nfg='lightblue'\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers={text}"
+            ));
+            assert_eq!(styles.muted.fg, Some(Color::Green));
+            assert_eq!(styles.muted.add_modifier, modifiers);
+            assert_eq!(styles.completed, styles.muted);
+            assert_eq!(styles.border, styles.muted);
+            assert_eq!(styles.normal.fg, Some(Color::LightBlue));
+            assert_eq!(styles.normal.patch(styles.muted).add_modifier, modifiers);
+        }
+        let styles = resolve(
+            "[styles.completed]\nfg='red'\nmodifiers=[]\n[styles.border]\nfg='3'\nmodifiers=['underlined','crossed_out']",
+        );
+        assert_eq!(styles.completed.fg, Some(Color::Red));
+        assert!(styles.completed.add_modifier.is_empty());
+        assert_eq!(
+            styles.muted.patch(styles.completed).add_modifier,
+            Modifier::empty()
+        );
+        assert_eq!(styles.border.fg, Some(Color::Indexed(3)));
+        assert_eq!(
+            styles.border.add_modifier,
+            Modifier::UNDERLINED | Modifier::CROSSED_OUT
+        );
+    }
 
     #[test]
     fn defaults_resolve_semantic_inheritance_without_contextual_modifiers() {

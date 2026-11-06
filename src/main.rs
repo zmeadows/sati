@@ -52,14 +52,14 @@ struct Options {
     rounded: bool,
     ascii_markers: bool,
     completed_at_bottom: bool,
-    accent: ratatui::style::Color,
+    styles: styles::Styles,
     print_version: bool,
 }
 
 #[derive(Debug, PartialEq)]
 struct CliOptions {
     display: config::Display,
-    accent: ratatui::style::Color,
+    accent: Option<ratatui::style::Color>,
     print_version: bool,
     config: Option<std::path::PathBuf>,
 }
@@ -89,7 +89,7 @@ impl CliOptions {
                 .completed_at_bottom
                 .or(config.display.completed_at_bottom)
                 .unwrap_or(false),
-            accent: self.accent,
+            styles: styles::Styles::resolve(&config.styles, self.accent),
             print_version: self.print_version,
         }
     }
@@ -116,7 +116,7 @@ fn run() -> Result<()> {
     }
     let Some(options) = parse_arguments(arguments)? else {
         println!(
-            "{USAGE}\n\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--logo / --no-logo  Show / hide the sati border title.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--completed-at-bottom / --no-completed-at-bottom  Enable / disable grouping.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: lightyellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, logo, keybinds, rounded_corners, ascii_markers, completed_at_bottom.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file."
+            "{USAGE}\n\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--logo / --no-logo  Show / hide the sati border title.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--completed-at-bottom / --no-completed-at-bottom  Enable / disable grouping.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: lightyellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, logo, keybinds, rounded_corners, ascii_markers, completed_at_bottom.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg and modifiers. --accent overrides only the accent foreground.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file."
         );
         return Ok(());
     };
@@ -135,7 +135,7 @@ fn run() -> Result<()> {
     app.rounded = options.rounded;
     app.unicode_markers = !options.ascii_markers;
     app.completed_at_bottom = options.completed_at_bottom;
-    app.styles.accent = app.styles.accent.fg(options.accent);
+    app.styles = options.styles;
     if let Some(cache) = storage.load_history() {
         app.restore_history(cache);
     }
@@ -345,7 +345,7 @@ fn parse_arguments(
 ) -> Result<Option<CliOptions>> {
     let mut options = CliOptions {
         display: config::Display::default(),
-        accent: styles::DEFAULT_ACCENT,
+        accent: None,
         print_version: false,
         config: None,
     };
@@ -399,7 +399,7 @@ fn parse_arguments(
             let value = arguments
                 .next()
                 .ok_or("--accent requires a color (ANSI name, #RRGGBB, or index 0-255)")?;
-            options.accent = parse_accent(&value)?;
+            options.accent = Some(parse_accent(&value)?);
         } else if argument == "--help" || argument == "-h" {
             help = true;
         } else {
@@ -427,6 +427,35 @@ mod tests {
     ) -> Result<Option<Options>> {
         super::parse_arguments(arguments)
             .map(|options| options.map(|cli| cli.resolve(config::Config::default())))
+    }
+
+    #[test]
+    fn cli_accent_overrides_only_the_resolved_foreground() {
+        let config = || {
+            toml::from_str::<config::Config>("[styles.accent]\nfg='blue'\nmodifiers=['bold']")
+                .unwrap()
+        };
+        assert!(
+            super::parse_arguments([])
+                .unwrap()
+                .unwrap()
+                .accent
+                .is_none()
+        );
+        let options = super::parse_arguments([])
+            .unwrap()
+            .unwrap()
+            .resolve(config());
+        assert_eq!(options.styles.accent.fg, Some(ratatui::style::Color::Blue));
+        let options = super::parse_arguments(["--accent", "red"].map(Into::into))
+            .unwrap()
+            .unwrap()
+            .resolve(config());
+        assert_eq!(options.styles.accent.fg, Some(ratatui::style::Color::Red));
+        assert_eq!(
+            options.styles.accent.add_modifier,
+            ratatui::style::Modifier::BOLD
+        );
     }
 
     #[test]
@@ -817,7 +846,7 @@ mod tests {
                 .unwrap()
                 .ascii_markers
         );
-        assert_eq!(defaults.accent, styles::DEFAULT_ACCENT);
+        assert_eq!(defaults.styles.accent.fg, Some(styles::DEFAULT_ACCENT));
         assert!(!defaults.print_version);
         assert!(!parse_arguments(["--no-wrap".into()]).unwrap().unwrap().wrap);
         assert!(
@@ -850,7 +879,10 @@ mod tests {
                 .unwrap();
         assert!(options.print_version);
         assert!(!options.wrap);
-        assert_eq!(options.accent, ratatui::style::Color::Rgb(169, 182, 101));
+        assert_eq!(
+            options.styles.accent.fg,
+            Some(ratatui::style::Color::Rgb(169, 182, 101))
+        );
         assert_eq!(
             parse_arguments(["--version", "--help"].map(Into::into)).unwrap(),
             None
@@ -867,7 +899,10 @@ mod tests {
         ] {
             let options = parse_arguments(values.map(Into::into)).unwrap().unwrap();
             assert!(!options.wrap);
-            assert_eq!(options.accent, ratatui::style::Color::Rgb(169, 182, 101));
+            assert_eq!(
+                options.styles.accent.fg,
+                Some(ratatui::style::Color::Rgb(169, 182, 101))
+            );
         }
         for color in ["#000000", "#ffffff"] {
             assert!(parse_accent(std::ffi::OsStr::new(color)).is_ok());

@@ -124,3 +124,27 @@ fn missing_default_config_does_not_get_created() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("invalid task file"));
     assert!(!fixture.config.exists());
 }
+
+#[test]
+fn invalid_style_files_report_paths_and_leave_storage_unopened() {
+    let fixture = Fixture::new();
+    for text in [
+        "[styles.accent]\nfg='reset'",
+        "[styles.normal]\nfg='orange'",
+        "[styles.muted]\nmodifiers=['typo']",
+        "[styles.border]\nbg='red'",
+        "[styles.typo]",
+    ] {
+        fixture.config(text);
+        let output = fixture.command().output().unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("invalid configuration") && error.contains("config.toml"),
+            "{error}"
+        );
+        assert!(!fixture.data.join("tasks.lock").exists());
+        assert!(!fixture.data.join("tasks.json").exists());
+        assert_eq!(fs::read_to_string(&fixture.config).unwrap(), text);
+    }
+}

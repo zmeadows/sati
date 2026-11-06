@@ -150,7 +150,7 @@ Configuration is optional. Precedence is **CLI > TOML > built-in defaults**.
 | macOS | `~/Library/Application Support/sati/config.toml` |
 | Windows | `%APPDATA%\sati\config.toml` |
 
-Every section and key is optional. This example shows the built-in display defaults:
+Every section and key is optional. This example combines display defaults with optional style customizations:
 
 ```toml
 [display]
@@ -160,6 +160,23 @@ keybinds = true
 rounded_corners = false
 ascii_markers = false
 completed_at_bottom = false
+
+[styles.normal]
+fg = "reset"
+
+[styles.muted]
+modifiers = ["dim"]
+
+[styles.completed]
+fg = "darkgray"
+
+[styles.border]
+fg = "darkgray"
+modifiers = []
+
+[styles.accent]
+fg = "#e78a4e"
+modifiers = ["bold"]
 ```
 
 Use `sati --config ./sati.toml` for another file. sati never creates or edits
@@ -168,7 +185,20 @@ exist. Invalid files and unknown keys are errors. Environment directory paths
 must be absolute; `--config` also accepts relative paths without expanding `~`.
 
 CLI pairs override either TOML value: `--no-wrap` disables wrapping, and `--wrap`
-re-enables it. Contradictory pairs are rejected. Accent remains CLI-only.
+re-enables it. Contradictory pairs are rejected. `--accent` overrides only the
+accent foreground, preserving its configured modifiers.
+
+The five style roles support `fg` and `modifiers`. Foregrounds accept Ratatui ANSI
+names, hex RGB, and palette indices (as strings). `reset` inherits the terminal
+foreground and is allowed except for accent, which defaults to ANSI bright yellow.
+Muted inherits normal and adds DIM; completed and border inherit resolved muted.
+Accent inherits normal, then defaults its foreground to `lightyellow`.
+
+Omitted properties retain those inherited values. A modifier array **replaces**
+inherited modifiers; `modifiers = []` clears them. Supported names are `bold`,
+`dim`, `italic`, `underlined`, and `crossed_out`, without duplicates. Completion
+strikethrough, focus/prefix boldness, and search highlighting remain contextual.
+Backgrounds are not configurable.
 Help, version output, and Markdown export do not load display configuration.
 
 ## Export

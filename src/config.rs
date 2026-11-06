@@ -1,5 +1,6 @@
 use crate::storage::Result;
-use serde::Deserialize;
+use ratatui::style::{Color, Modifier};
+use serde::{Deserialize, Deserializer, de::Error};
 use std::{
     env,
     ffi::OsString,
@@ -12,6 +13,8 @@ use std::{
 pub struct Config {
     #[serde(default)]
     pub display: Display,
+    #[serde(default)]
+    pub styles: StyleOverrides,
 }
 
 #[derive(Debug, Default, PartialEq, Deserialize)]
@@ -23,6 +26,67 @@ pub struct Display {
     pub rounded_corners: Option<bool>,
     pub ascii_markers: Option<bool>,
     pub completed_at_bottom: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct StyleOverrides {
+    pub normal: StyleOverride,
+    pub muted: StyleOverride,
+    pub completed: StyleOverride,
+    pub border: StyleOverride,
+    #[serde(deserialize_with = "accent_style")]
+    pub accent: StyleOverride,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StyleOverride {
+    #[serde(default, deserialize_with = "foreground")]
+    pub fg: Option<Color>,
+    #[serde(default, deserialize_with = "modifiers")]
+    pub modifiers: Option<Modifier>,
+}
+
+fn foreground<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<Color>, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    text.parse()
+        .map(Some)
+        .map_err(|_| D::Error::custom(format!("invalid foreground color: {text}")))
+}
+
+fn modifiers<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<Modifier>, D::Error> {
+    let names = Vec::<String>::deserialize(deserializer)?;
+    let mut modifiers = Modifier::empty();
+    for name in names {
+        let modifier = match name.as_str() {
+            "bold" => Modifier::BOLD,
+            "dim" => Modifier::DIM,
+            "italic" => Modifier::ITALIC,
+            "underlined" => Modifier::UNDERLINED,
+            "crossed_out" => Modifier::CROSSED_OUT,
+            _ => return Err(D::Error::custom(format!("unknown modifier: {name}"))),
+        };
+        if modifiers.contains(modifier) {
+            return Err(D::Error::custom(format!("duplicate modifier: {name}")));
+        }
+        modifiers.insert(modifier);
+    }
+    Ok(Some(modifiers))
+}
+
+fn accent_style<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<StyleOverride, D::Error> {
+    let style = StyleOverride::deserialize(deserializer)?;
+    if style.fg == Some(Color::Reset) {
+        return Err(D::Error::custom("styles.accent.fg must not be reset"));
+    }
+    Ok(style)
 }
 
 impl Config {
@@ -85,6 +149,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn style_fields_are_strict_and_colors_use_ratatui_parsing() {
+        for role in ["normal", "muted", "completed", "border", "accent"] {
+            for value in ["yellow", "lightyellow", "darkgray", "3", "#e78a4e"] {
+                assert!(
+                    toml::from_str::<Config>(&format!("[styles.{role}]\nfg='{value}'")).is_ok()
+                );
+            }
+            for property in [
+                "fg=12",
+                "fg='orange'",
+                "modifiers='dim'",
+                "modifiers=[1]",
+                "modifiers=['unknown']",
+                "modifiers=['bold','bold']",
+                "bg='blue'",
+                "unknown=true",
+            ] {
+                let text = format!("[styles.{role}]\n{property}");
+                assert!(toml::from_str::<Config>(&text).is_err(), "accepted {text}");
+            }
+        }
+        assert!(toml::from_str::<Config>("[styles.accent]\nfg='reset'").is_err());
+        assert!(toml::from_str::<Config>("[styles.normal]\nfg='reset'").is_ok());
+        assert!(toml::from_str::<Config>("[styles.unknown]").is_err());
+    }
+
+    #[test]
     fn partial_and_strict_schema() {
         let config: Config = toml::from_str("[display]\nwrap = false").unwrap();
         assert_eq!(config.display.wrap, Some(false));
@@ -97,7 +188,7 @@ mod tests {
             "bad toml",
             "unknown = true",
             "[unknown]",
-            "[styles.accent]\nfg='red'",
+            "[styles.unknown]",
             "[display]\nwrpa = true",
             "[display]\nwrap = 'false'",
             "[display]\nwrap = 0",

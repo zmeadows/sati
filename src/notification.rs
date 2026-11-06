@@ -63,6 +63,33 @@ mod tests {
     use ratatui::style::{Color, Modifier};
 
     #[test]
+    fn notifications_use_configured_semantic_styles_without_changing_deadlines() {
+        let config: crate::config::Config = toml::from_str("[styles.normal]\nfg='lightblue'\nmodifiers=['bold']\n[styles.muted]\nmodifiers=['italic']\n[styles.accent]\nfg='3'\nmodifiers=[]").unwrap();
+        let styles = crate::styles::Styles::resolve(&config.styles, None);
+        let notice = Notification::new("Copied task");
+        for (elapsed, expected) in [
+            (0, styles.accent),
+            (180, styles.normal),
+            (1380, styles.muted),
+        ] {
+            assert_eq!(
+                notice.style(
+                    notice.started + Duration::from_millis(elapsed),
+                    styles.accent,
+                    styles.normal,
+                    styles.muted
+                ),
+                Some(expected)
+            );
+        }
+        assert!(
+            notice
+                .next_redraw(notice.started + Duration::from_millis(1780))
+                .is_none()
+        );
+    }
+
+    #[test]
     fn waits_only_for_boundaries_and_skips_elapsed_phases() {
         let ms = Duration::from_millis;
         let phases = [ms(180), ms(1200), ms(400)];

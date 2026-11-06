@@ -829,6 +829,60 @@ mod tests {
         assert_eq!(buffer[(6, 0)].fg, Color::Red);
     }
 
+    #[test]
+    fn configured_styles_preserve_mandatory_focus_completion_and_search_modifiers() {
+        for modifiers in ["[]", "['dim']"] {
+            let config: crate::config::Config = toml::from_str(&format!("[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nmodifiers=['italic']\n[styles.completed]\nfg='red'\nmodifiers={modifiers}\n[styles.accent]\nfg='blue'\nmodifiers=['italic','underlined']")).unwrap();
+            let mut app = App::new(vec![Task {
+                text: "Work: task".into(),
+                completed: true,
+                carried: false,
+            }]);
+            app.styles = Styles::resolve(&config.styles, None);
+            let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+            terminal
+                .draw(|frame| {
+                    draw(frame, &mut app);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            assert_eq!(buffer[(1, 1)].fg, Color::Blue);
+            assert!(
+                buffer[(1, 1)]
+                    .modifier
+                    .contains(Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED)
+            );
+            assert!(!buffer[(3, 1)].modifier.contains(Modifier::BOLD));
+            assert!(
+                buffer[(7, 1)]
+                    .modifier
+                    .contains(Modifier::BOLD | Modifier::CROSSED_OUT)
+            );
+            assert_eq!(buffer[(13, 1)].fg, Color::Red);
+            assert_eq!(
+                buffer[(13, 1)].modifier.contains(Modifier::DIM),
+                modifiers != "[]"
+            );
+            assert!(buffer[(13, 1)].modifier.contains(Modifier::CROSSED_OUT));
+            app.mode = Mode::SearchResults {
+                input: "Work".into(),
+                original: Some(0),
+            };
+            terminal
+                .draw(|frame| {
+                    draw(frame, &mut app);
+                })
+                .unwrap();
+            let cell = &terminal.backend().buffer()[(7, 1)];
+            assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
+            assert!(
+                cell.modifier
+                    .contains(Modifier::REVERSED | Modifier::BOLD | Modifier::CROSSED_OUT)
+            );
+            assert!(!cell.modifier.contains(Modifier::DIM));
+        }
+    }
+
     fn wrapped_strings(text: &str, width: usize) -> Vec<&str> {
         wrap_text(text, width)
             .into_iter()
