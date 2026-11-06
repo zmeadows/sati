@@ -446,94 +446,84 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         return Vec::new();
     }
     let keys = app.styles.normal.add_modifier(Modifier::BOLD);
-    let extra_hints = |lines: &mut [Line<'static>]| {
-        if app.mode == Mode::Normal
-            && app.can_redo()
-            && let Some(line) = lines
-                .iter_mut()
-                .find(|line| line.width() + "  Ctrl+R Redo".width() <= usize::from(width))
-        {
-            line.push_span(Span::raw("  "));
-            line.push_span(Span::styled("Ctrl+R", keys));
-            line.push_span(Span::raw(" Redo"));
-        }
-        if app.mode == Mode::Normal
-            && app
-                .list
-                .selected()
-                .is_some_and(|index| !app.tasks[index].completed)
-            && let Some(line) = lines
-                .iter_mut()
-                .find(|line| line.width() + "  m Carry".width() <= usize::from(width))
-        {
-            line.push_span(Span::raw("  "));
-            line.push_span(Span::styled("m", keys));
-            line.push_span(Span::raw(" Carry"));
-        }
-        if app.mode == Mode::Normal
-            && let Some(line) = lines
-                .iter_mut()
-                .find(|line| line.width() + "  t/T Theme".width() <= usize::from(width))
-        {
-            line.push_span(Span::raw("  "));
-            line.push_span(Span::styled("t/T", keys));
-            line.push_span(Span::raw(" Theme"));
-        }
+    // The full aligned legend occupies 54 columns; pack smaller contexts by action.
+    let mut lines = if app.mode == Mode::Normal && !app.tasks.is_empty() && width >= 54 {
+        aligned_shortcuts(app, width)
+    } else {
+        compact_shortcuts(app, width)
     };
-    let available = |key: &str| match key {
+    if app.mode == Mode::Normal {
+        let can_carry = app
+            .list
+            .selected()
+            .is_some_and(|index| !app.tasks[index].completed);
+        for (key, label, available) in [
+            ("Ctrl+R", "Redo", app.can_redo()),
+            ("m", "Carry", can_carry),
+            ("t/T", "Theme", true),
+        ] {
+            if available {
+                append_shortcut(&mut lines, (key, label), width, keys);
+            }
+        }
+    }
+    lines
+}
+
+fn shortcut_available(app: &App, key: &str) -> bool {
+    match key {
         "D" => app.tasks.iter().any(|task| !task.carried),
         "u" => app.can_undo(),
         "x" => app.tasks.iter().any(|task| task.completed),
         _ => true,
-    };
-    // The full aligned legend occupies 54 columns; pack smaller contexts by action.
-    if app.mode != Mode::Normal || app.tasks.is_empty() || width < 54 {
-        let mut rows: Vec<Vec<(&str, &str)>> = match app.mode {
-            Mode::Searching { .. } => vec![vec![("Enter", "Results"), ("Esc", "Cancel")]],
-            Mode::SearchResults { .. } => vec![vec![
-                ("n/N", "Next/prev"),
-                ("↑/↓", "Navigate"),
-                ("Enter", "Select"),
-                ("Esc", "Cancel"),
-            ]],
-            Mode::Adding(_, _) | Mode::Editing { .. } => {
-                vec![vec![("Enter", "Confirm"), ("Esc", "Cancel")]]
-            }
-            _ if app.tasks.is_empty() => vec![vec![("u", "Undo"), ("w", "Wrap"), ("q", "Quit")]],
-            _ => vec![
-                vec![("j/k", "Navigate"), ("Space", "Toggle"), ("w", "Wrap")],
-                vec![("a/e", "Add/edit"), ("d", "Delete"), ("u", "Undo")],
-                vec![("x", "Clear done"), ("D", "Clear"), ("q", "Quit")],
-            ],
-        };
-        for row in &mut rows {
-            row.retain(|(key, _)| available(key));
-        }
-        let mut lines = wrap_shortcuts(&rows, width, &app.styles);
-        // Keep at most three hint rows, dropping secondary actions first.
-        for omit in ["x", "D", "w", "u", "d", "j/k", "↑/↓"] {
-            if lines.len() <= 3 {
-                break;
-            }
-            for row in &mut rows {
-                row.retain(|(key, _)| *key != omit);
-            }
-            lines = wrap_shortcuts(&rows, width, &app.styles);
-        }
-        extra_hints(&mut lines);
-        return lines;
     }
+}
+
+fn compact_shortcuts(app: &App, width: u16) -> Vec<Line<'static>> {
+    let mut rows: Vec<Vec<(&str, &str)>> = match app.mode {
+        Mode::Searching { .. } => vec![vec![("Enter", "Results"), ("Esc", "Cancel")]],
+        Mode::SearchResults { .. } => vec![vec![
+            ("n/N", "Next/prev"),
+            ("↑/↓", "Navigate"),
+            ("Enter", "Select"),
+            ("Esc", "Cancel"),
+        ]],
+        Mode::Adding(_, _) | Mode::Editing { .. } => {
+            vec![vec![("Enter", "Confirm"), ("Esc", "Cancel")]]
+        }
+        _ if app.tasks.is_empty() => vec![vec![("u", "Undo"), ("w", "Wrap"), ("q", "Quit")]],
+        _ => vec![
+            vec![("j/k", "Navigate"), ("Space", "Toggle"), ("w", "Wrap")],
+            vec![("a/e", "Add/edit"), ("d", "Delete"), ("u", "Undo")],
+            vec![("x", "Clear done"), ("D", "Clear"), ("q", "Quit")],
+        ],
+    };
+    for row in &mut rows {
+        row.retain(|(key, _)| shortcut_available(app, key));
+    }
+    let mut lines = wrap_shortcuts(&rows, width, &app.styles);
+    // Keep at most three hint rows, dropping secondary actions first.
+    for omit in ["x", "D", "w", "u", "d", "j/k", "↑/↓"] {
+        if lines.len() <= 3 {
+            break;
+        }
+        for row in &mut rows {
+            row.retain(|(key, _)| *key != omit);
+        }
+        lines = wrap_shortcuts(&rows, width, &app.styles);
+    }
+    lines
+}
+
+fn aligned_shortcuts(app: &App, width: u16) -> Vec<Line<'static>> {
+    let keys = app.styles.normal.add_modifier(Modifier::BOLD);
     let columns = [
         [("j/k", "Navigate"), ("a", "Add"), ("d", "Delete")],
         [("g/G", "First/last"), ("e", "Edit"), ("x", "Clear done")],
         [("J/K", "Move"), ("Space", "Toggle"), ("D", "Clear")],
         [("w", "Wrap"), ("u", "Undo"), ("q", "Quit")],
     ];
-    let mut rows = [
-        vec![Span::raw(" ")],
-        vec![Span::raw(" ")],
-        vec![Span::raw(" ")],
-    ];
+    let mut lines = vec![Line::raw(" "); 3];
     let column_count = columns.len();
     for (index, column) in columns.into_iter().enumerate() {
         let gap = if index + 1 == column_count { "" } else { "  " };
@@ -543,26 +533,36 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             .map(|(_, label)| label.len())
             .max()
             .unwrap_or(0);
-        for (row, (key, label)) in rows.iter_mut().zip(column) {
-            if !available(key) {
-                row.push(Span::raw(
+        for (line, (key, label)) in lines.iter_mut().zip(column) {
+            if !shortcut_available(app, key) {
+                line.push_span(Span::raw(
                     " ".repeat(key_width + 1 + label_width + gap.len()),
                 ));
                 continue;
             }
-            row.push(Span::styled(format!("{key:<key_width$}"), keys));
-            row.push(Span::raw(format!(" {label:<label_width$}{gap}")));
+            line.push_span(Span::styled(format!("{key:<key_width$}"), keys));
+            line.push_span(Span::raw(format!(" {label:<label_width$}{gap}")));
         }
     }
-    let [first, second, third] = rows;
-    let mut lines = vec![Line::from(first), Line::from(second), Line::from(third)];
-    if lines[0].width() + "  / Search".width() <= usize::from(width) {
-        lines[0].push_span(Span::raw("  "));
-        lines[0].push_span(Span::styled("/", keys));
-        lines[0].push_span(Span::raw(" Search"));
-    }
-    extra_hints(&mut lines);
+    append_shortcut(&mut lines[..1], ("/", "Search"), width, keys);
     lines
+}
+
+fn append_shortcut(
+    lines: &mut [Line<'static>],
+    (key, label): (&'static str, &'static str),
+    width: u16,
+    keys: Style,
+) {
+    let extra_width = 2 + key.width() + 1 + label.width();
+    if let Some(line) = lines
+        .iter_mut()
+        .find(|line| line.width() + extra_width <= usize::from(width))
+    {
+        line.push_span(Span::raw("  "));
+        line.push_span(Span::styled(key, keys));
+        line.push_span(Span::raw(format!(" {label}")));
+    }
 }
 
 fn wrap_shortcuts(rows: &[Vec<(&str, &str)>], width: u16, styles: &Styles) -> Vec<Line<'static>> {
