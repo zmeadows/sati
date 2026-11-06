@@ -117,6 +117,7 @@ The add, edit, and search prompts share these shortcuts:
 
 | Flag | Effect |
 | --- | --- |
+| `--theme NAME` | Select a built-in theme (currently only `default`). |
 | `--config PATH` | Use an explicit configuration file. |
 | `--wrap` / `--no-wrap` | Enable / disable task wrapping. |
 | `--logo` / `--no-logo` | Show / hide the border title. |
@@ -153,6 +154,8 @@ Configuration is optional. Precedence is **CLI > TOML > built-in defaults**.
 Every section and key is optional. This example combines display defaults with optional style customizations:
 
 ```toml
+theme = "default"
+
 [display]
 wrap = true
 logo = true
@@ -185,8 +188,13 @@ exist. Invalid files and unknown keys are errors. Environment directory paths
 must be absolute; `--config` also accepts relative paths without expanding `~`.
 
 CLI pairs override either TOML value: `--no-wrap` disables wrapping, and `--wrap`
-re-enables it. Contradictory pairs are rejected. `--accent` overrides only the
-accent foreground, preserving its configured modifiers.
+re-enables it. Contradictory pairs are rejected.
+
+The only built-in theme is `default`, using terminal-native colors. Select it with
+`theme = "default"` at the TOML root or `sati --theme default`; CLI selection takes
+precedence. Explicit `[styles.*]` settings override the chosen theme, and
+`--accent` takes final precedence for the accent foreground only, preserving
+configured modifiers.
 
 The five style roles support `fg` and `modifiers`. Foregrounds accept Ratatui ANSI
 names, hex RGB, and palette indices (as strings). `reset` inherits the terminal

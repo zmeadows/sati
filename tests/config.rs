@@ -129,6 +129,7 @@ fn missing_default_config_does_not_get_created() {
 fn invalid_style_files_report_paths_and_leave_storage_unopened() {
     let fixture = Fixture::new();
     for text in [
+        "theme='unknown'",
         "[styles.accent]\nfg='reset'",
         "[styles.normal]\nfg='orange'",
         "[styles.muted]\nmodifiers=['typo']",
@@ -147,4 +148,24 @@ fn invalid_style_files_report_paths_and_leave_storage_unopened() {
         assert!(!fixture.data.join("tasks.json").exists());
         assert_eq!(fs::read_to_string(&fixture.config).unwrap(), text);
     }
+}
+
+#[test]
+fn unknown_theme_is_rejected_before_storage_and_noninteractive_commands_bypass_it() {
+    let fixture = Fixture::new();
+    fixture.config("theme='unknown'");
+    let output = fixture.command().output().unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("config.toml") && error.contains("Available themes: default"));
+    for args in [vec!["--help"], vec!["--version"], vec!["export"]] {
+        let output = fixture.command().args(args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(!fixture.data.join("tasks.lock").exists());
+    assert!(!fixture.data.join("tasks.json").exists());
 }

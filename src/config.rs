@@ -12,6 +12,8 @@ use std::{
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
+    pub theme: crate::themes::BuiltinTheme,
+    #[serde(default)]
     pub display: Display,
     #[serde(default)]
     pub styles: StyleOverrides,

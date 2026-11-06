@@ -65,7 +65,7 @@ mod tests {
     #[test]
     fn notifications_use_configured_semantic_styles_without_changing_deadlines() {
         let config: crate::config::Config = toml::from_str("[styles.normal]\nfg='lightblue'\nmodifiers=['bold']\n[styles.muted]\nmodifiers=['italic']\n[styles.accent]\nfg='3'\nmodifiers=[]").unwrap();
-        let styles = crate::styles::Styles::resolve(&config.styles, None);
+        let styles = crate::styles::Styles::resolve(config.theme, &config.styles, None);
         let notice = Notification::new("Copied task");
         for (elapsed, expected) in [
             (0, styles.accent),

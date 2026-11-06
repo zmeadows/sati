@@ -12,7 +12,12 @@ pub struct Styles {
 }
 
 impl Styles {
-    pub fn resolve(overrides: &crate::config::StyleOverrides, cli_accent: Option<Color>) -> Self {
+    pub fn resolve(
+        theme: crate::themes::BuiltinTheme,
+        overrides: &crate::config::StyleOverrides,
+        cli_accent: Option<Color>,
+    ) -> Self {
+        let bases = theme.base_styles();
         let apply = |base: Style, value: &crate::config::StyleOverride| {
             let style = if let Some(fg) = value.fg {
                 base.fg(fg)
@@ -27,18 +32,11 @@ impl Styles {
                 style
             }
         };
-        // Resolved roles explicitly clear absent modifiers so parent widgets cannot
-        // leak their styling into child spans using a different semantic role.
-        let normal = apply(
-            Style::default()
-                .fg(Color::Reset)
-                .remove_modifier(Modifier::all()),
-            &overrides.normal,
-        );
-        let muted = apply(normal.add_modifier(Modifier::DIM), &overrides.muted);
-        let completed = apply(muted, &overrides.completed);
-        let border = apply(muted, &overrides.border);
-        let mut accent = apply(normal.fg(DEFAULT_ACCENT), &overrides.accent);
+        let normal = apply(bases.normal, &overrides.normal);
+        let muted = apply(normal.patch(bases.muted), &overrides.muted);
+        let completed = apply(muted.patch(bases.completed), &overrides.completed);
+        let border = apply(muted.patch(bases.border), &overrides.border);
+        let mut accent = apply(normal.patch(bases.accent), &overrides.accent);
         if let Some(fg) = cli_accent {
             accent = accent.fg(fg);
         }
@@ -54,7 +52,11 @@ impl Styles {
 
 impl Default for Styles {
     fn default() -> Self {
-        Self::resolve(&crate::config::StyleOverrides::default(), None)
+        Self::resolve(
+            crate::themes::BuiltinTheme::Default,
+            &crate::config::StyleOverrides::default(),
+            None,
+        )
     }
 }
 
@@ -64,7 +66,7 @@ mod tests {
 
     fn resolve(text: &str) -> Styles {
         let config: crate::config::Config = toml::from_str(text).unwrap();
-        Styles::resolve(&config.styles, None)
+        Styles::resolve(config.theme, &config.styles, None)
     }
 
     #[test]

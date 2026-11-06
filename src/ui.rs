@@ -838,7 +838,7 @@ mod tests {
                 completed: true,
                 carried: false,
             }]);
-            app.styles = Styles::resolve(&config.styles, None);
+            app.styles = Styles::resolve(config.theme, &config.styles, None);
             let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
             terminal
                 .draw(|frame| {

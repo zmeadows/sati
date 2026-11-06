@@ -6,6 +6,7 @@ mod notification;
 mod search;
 mod storage;
 mod styles;
+mod themes;
 mod ui;
 
 use std::{
@@ -35,7 +36,7 @@ use ratatui::crossterm::event::EnableBracketedPaste;
 use app::App;
 use storage::{Result, Storage};
 
-const USAGE: &str = "Usage: sati [--config PATH] [--wrap | --no-wrap] [--logo | --no-logo] [--keybinds | --no-keybinds] [--round-corners | --square-corners] [--ascii-markers | --unicode-markers] [--completed-at-bottom | --no-completed-at-bottom] [--accent COLOR] [--version]\n       sati export [--output PATH | -o PATH] [--force]";
+const USAGE: &str = "Usage: sati [--theme NAME] [--config PATH] [--wrap | --no-wrap] [--logo | --no-logo] [--keybinds | --no-keybinds] [--round-corners | --square-corners] [--ascii-markers | --unicode-markers] [--completed-at-bottom | --no-completed-at-bottom] [--accent COLOR] [--version]\n       sati export [--output PATH | -o PATH] [--force]";
 
 // Report repeats for plain characters and Enter too; alternate keys preserve shifted text.
 const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
@@ -60,6 +61,7 @@ struct Options {
 struct CliOptions {
     display: config::Display,
     accent: Option<ratatui::style::Color>,
+    theme: Option<themes::BuiltinTheme>,
     print_version: bool,
     config: Option<std::path::PathBuf>,
 }
@@ -89,7 +91,11 @@ impl CliOptions {
                 .completed_at_bottom
                 .or(config.display.completed_at_bottom)
                 .unwrap_or(false),
-            styles: styles::Styles::resolve(&config.styles, self.accent),
+            styles: styles::Styles::resolve(
+                self.theme.unwrap_or(config.theme),
+                &config.styles,
+                self.accent,
+            ),
             print_version: self.print_version,
         }
     }
@@ -116,7 +122,8 @@ fn run() -> Result<()> {
     }
     let Some(options) = parse_arguments(arguments)? else {
         println!(
-            "{USAGE}\n\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--logo / --no-logo  Show / hide the sati border title.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--completed-at-bottom / --no-completed-at-bottom  Enable / disable grouping.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: lightyellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, logo, keybinds, rounded_corners, ascii_markers, completed_at_bottom.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg and modifiers. --accent overrides only the accent foreground.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file."
+            "{USAGE}\n\n--theme NAME      Select a built-in theme (available: {available_themes}; terminal-native colors).\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--logo / --no-logo  Show / hide the sati border title.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--completed-at-bottom / --no-completed-at-bottom  Enable / disable grouping.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: lightyellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, logo, keybinds, rounded_corners, ascii_markers, completed_at_bottom.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg and modifiers. --accent overrides only the accent foreground.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file.",
+            available_themes = themes::BuiltinTheme::NAMES,
         );
         return Ok(());
     };
@@ -346,6 +353,7 @@ fn parse_arguments(
     let mut options = CliOptions {
         display: config::Display::default(),
         accent: None,
+        theme: None,
         print_version: false,
         config: None,
     };
@@ -378,6 +386,25 @@ fn parse_arguments(
                 return Err(format!("contradictory display flags: {flag}").into());
             }
             *setting = Some(value);
+        } else if argument == "--theme" {
+            if options.theme.is_some() {
+                return Err(format!(
+                    "--theme specified more than once; available themes: {}",
+                    themes::BuiltinTheme::NAMES
+                )
+                .into());
+            }
+            let name = arguments.next().ok_or_else(|| {
+                format!(
+                    "--theme requires a name; available themes: {}",
+                    themes::BuiltinTheme::NAMES
+                )
+            })?;
+            options.theme = Some(
+                name.to_str()
+                    .unwrap_or("")
+                    .parse::<themes::BuiltinTheme>()?,
+            );
         } else if argument == "--config" {
             if options.config.is_some() {
                 return Err("--config specified more than once".into());
@@ -427,6 +454,35 @@ mod tests {
     ) -> Result<Option<Options>> {
         super::parse_arguments(arguments)
             .map(|options| options.map(|cli| cli.resolve(config::Config::default())))
+    }
+
+    #[test]
+    fn theme_selection_keeps_cascading_and_final_accent_precedence() {
+        let config: config::Config = toml::from_str("theme='default'\n[styles.normal]\nfg='lightblue'\nmodifiers=['bold']\n[styles.muted]\nmodifiers=[]\n[styles.accent]\nfg='red'\nmodifiers=['bold']").unwrap();
+        let cli =
+            super::parse_arguments(["--theme", "default", "--accent", "blue"].map(Into::into))
+                .unwrap()
+                .unwrap();
+        assert_eq!(cli.theme, Some(themes::BuiltinTheme::Default));
+        let styles = cli.resolve(config).styles;
+        assert_eq!(styles.normal.fg, Some(ratatui::style::Color::LightBlue));
+        assert_eq!(styles.muted.fg, styles.normal.fg);
+        assert!(styles.muted.add_modifier.is_empty());
+        assert_eq!(styles.completed, styles.muted);
+        assert_eq!(styles.border, styles.muted);
+        assert_eq!(styles.accent.fg, Some(ratatui::style::Color::Blue));
+        assert_eq!(styles.accent.add_modifier, ratatui::style::Modifier::BOLD);
+        for args in [
+            vec!["--theme"],
+            vec!["--theme", "unknown"],
+            vec!["--theme", "Default"],
+            vec!["--theme", "default", "--theme", "default"],
+        ] {
+            let error = super::parse_arguments(args.into_iter().map(Into::into))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("default"), "{error}");
+        }
     }
 
     #[test]
