@@ -11,7 +11,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 use serde::Serialize;
 
-use crate::app::{HistoryCache, Task};
+use crate::app::Task;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -156,30 +156,6 @@ impl Storage {
             tasks,
             "Original tasks are unchanged",
             "The new task list is already visible",
-        )
-    }
-
-    pub fn load_history(&self) -> Option<HistoryCache> {
-        // A missing authoritative file must never resurrect an old empty-list cache.
-        if !self.path.try_exists().ok()? {
-            return None;
-        }
-        let contents = fs::read(self.path.with_file_name("history.json")).ok()?;
-        serde_json::from_slice(&contents).ok()
-    }
-
-    pub fn save_history(&self, cache: &HistoryCache) -> Result<()> {
-        if !self.path.try_exists()? {
-            return Ok(());
-        }
-        if self.load()? != cache.tasks() {
-            return Err("task file changed; undo history was not saved".into());
-        }
-        atomic_save(
-            &self.path.with_file_name("history.json"),
-            cache,
-            "Original history cache is unchanged",
-            "The new history cache is already visible",
         )
     }
 }
@@ -347,137 +323,6 @@ pub mod tests {
             }
             assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), invalid);
         }
-    }
-
-    #[test]
-    fn history_io_is_optional_atomic_private_and_independent_of_tasks() {
-        let fixture = Fixture::new();
-        let directory = fixture.task_path().parent().unwrap();
-        let history_path = fixture.task_path().with_file_name("history.json");
-        let cache = crate::app::App::new(Vec::new()).into_history_cache();
-        assert!(fixture.storage.load_history().is_none());
-        fixture.storage.save_history(&cache).unwrap();
-        assert!(!history_path.exists() && !fixture.task_path().exists());
-        fixture.storage.save(&[]).unwrap();
-        let bytes = fs::read(fixture.task_path()).unwrap();
-        let held = fixture.storage.lock().unwrap();
-        for _ in 0..3 {
-            fixture.storage.save_history(&cache).unwrap();
-            assert_eq!(fixture.storage.load_history().unwrap(), cache);
-            assert_eq!(fs::read(fixture.task_path()).unwrap(), bytes);
-            assert!(
-                fixture
-                    .storage
-                    .lock()
-                    .unwrap_err()
-                    .to_string()
-                    .contains("already running")
-            );
-        }
-        #[cfg(unix)]
-        assert_eq!(
-            fs::metadata(&history_path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-        let (task_temp, task_file) = create_temporary(directory, "tasks.json").unwrap();
-        let (cache_temp, cache_file) = create_temporary(directory, "history.json").unwrap();
-        assert_ne!(task_temp, cache_temp);
-        drop((task_file, cache_file));
-        fs::remove_file(task_temp).unwrap();
-        fs::remove_file(cache_temp).unwrap();
-        let original = fs::read(&history_path).unwrap();
-        fixture
-            .storage
-            .save(&[Task {
-                carried: false,
-                text: "external edit".into(),
-                completed: false,
-            }])
-            .unwrap();
-        assert!(fixture.storage.save_history(&cache).is_err());
-        assert_eq!(fs::read(&history_path).unwrap(), original);
-        fixture.storage.save(&[]).unwrap();
-        // Real replacement failure, portable across runners and privilege levels.
-        fs::remove_file(&history_path).unwrap();
-        fs::create_dir(&history_path).unwrap();
-        fs::write(history_path.join("keep"), "untouched").unwrap();
-        assert!(fixture.storage.save_history(&cache).is_err());
-        assert_eq!(fs::read(fixture.task_path()).unwrap(), bytes);
-        assert_eq!(fs::read(history_path.join("keep")).unwrap(), b"untouched");
-        let temporary = fs::read_dir(directory)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .find(|path| {
-                path.file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .starts_with(".history.json.")
-            })
-            .unwrap();
-        assert_eq!(
-            serde_json::from_slice::<HistoryCache>(&fs::read(temporary).unwrap()).unwrap(),
-            cache
-        );
-        drop(held);
-    }
-
-    #[test]
-    fn history_temporary_creation_failure_preserves_existing_cache_and_tasks() {
-        let fixture = Fixture::new();
-        fixture.storage.save(&[]).unwrap();
-        let cache = crate::app::App::new(Vec::new()).into_history_cache();
-        fixture.storage.save_history(&cache).unwrap();
-        let history = fixture.task_path().with_file_name("history.json");
-        let original = fs::read(&history).unwrap();
-        let tasks = fs::read(fixture.task_path()).unwrap();
-        let directory = history.parent().unwrap();
-        for sequence in 0..1000 {
-            fs::write(
-                directory.join(format!(
-                    ".history.json.{}.{sequence}.tmp",
-                    std::process::id()
-                )),
-                "old recovery data",
-            )
-            .unwrap();
-        }
-        assert!(
-            fixture
-                .storage
-                .save_history(&cache)
-                .unwrap_err()
-                .to_string()
-                .contains("too many temporary files")
-        );
-        assert_eq!(fs::read(history).unwrap(), original);
-        assert_eq!(fs::read(fixture.task_path()).unwrap(), tasks);
-    }
-
-    #[test]
-    fn unreadable_or_malformed_history_and_missing_authority_are_cache_misses() {
-        let fixture = Fixture::new();
-        fixture.storage.save(&[]).unwrap();
-        let cache = crate::app::App::new(Vec::new()).into_history_cache();
-        let path = fixture.task_path().with_file_name("history.json");
-        for contents in ["not json", "null", "{}", "{\"version\":1}"] {
-            fs::write(&path, contents).unwrap();
-            assert!(fixture.storage.load_history().is_none());
-            assert_eq!(fs::read_to_string(&path).unwrap(), contents);
-        }
-        fs::remove_file(&path).unwrap();
-        fs::create_dir(&path).unwrap();
-        assert!(fixture.storage.load_history().is_none());
-        fs::remove_dir(&path).unwrap();
-        fixture.storage.save_history(&cache).unwrap();
-        fs::remove_file(fixture.task_path()).unwrap();
-        assert!(fixture.storage.load().unwrap().is_empty());
-        assert!(fixture.storage.load_history().is_none());
-        fixture.storage.save_history(&cache).unwrap();
-        assert!(!fixture.task_path().exists());
-        fs::write(fixture.task_path(), "not json").unwrap();
-        assert!(fixture.storage.load().is_err());
-        assert!(fixture.storage.save_history(&cache).is_err());
-        assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), "not json");
     }
 
     #[test]

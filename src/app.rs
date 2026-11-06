@@ -69,50 +69,10 @@ pub enum Mode {
     ConfirmClear,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(Clone, Debug, PartialEq))]
 struct UndoState {
     tasks: Vec<Task>,
-    #[serde(deserialize_with = "Option::deserialize")]
     selected: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct HistoryCache {
-    version: u32,
-    tasks: Vec<Task>,
-    #[serde(deserialize_with = "Option::deserialize")]
-    selected: Option<usize>,
-    undo: VecDeque<UndoState>,
-    redo: VecDeque<UndoState>,
-}
-
-impl HistoryCache {
-    pub fn tasks(&self) -> &[Task] {
-        &self.tasks
-    }
-
-    fn valid_for(&self, tasks: &[Task], completed_at_bottom: bool) -> bool {
-        let valid_state = |tasks: &[Task], selected: Option<usize>| {
-            selected.is_none_or(|index| index < tasks.len())
-                && tasks.iter().all(|task| task.validation_error().is_none())
-                && (!completed_at_bottom
-                    || !tasks
-                        .windows(2)
-                        .any(|pair| pair[0].completed && !pair[1].completed))
-        };
-        self.version == 1
-            && self.tasks == tasks
-            && self.undo.len() <= HISTORY_LIMIT
-            && self.redo.len() <= HISTORY_LIMIT
-            && valid_state(&self.tasks, self.selected)
-            && self
-                .undo
-                .iter()
-                .chain(&self.redo)
-                .all(|state| valid_state(&state.tasks, state.selected))
-    }
 }
 
 pub struct App {
@@ -299,30 +259,6 @@ impl App {
 
     pub fn can_redo(&self) -> bool {
         !self.redo_history.is_empty()
-    }
-
-    pub fn into_history_cache(self) -> HistoryCache {
-        HistoryCache {
-            version: 1,
-            tasks: self.tasks,
-            selected: self.list.selected(),
-            undo: self.history,
-            redo: self.redo_history,
-        }
-    }
-
-    pub fn restore_history(&mut self, cache: HistoryCache) {
-        if !cache.valid_for(&self.tasks, self.completed_at_bottom) {
-            return;
-        }
-        self.history = cache.undo;
-        self.redo_history = cache.redo;
-        self.list.select(cache.selected);
-        self.mode = Mode::Normal;
-        self.scroll = 0;
-        self.row_tasks.clear();
-        self.viewport_height = 0;
-        self.reveal_selection = true;
     }
 
     pub fn search_query(&self) -> Option<&str> {
@@ -1047,6 +983,45 @@ mod tests {
     use crate::storage::tests::Fixture;
 
     #[test]
+    fn restart_keeps_saved_tasks_but_never_restores_or_creates_history_files() {
+        for legacy in [false, true] {
+            let fixture = Fixture::new();
+            let mut app = app_with_tasks(3);
+            app.toggle(0, &fixture.storage).unwrap();
+            app.toggle(1, &fixture.storage).unwrap();
+            app.undo(&fixture.storage).unwrap();
+            assert!(app.can_undo() && app.can_redo());
+            let path = fixture.task_path().with_file_name("history.json");
+            let bytes = b"legacy history deliberately left untouched";
+            if legacy {
+                std::fs::write(&path, bytes).unwrap();
+            }
+            app.list.select(Some(2));
+            let tasks = app.tasks.clone();
+            drop(app);
+            let mut restarted = App::new(fixture.storage.load().unwrap());
+            assert_eq!(restarted.tasks, tasks);
+            assert_eq!(restarted.list.selected(), Some(0));
+            assert!(!restarted.can_undo() && !restarted.can_redo());
+            press(&mut restarted, &fixture, KeyCode::Char('u'));
+            restarted.redo(&fixture.storage).unwrap();
+            assert_eq!(restarted.tasks, tasks);
+            assert_eq!(fixture.storage.load().unwrap(), tasks);
+            restarted.toggle(2, &fixture.storage).unwrap();
+            restarted.undo(&fixture.storage).unwrap();
+            assert_eq!(fixture.storage.load().unwrap(), tasks);
+            restarted.redo(&fixture.storage).unwrap();
+            assert_eq!(fixture.storage.load().unwrap(), restarted.tasks);
+            drop(restarted);
+            if legacy {
+                assert_eq!(std::fs::read(path).unwrap(), bytes);
+            } else {
+                assert!(!path.exists());
+            }
+        }
+    }
+
+    #[test]
     fn clipboard_output_and_errors_leave_tasks_selection_and_histories_unchanged() {
         struct BrokenOutput;
         impl std::io::Write for BrokenOutput {
@@ -1066,8 +1041,8 @@ mod tests {
         assert!(app.can_undo() && app.can_redo());
         let tasks = app.tasks.clone();
         let selected = app.list.selected();
-        let undo = serde_json::to_value(&app.history).unwrap();
-        let redo = serde_json::to_value(&app.redo_history).unwrap();
+        let undo = app.history.clone();
+        let redo = app.redo_history.clone();
         let saved = fixture.storage.load().unwrap();
         app.scroll = 2;
         let mut output = Vec::new();
@@ -1101,8 +1076,8 @@ mod tests {
         assert_eq!(app.tasks, tasks);
         assert_eq!(app.list.selected(), selected);
         assert_eq!(app.scroll, 2);
-        assert_eq!(serde_json::to_value(&app.history).unwrap(), undo);
-        assert_eq!(serde_json::to_value(&app.redo_history).unwrap(), redo);
+        assert_eq!(app.history.clone(), undo);
+        assert_eq!(app.redo_history.clone(), redo);
         assert_eq!(fixture.storage.load().unwrap(), saved);
         press(&mut app, &fixture, KeyCode::Down);
         assert!(app.notification.is_none());
@@ -1250,13 +1225,12 @@ mod tests {
         }
         assert_eq!(app.tasks.len(), 3);
         app.undo(&fixture.storage).unwrap();
-        let before = serde_json::to_value((
-            &app.tasks,
+        let before = (
+            app.tasks.clone(),
             app.list.selected(),
-            &app.history,
-            &app.redo_history,
-        ))
-        .unwrap();
+            app.history.clone(),
+            app.redo_history.clone(),
+        );
         let data = fixture.directory.join("data");
         std::fs::rename(&data, fixture.directory.join("backup")).unwrap();
         std::fs::write(data, "blocked").unwrap();
@@ -1268,13 +1242,12 @@ mod tests {
             .is_err()
         );
         assert_eq!(
-            serde_json::to_value((
-                &app.tasks,
+            (
+                app.tasks.clone(),
                 app.list.selected(),
-                &app.history,
-                &app.redo_history
-            ))
-            .unwrap(),
+                app.history.clone(),
+                app.redo_history.clone()
+            ),
             before
         );
         assert_eq!(app.task_register.as_deref(), Some("task 0"));
@@ -1288,13 +1261,12 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Char(' '));
         press(&mut app, &fixture, KeyCode::Char('m'));
         press(&mut app, &fixture, KeyCode::Char('u'));
-        let before = serde_json::to_value((
-            &app.tasks,
+        let before = (
+            app.tasks.clone(),
             app.list.selected(),
-            &app.history,
-            &app.redo_history,
-        ))
-        .unwrap();
+            app.history.clone(),
+            app.redo_history.clone(),
+        );
         let saved = std::fs::read(fixture.task_path()).unwrap();
         app.theme = BuiltinTheme::TokyoNightStorm;
         app.style_overrides = toml::from_str::<crate::config::Config>(
@@ -1336,13 +1308,12 @@ mod tests {
             );
         }
         assert_eq!(
-            serde_json::to_value((
-                &app.tasks,
+            (
+                app.tasks.clone(),
                 app.list.selected(),
-                &app.history,
-                &app.redo_history
-            ))
-            .unwrap(),
+                app.history.clone(),
+                app.redo_history.clone()
+            ),
             before
         );
         assert_eq!(std::fs::read(fixture.task_path()).unwrap(), saved);
@@ -1400,18 +1371,6 @@ mod tests {
                 _ => panic!("unexpected mode change"),
             }
         }
-    }
-
-    fn reopen_with_history(app: App, fixture: &Fixture) -> App {
-        let grouped = app.completed_at_bottom;
-        fixture
-            .storage
-            .save_history(&app.into_history_cache())
-            .unwrap();
-        let mut reopened = App::new(fixture.storage.load().unwrap());
-        reopened.completed_at_bottom = grouped;
-        reopened.restore_history(fixture.storage.load_history().unwrap());
-        reopened
     }
 
     #[test]
@@ -1500,7 +1459,6 @@ mod tests {
                             .contains(&Some(index))
                     );
                 }
-                app = reopen_with_history(app, &fixture);
                 app.undo(&fixture.storage).unwrap();
                 assert_eq!(app.tasks, original);
                 assert_eq!(app.list.selected(), selected);
@@ -1524,13 +1482,12 @@ mod tests {
             app.toggle(1, &fixture.storage).unwrap();
             app.undo(&fixture.storage).unwrap();
             let state = |app: &App| {
-                serde_json::to_value((
-                    &app.tasks,
+                (
+                    app.tasks.clone(),
                     app.list.selected(),
-                    &app.history,
-                    &app.redo_history,
-                ))
-                .unwrap()
+                    app.history.clone(),
+                    app.redo_history.clone(),
+                )
             };
             let before = state(&app);
             let data = fixture.directory.join("data");
@@ -1890,8 +1847,11 @@ mod tests {
             app.undo(&fixture.storage).unwrap();
             app.mode = mode;
             app.list.select(Some(0));
-            let snapshot =
-                serde_json::to_value((&app.tasks, &app.history, &app.redo_history)).unwrap();
+            let snapshot = (
+                app.tasks.clone(),
+                app.history.clone(),
+                app.redo_history.clone(),
+            );
             let bytes = std::fs::read(fixture.task_path()).unwrap();
             let mode_before = format!("{:?}", app.mode);
             for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
@@ -1910,7 +1870,11 @@ mod tests {
             assert_eq!(app.mode, Mode::Normal);
             assert_eq!(app.list.selected(), Some(if search { 1 } else { 0 }));
             assert_eq!(
-                serde_json::to_value((&app.tasks, &app.history, &app.redo_history)).unwrap(),
+                (
+                    app.tasks.clone(),
+                    app.history.clone(),
+                    app.redo_history.clone()
+                ),
                 snapshot
             );
             assert_eq!(std::fs::read(fixture.task_path()).unwrap(), bytes);
@@ -1954,7 +1918,7 @@ mod tests {
                 press(&mut app, &fixture, KeyCode::Backspace);
                 press(&mut app, &fixture, KeyCode::Esc);
                 assert_eq!(app.last_search_query.as_deref(), Some("x"));
-                let reopened = reopen_with_history(app, &fixture);
+                let reopened = App::new(fixture.storage.load().unwrap());
                 assert_eq!(reopened.last_search_query, None);
                 assert_eq!(reopened.search_query(), None);
             }
@@ -2061,13 +2025,12 @@ mod tests {
         };
         press(&mut app, &fixture, KeyCode::Enter);
         let snapshot = |app: &App| {
-            serde_json::to_value((
-                &app.tasks,
+            (
+                app.tasks.clone(),
                 app.list.selected(),
-                &app.history,
-                &app.redo_history,
-            ))
-            .unwrap()
+                app.history.clone(),
+                app.redo_history.clone(),
+            )
         };
         let changed = snapshot(&app);
         app.reveal_selection = false;
@@ -2259,13 +2222,12 @@ mod tests {
         }
         app.undo(&fixture.storage).unwrap();
         let snapshot = |app: &App| {
-            serde_json::to_value((
-                &app.tasks,
+            (
+                app.tasks.clone(),
                 app.list.selected(),
-                &app.history,
-                &app.redo_history,
-            ))
-            .unwrap()
+                app.history.clone(),
+                app.redo_history.clone(),
+            )
         };
         let carried = snapshot(&app);
         let bytes = std::fs::read(fixture.task_path()).unwrap();
@@ -2298,7 +2260,7 @@ mod tests {
     }
 
     #[test]
-    fn carryover_completion_history_and_restart_are_coherent() {
+    fn carryover_completion_and_runtime_history_are_coherent() {
         for grouped in [false, true] {
             for action in [KeyCode::Enter, KeyCode::Char(' '), KeyCode::Null] {
                 let fixture = Fixture::new();
@@ -2311,7 +2273,6 @@ mod tests {
                 assert!(!app.tasks[0].carried);
                 app.undo(&fixture.storage).unwrap();
                 assert!(app.tasks[0].carried);
-                app = reopen_with_history(app, &fixture);
                 assert!(app.tasks[0].carried && app.can_redo());
                 if action == KeyCode::Null {
                     app.row_tasks = vec![Some(0), Some(1)];
@@ -2336,7 +2297,6 @@ mod tests {
                 assert_eq!(app.history.len(), history);
                 app.undo(&fixture.storage).unwrap();
                 assert!(app.tasks[0].carried && !app.tasks[0].completed);
-                app = reopen_with_history(app, &fixture);
                 app.redo(&fixture.storage).unwrap();
                 let index = app.list.selected().unwrap();
                 assert!(app.tasks[index].completed && !app.tasks[index].carried);
@@ -2384,7 +2344,6 @@ mod tests {
             assert_eq!(app.list.selected(), selection);
             app.redo(&fixture.storage).unwrap();
             assert_eq!(app.tasks, survivors);
-            app = reopen_with_history(app, &fixture);
             assert_eq!(app.tasks, survivors);
             press(&mut app, &fixture, KeyCode::Char('x'));
             assert_eq!(app.tasks, survivors);
@@ -2412,13 +2371,12 @@ mod tests {
         assert!(!app.tasks[2].carried);
         app.undo(&fixture.storage).unwrap();
         let snapshot = |app: &App| {
-            serde_json::to_value((
-                &app.tasks,
+            (
+                app.tasks.clone(),
                 app.list.selected(),
-                &app.history,
-                &app.redo_history,
-            ))
-            .unwrap()
+                app.history.clone(),
+                app.redo_history.clone(),
+            )
         };
         let original = snapshot(&app);
         let data = fixture.directory.join("data");
@@ -2471,45 +2429,8 @@ mod tests {
             app.mode = mode;
             press(&mut app, &fixture, KeyCode::Char('m'));
             assert_eq!(app.tasks, fixture.storage.load().unwrap());
-            assert_eq!(app.history.len(), original[2].as_array().unwrap().len());
-            assert_eq!(
-                app.redo_history.len(),
-                original[3].as_array().unwrap().len()
-            );
-        }
-    }
-
-    #[test]
-    fn legacy_history_defaults_carryover_and_invalid_snapshots_are_rejected() {
-        let fixture = Fixture::new();
-        let mut app = app_with_tasks(1);
-        app.toggle(0, &fixture.storage).unwrap();
-        app.undo(&fixture.storage).unwrap();
-        let tasks = app.tasks.clone();
-        let legacy = serde_json::to_value(app.into_history_cache()).unwrap();
-        assert!(!legacy.to_string().contains("carried"));
-        let cache: HistoryCache = serde_json::from_value(legacy).unwrap();
-        assert!(cache.valid_for(&tasks, false));
-        let mut app = App::new(tasks.clone());
-        app.restore_history(cache);
-        app.redo(&fixture.storage).unwrap();
-        assert!(app.tasks[0].completed && !app.tasks[0].carried);
-        app.undo(&fixture.storage).unwrap();
-        let valid = serde_json::to_value(app.into_history_cache()).unwrap();
-        for stack in ["tasks", "undo", "redo"] {
-            let mut invalid = valid.clone();
-            if stack == "tasks" {
-                invalid[stack][0]["completed"] = serde_json::json!(true);
-                invalid[stack][0]["carried"] = serde_json::json!(true);
-            } else {
-                invalid[stack] = serde_json::json!([{"tasks":[{"text":"bad","completed":true,"carried":true}],"selected":0}]);
-            }
-            let cache: HistoryCache = serde_json::from_value(invalid).unwrap();
-            assert!(!cache.valid_for(&tasks, false));
-            let mut app = App::new(tasks.clone());
-            app.restore_history(cache);
-            assert!(!app.can_undo() && !app.can_redo());
-            assert_eq!(app.tasks, tasks);
+            assert_eq!(app.history.len(), original.2.len());
+            assert_eq!(app.redo_history.len(), original.3.len());
         }
     }
 
@@ -2542,9 +2463,11 @@ mod tests {
                         app.undo(&fixture.storage).unwrap();
                         app.list.select(Some(2));
                     }
-                    let before =
-                        serde_json::to_value((&app.tasks, &app.history, &app.redo_history))
-                            .unwrap();
+                    let before = (
+                        app.tasks.clone(),
+                        app.history.clone(),
+                        app.redo_history.clone(),
+                    );
                     for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
                         app.key(
                             KeyEvent::new_with_kind(event.code, event.modifiers, kind),
@@ -2553,15 +2476,23 @@ mod tests {
                         .unwrap();
                         assert_eq!(app.mode, Mode::Normal);
                         assert_eq!(
-                            serde_json::to_value((&app.tasks, &app.history, &app.redo_history))
-                                .unwrap(),
+                            (
+                                app.tasks.clone(),
+                                app.history.clone(),
+                                app.redo_history.clone()
+                            ),
                             before
                         );
                     }
                     assert!(!app.key(event, &fixture.storage).unwrap());
                     let mode = format!("{:?}", app.mode);
                     outcomes.push((
-                        serde_json::to_value(app.into_history_cache()).unwrap(),
+                        (
+                            app.tasks.clone(),
+                            app.list.selected(),
+                            app.history.clone(),
+                            app.redo_history.clone(),
+                        ),
                         mode,
                     ));
                 }
@@ -2603,8 +2534,11 @@ mod tests {
             {
                 input.set_cursor(0);
             }
-            let before =
-                serde_json::to_value((&app.tasks, &app.history, &app.redo_history)).unwrap();
+            let before = (
+                app.tasks.clone(),
+                app.history.clone(),
+                app.redo_history.clone(),
+            );
             let original_mode = format!("{:?}", app.mode);
             for character in ['z', 'y'] {
                 app.key(
@@ -2628,7 +2562,11 @@ mod tests {
                 assert_eq!(format!("{:?}", app.mode), original_mode);
             }
             assert_eq!(
-                serde_json::to_value((&app.tasks, &app.history, &app.redo_history)).unwrap(),
+                (
+                    app.tasks.clone(),
+                    app.history.clone(),
+                    app.redo_history.clone()
+                ),
                 before
             );
         }
@@ -2641,13 +2579,12 @@ mod tests {
         app.toggle(0, &fixture.storage).unwrap();
         app.toggle(1, &fixture.storage).unwrap();
         app.undo(&fixture.storage).unwrap();
-        let before = serde_json::to_value((
-            &app.tasks,
+        let before = (
+            app.tasks.clone(),
             app.list.selected(),
-            &app.history,
-            &app.redo_history,
-        ))
-        .unwrap();
+            app.history.clone(),
+            app.redo_history.clone(),
+        );
         let data = fixture.directory.join("data");
         std::fs::rename(&data, fixture.directory.join("backup")).unwrap();
         std::fs::write(data, "blocked").unwrap();
@@ -2658,139 +2595,17 @@ mod tests {
         ] {
             assert!(app.key(event, &fixture.storage).is_err());
             assert_eq!(
-                serde_json::to_value((
-                    &app.tasks,
+                (
+                    app.tasks.clone(),
                     app.list.selected(),
-                    &app.history,
-                    &app.redo_history
-                ))
-                .unwrap(),
+                    app.history.clone(),
+                    app.redo_history.clone()
+                ),
                 before
             );
         }
     }
 
-    #[test]
-    fn cache_restores_both_stacks_and_selection_without_persisting_transient_state() {
-        let fixture = Fixture::new();
-        let mut app = app_with_tasks(3);
-        app.toggle(0, &fixture.storage).unwrap();
-        app.move_selected(true, &fixture.storage).unwrap();
-        app.undo(&fixture.storage).unwrap();
-        let tasks = app.tasks.clone();
-        app.list.select(Some(2));
-        app.scroll = 999;
-        app.row_tasks = vec![Some(2)];
-        app.viewport_height = 1;
-        app.mode = Mode::Searching {
-            input: "not cached".into(),
-            original: Some(0),
-        };
-        let mut reopened = reopen_with_history(app, &fixture);
-        assert_eq!(reopened.tasks, tasks);
-        assert_eq!(reopened.list.selected(), Some(2));
-        assert_eq!(reopened.mode, Mode::Normal);
-        assert_eq!(reopened.scroll, 0);
-        assert!(reopened.row_tasks.is_empty());
-        assert_eq!(reopened.viewport_height, 0);
-        assert!(reopened.reveal_selection);
-        assert_eq!(reopened.history.len(), 1);
-        assert_eq!(reopened.redo_history.len(), 1);
-        let path = fixture.task_path().with_file_name("history.json");
-        let bytes = std::fs::read(&path).unwrap();
-        reopened.redo(&fixture.storage).unwrap();
-        assert_ne!(reopened.tasks, tasks);
-        reopened.undo(&fixture.storage).unwrap();
-        assert_eq!(reopened.tasks, tasks);
-        reopened.toggle(1, &fixture.storage).unwrap();
-        assert!(!reopened.can_redo());
-        assert_eq!(std::fs::read(path).unwrap(), bytes);
-    }
-
-    #[test]
-    fn cache_validation_is_all_or_nothing_for_every_snapshot_and_required_field() {
-        use serde_json::json;
-        let fixture = Fixture::new();
-        let mut app = app_with_tasks(3);
-        app.toggle(0, &fixture.storage).unwrap();
-        app.toggle(1, &fixture.storage).unwrap();
-        app.undo(&fixture.storage).unwrap();
-        app.list.select(Some(2));
-        let tasks = app.tasks.clone();
-        let original = std::fs::read(fixture.task_path()).unwrap();
-        let base = serde_json::to_value(app.into_history_cache()).unwrap();
-        let mut invalid = Vec::new();
-        for field in ["version", "tasks", "selected", "undo", "redo"] {
-            let mut value = base.clone();
-            value.as_object_mut().unwrap().remove(field);
-            invalid.push(value);
-        }
-        for (field, replacement) in [
-            ("version", json!(2)),
-            ("selected", json!(3)),
-            ("selected", json!(-1)),
-            ("tasks", json!([])),
-            ("undo", json!(null)),
-            ("redo", json!("bad")),
-        ] {
-            let mut value = base.clone();
-            value[field] = replacement;
-            invalid.push(value);
-        }
-        for stack in ["undo", "redo"] {
-            for field in ["tasks", "selected"] {
-                let mut value = base.clone();
-                value[stack][0].as_object_mut().unwrap().remove(field);
-                invalid.push(value);
-            }
-            for selection in [json!(99), json!("bad")] {
-                let mut value = base.clone();
-                value[stack][0]["selected"] = selection;
-                invalid.push(value);
-            }
-            for text in [
-                "",
-                " padded",
-                "padded ",
-                "line\nbreak",
-                "tab\there",
-                "nul\0here",
-            ] {
-                let mut value = base.clone();
-                value[stack][0]["tasks"][0]["text"] = json!(text);
-                invalid.push(value);
-            }
-            let mut value = base.clone();
-            value[stack][0]["tasks"][0]["completed"] = json!(null);
-            invalid.push(value);
-            let mut value = base.clone();
-            value[stack] = json!(vec![base[stack][0].clone(); HISTORY_LIMIT + 1]);
-            invalid.push(value);
-        }
-        for value in invalid {
-            let mut reopened = App::new(tasks.clone());
-            let path = fixture.task_path().with_file_name("history.json");
-            std::fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
-            if let Some(cache) = fixture.storage.load_history() {
-                reopened.restore_history(cache);
-            }
-            assert_eq!(reopened.tasks, tasks, "{value}");
-            assert_eq!(reopened.list.selected(), Some(0), "{value}");
-            assert!(!reopened.can_undo() && !reopened.can_redo(), "{value}");
-            assert_eq!(std::fs::read(fixture.task_path()).unwrap(), original);
-        }
-        let mut invalid_empty = base.clone();
-        invalid_empty["tasks"] = json!([]);
-        invalid_empty["selected"] = json!(0);
-        let mut empty = App::new(Vec::new());
-        empty.restore_history(serde_json::from_value(invalid_empty).unwrap());
-        assert!(!empty.can_undo() && !empty.can_redo());
-        assert_eq!(empty.list.selected(), None);
-        let mut valid = App::new(tasks);
-        valid.restore_history(serde_json::from_value(base).unwrap());
-        assert!(valid.can_undo() && valid.can_redo());
-        assert_eq!(valid.list.selected(), Some(2));
-    }
     use unicode_segmentation::UnicodeSegmentation;
 
     fn app_with_tasks(count: usize) -> App {
@@ -3873,7 +3688,6 @@ mod tests {
             press(&mut app, &fixture, KeyCode::Enter);
             assert_eq!(app.history.len(), (index + 1).min(HISTORY_LIMIT));
         }
-        let mut app = reopen_with_history(app, &fixture);
         assert_eq!(app.history.len(), HISTORY_LIMIT);
         for remaining in (2..258).rev() {
             press(&mut app, &fixture, KeyCode::Char('u'));
@@ -3888,8 +3702,6 @@ mod tests {
         assert!(app.history.is_empty());
         press(&mut app, &fixture, KeyCode::Char('u'));
         assert_eq!(app.tasks.len(), 2);
-        assert_eq!(app.redo_history.len(), HISTORY_LIMIT);
-        let mut app = reopen_with_history(app, &fixture);
         assert_eq!(app.redo_history.len(), HISTORY_LIMIT);
         for remaining in 3..=258 {
             app.key(
@@ -4105,7 +3917,7 @@ mod tests {
     }
 
     #[test]
-    fn undo_walks_back_through_history_and_a_new_app_starts_empty_without_cache_restore() {
+    fn undo_walks_back_through_history_and_a_new_app_starts_empty() {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(2);
         let original = app.tasks.clone();
@@ -4500,13 +4312,12 @@ mod tests {
             app.toggle(1, &fixture.storage).unwrap();
             app.undo(&fixture.storage).unwrap();
             let snapshot = |app: &App| {
-                serde_json::to_value((
-                    &app.tasks,
+                (
+                    app.tasks.clone(),
                     app.list.selected(),
-                    &app.history,
-                    &app.redo_history,
-                ))
-                .unwrap()
+                    app.history.clone(),
+                    app.redo_history.clone(),
+                )
             };
             let original = snapshot(&app);
             for ending in [KeyCode::Esc, KeyCode::Enter] {

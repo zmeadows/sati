@@ -24,7 +24,7 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 - **Keyboard-first, with mouse support.** Navigate, reorder, and complete tasks from the keyboard. Click a task to toggle it, or scroll with the mouse wheel.
 - **Search in place.** Find tasks as you type, see matching text highlighted, and jump to a result without filtering or rearranging the list.
 - **Carryover.** Mark unfinished tasks with `m` (`[↪]`) to keep them when clearing the list.
-- **Undo and redo.** Up to 256 changes in either direction, with history still available after restarting the program.
+- **Undo and redo.** Up to 256 changes in either direction during the current session.
 - **Display options.** Wrap long tasks, group completed items, and change some style settings with command-line flags.
 
 ## Suggested usage
@@ -278,7 +278,9 @@ Tasks are saved locally in `tasks.json`:
 | macOS | `~/Library/Application Support/sati/tasks.json` |
 | Windows | `%APPDATA%\sati\tasks.json` |
 
-Undo/redo history is saved separately in `history.json` when you quit normally. If that history is missing or no longer matches your tasks, `sati` starts with an empty history; your saved tasks are unaffected.
+Tasks are saved automatically to `tasks.json`. Undo/redo history is session-only
+and is not preserved across restarts. Old `history.json` files are ignored and
+can be removed manually if desired.
 
 ## Credits
 
