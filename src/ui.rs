@@ -16,6 +16,7 @@ use crate::styles::Styles;
 
 pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let area = frame.area();
+    frame.render_widget(Block::default().style(app.styles.normal), area);
     let searching = matches!(
         app.mode,
         Mode::Searching { .. } | Mode::SearchResults { .. }
@@ -358,7 +359,7 @@ fn task_spans(
 ) -> Vec<Span<'static>> {
     let highlight = base
         .fg(Color::Reset)
-        .bg(Color::Reset)
+        .bg(base.bg.unwrap_or(Color::Reset))
         .remove_modifier(Modifier::DIM)
         .add_modifier(Modifier::REVERSED);
     let mut spans = Vec::new();
@@ -650,6 +651,7 @@ fn draw_confirmation(frame: &mut Frame, area: Rect, styles: &Styles) {
         height,
     );
     frame.render_widget(Clear, dialog);
+    frame.render_widget(Block::default().style(styles.normal), dialog);
     let block = Block::bordered().border_style(styles.border);
     let inner = block.inner(dialog);
     frame.render_widget(block, dialog);
@@ -884,6 +886,70 @@ mod tests {
             );
             assert!(!cell.modifier.contains(Modifier::DIM));
         }
+    }
+
+    #[test]
+    fn themed_background_fills_every_cell_including_empty_regions_and_dialogs() {
+        for mode in 0..6 {
+            for width in [1, 12, 60] {
+                let mut app = App::new(vec![Task {
+                    text: "Work: long wrapped task words".into(),
+                    completed: true,
+                    carried: false,
+                }]);
+                let config: crate::config::Config =
+                    toml::from_str("theme='nord'\n[styles.normal]\nbg='#20242d'").unwrap();
+                app.styles = Styles::resolve(config.theme, &config.styles, None);
+                app.mode = match mode {
+                    0 => Mode::Normal,
+                    1 => Mode::Adding("draft".into(), AddPlacement::End),
+                    2 => Mode::Editing {
+                        index: 0,
+                        input: "edited".into(),
+                    },
+                    3 => Mode::Searching {
+                        input: "Work".into(),
+                        original: Some(0),
+                    },
+                    4 => Mode::SearchResults {
+                        input: "Work".into(),
+                        original: Some(0),
+                    },
+                    _ => Mode::ConfirmClear,
+                };
+                let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        draw(frame, &mut app);
+                    })
+                    .unwrap();
+                for cell in &terminal.backend().buffer().content {
+                    assert_eq!(
+                        cell.bg,
+                        Color::Rgb(32, 36, 45),
+                        "mode {mode}, width {width}, cell {cell:?}"
+                    );
+                }
+            }
+        }
+        let mut app = App::new(Vec::new());
+        let config: crate::config::Config =
+            toml::from_str("theme='nord'\n[styles.border]\nbg='#112233'").unwrap();
+        app.styles = Styles::resolve(config.theme, &config.styles, None);
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app);
+            })
+            .unwrap();
+        assert_eq!(
+            terminal.backend().buffer()[(0, 0)].bg,
+            Color::Rgb(17, 34, 51)
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(1, 1)].bg,
+            Color::Rgb(46, 52, 64)
+        );
     }
 
     fn wrapped_strings(text: &str, width: usize) -> Vec<&str> {

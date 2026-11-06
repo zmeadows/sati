@@ -24,6 +24,11 @@ impl Styles {
             } else {
                 base
             };
+            let style = if let Some(bg) = value.bg {
+                style.bg(bg)
+            } else {
+                style
+            };
             if let Some(modifiers) = value.modifiers {
                 style
                     .remove_modifier(Modifier::all())

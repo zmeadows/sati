@@ -44,19 +44,33 @@ pub struct StyleOverrides {
 #[derive(Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StyleOverride {
-    #[serde(default, deserialize_with = "foreground")]
+    #[serde(default, deserialize_with = "color")]
     pub fg: Option<Color>,
+    #[serde(default, deserialize_with = "background")]
+    pub bg: Option<Color>,
     #[serde(default, deserialize_with = "modifiers")]
     pub modifiers: Option<Modifier>,
 }
 
-fn foreground<'de, D: Deserializer<'de>>(
+fn color<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<Color>, D::Error> {
     let text = String::deserialize(deserializer)?;
     text.parse()
         .map(Some)
-        .map_err(|_| D::Error::custom(format!("invalid foreground color: {text}")))
+        .map_err(|_| D::Error::custom(format!("invalid color: {text}")))
+}
+
+fn background<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<Color>, D::Error> {
+    let color = color(deserializer)?;
+    match color {
+        Some(Color::Rgb(..) | Color::Reset) => Ok(color),
+        _ => Err(D::Error::custom(
+            "background must be #RRGGBB or reset (OSC 11 requires an exact RGB color)",
+        )),
+    }
 }
 
 fn modifiers<'de, D: Deserializer<'de>>(
@@ -149,6 +163,18 @@ fn default_path(get: impl Fn(&str) -> Option<OsString>) -> Result<Option<PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backgrounds_accept_exact_rgb_or_reset_on_every_role() {
+        for role in ["normal", "muted", "completed", "border", "accent"] {
+            for value in ["'#123456'", "'reset'"] {
+                assert!(toml::from_str::<Config>(&format!("[styles.{role}]\nbg={value}")).is_ok());
+            }
+            for value in ["'red'", "'3'", "'#123'", "12", "[]"] {
+                assert!(toml::from_str::<Config>(&format!("[styles.{role}]\nbg={value}")).is_err());
+            }
+        }
+    }
 
     #[test]
     fn style_fields_are_strict_and_colors_use_ratatui_parsing() {

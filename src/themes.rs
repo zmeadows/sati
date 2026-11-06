@@ -138,7 +138,9 @@ impl BuiltinTheme {
                 // Each palette role explicitly clears inherited modifiers.
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(212, 190, 152)),
+                    normal: plain
+                        .fg(Color::Rgb(212, 190, 152))
+                        .bg(Color::Rgb(40, 40, 40)),
                     muted: plain.fg(Color::Rgb(168, 153, 132)),
                     completed: plain.fg(Color::Rgb(146, 131, 116)),
                     border: plain.fg(Color::Rgb(90, 82, 76)),
@@ -148,7 +150,9 @@ impl BuiltinTheme {
             Self::CatppuccinMocha => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(205, 214, 244)),
+                    normal: plain
+                        .fg(Color::Rgb(205, 214, 244))
+                        .bg(Color::Rgb(30, 30, 46)),
                     muted: plain.fg(Color::Rgb(166, 173, 200)),
                     completed: plain.fg(Color::Rgb(108, 112, 134)),
                     border: plain.fg(Color::Rgb(88, 91, 112)),
@@ -158,7 +162,9 @@ impl BuiltinTheme {
             Self::TokyoNightStorm => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(192, 202, 245)),
+                    normal: plain
+                        .fg(Color::Rgb(192, 202, 245))
+                        .bg(Color::Rgb(36, 40, 59)),
                     muted: plain.fg(Color::Rgb(115, 122, 162)),
                     completed: plain.fg(Color::Rgb(86, 95, 137)),
                     border: plain.fg(Color::Rgb(84, 92, 126)),
@@ -168,7 +174,9 @@ impl BuiltinTheme {
             Self::KanagawaWave => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(220, 215, 186)),
+                    normal: plain
+                        .fg(Color::Rgb(220, 215, 186))
+                        .bg(Color::Rgb(31, 31, 40)),
                     muted: plain.fg(Color::Rgb(200, 192, 147)),
                     completed: plain.fg(Color::Rgb(114, 113, 105)),
                     border: plain.fg(Color::Rgb(84, 84, 109)),
@@ -178,7 +186,9 @@ impl BuiltinTheme {
             Self::RosePine => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(224, 222, 244)),
+                    normal: plain
+                        .fg(Color::Rgb(224, 222, 244))
+                        .bg(Color::Rgb(25, 23, 36)),
                     muted: plain.fg(Color::Rgb(144, 140, 170)),
                     completed: plain.fg(Color::Rgb(110, 106, 134)),
                     border: plain.fg(Color::Rgb(82, 79, 103)),
@@ -188,7 +198,9 @@ impl BuiltinTheme {
             Self::Nightfox => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(205, 206, 207)),
+                    normal: plain
+                        .fg(Color::Rgb(205, 206, 207))
+                        .bg(Color::Rgb(25, 35, 48)),
                     muted: plain.fg(Color::Rgb(174, 175, 176)),
                     completed: plain.fg(Color::Rgb(115, 128, 145)),
                     border: plain.fg(Color::Rgb(57, 80, 109)),
@@ -198,7 +210,9 @@ impl BuiltinTheme {
             Self::OneDark => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(171, 178, 191)),
+                    normal: plain
+                        .fg(Color::Rgb(171, 178, 191))
+                        .bg(Color::Rgb(40, 44, 52)),
                     muted: plain.fg(Color::Rgb(132, 139, 152)),
                     completed: plain.fg(Color::Rgb(92, 99, 112)),
                     border: plain.fg(Color::Rgb(57, 63, 74)),
@@ -208,7 +222,9 @@ impl BuiltinTheme {
             Self::GithubDark => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(201, 209, 217)),
+                    normal: plain
+                        .fg(Color::Rgb(201, 209, 217))
+                        .bg(Color::Rgb(13, 17, 23)),
                     muted: plain.fg(Color::Rgb(139, 148, 158)),
                     completed: plain.fg(Color::Rgb(110, 118, 129)),
                     border: plain.fg(Color::Rgb(48, 54, 61)),
@@ -218,7 +234,9 @@ impl BuiltinTheme {
             Self::EverforestMedium => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(211, 198, 170)),
+                    normal: plain
+                        .fg(Color::Rgb(211, 198, 170))
+                        .bg(Color::Rgb(45, 53, 59)),
                     muted: plain.fg(Color::Rgb(157, 169, 160)),
                     completed: plain.fg(Color::Rgb(122, 132, 120)),
                     border: plain.fg(Color::Rgb(79, 88, 94)),
@@ -228,7 +246,9 @@ impl BuiltinTheme {
             Self::CyberdreamMuted => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(255, 255, 255)),
+                    normal: plain
+                        .fg(Color::Rgb(255, 255, 255))
+                        .bg(Color::Rgb(22, 24, 26)),
                     muted: plain.fg(Color::Rgb(155, 163, 178)),
                     completed: plain.fg(Color::Rgb(123, 132, 150)),
                     border: plain.fg(Color::Rgb(60, 64, 72)),
@@ -238,7 +258,9 @@ impl BuiltinTheme {
             Self::Nord => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(216, 222, 233)),
+                    normal: plain
+                        .fg(Color::Rgb(216, 222, 233))
+                        .bg(Color::Rgb(46, 52, 64)),
                     muted: plain.fg(Color::Rgb(156, 168, 184)),
                     completed: plain.fg(Color::Rgb(76, 86, 106)),
                     border: plain.fg(Color::Rgb(67, 76, 94)),
@@ -248,7 +270,9 @@ impl BuiltinTheme {
             Self::Dracula => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(248, 248, 242)),
+                    normal: plain
+                        .fg(Color::Rgb(248, 248, 242))
+                        .bg(Color::Rgb(40, 42, 54)),
                     muted: plain.fg(Color::Rgb(98, 114, 164)),
                     completed: plain.fg(Color::Rgb(75, 82, 99)),
                     border: plain.fg(Color::Rgb(68, 71, 90)),
@@ -258,7 +282,9 @@ impl BuiltinTheme {
             Self::Darcula => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(169, 183, 198)),
+                    normal: plain
+                        .fg(Color::Rgb(169, 183, 198))
+                        .bg(Color::Rgb(43, 43, 43)),
                     muted: plain.fg(Color::Rgb(128, 128, 128)),
                     completed: plain.fg(Color::Rgb(96, 99, 102)),
                     border: plain.fg(Color::Rgb(96, 96, 96)),
@@ -268,7 +294,9 @@ impl BuiltinTheme {
             Self::Gruvbox => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(235, 219, 178)),
+                    normal: plain
+                        .fg(Color::Rgb(235, 219, 178))
+                        .bg(Color::Rgb(40, 40, 40)),
                     muted: plain.fg(Color::Rgb(168, 153, 132)),
                     completed: plain.fg(Color::Rgb(146, 131, 116)),
                     border: plain.fg(Color::Rgb(102, 92, 84)),
@@ -278,7 +306,9 @@ impl BuiltinTheme {
             Self::SolarizedDark => {
                 let plain = Style::default().remove_modifier(Modifier::all());
                 Styles {
-                    normal: plain.fg(Color::Rgb(131, 148, 150)),
+                    normal: plain
+                        .fg(Color::Rgb(131, 148, 150))
+                        .bg(Color::Rgb(0, 43, 54)),
                     muted: plain.fg(Color::Rgb(101, 123, 131)),
                     completed: plain.fg(Color::Rgb(88, 110, 117)),
                     border: plain.fg(Color::Rgb(88, 110, 117)),
@@ -292,6 +322,43 @@ impl BuiltinTheme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn all_dark_theme_backgrounds_are_exact_and_inherited() {
+        for (name, rgb) in [
+            ("catppuccin-mocha", (30, 30, 46)),
+            ("tokyonight-storm", (36, 40, 59)),
+            ("kanagawa-wave", (31, 31, 40)),
+            ("rose-pine", (25, 23, 36)),
+            ("nightfox", (25, 35, 48)),
+            ("onedark", (40, 44, 52)),
+            ("gruvbox-material", (40, 40, 40)),
+            ("github-dark", (13, 17, 23)),
+            ("everforest-medium", (45, 53, 59)),
+            ("cyberdream-muted", (22, 24, 26)),
+            ("nord", (46, 52, 64)),
+            ("dracula", (40, 42, 54)),
+            ("darcula", (43, 43, 43)),
+            ("gruvbox", (40, 40, 40)),
+            ("solarized-dark", (0, 43, 54)),
+        ] {
+            let styles = Styles::resolve(
+                name.parse().unwrap(),
+                &crate::config::StyleOverrides::default(),
+                None,
+            );
+            for role in [
+                styles.normal,
+                styles.muted,
+                styles.completed,
+                styles.border,
+                styles.accent,
+            ] {
+                assert_eq!(role.bg, Some(Color::Rgb(rgb.0, rgb.1, rgb.2)), "{name}");
+            }
+        }
+        assert_eq!(Styles::default().normal.bg, None);
+    }
 
     #[test]
     fn registry_drives_both_cycle_directions_and_wraparound() {
@@ -335,7 +402,7 @@ mod tests {
                     resolved.accent,
                 ] {
                     assert!(matches!(role.fg, Some(Color::Rgb(_, _, _))));
-                    assert_eq!(role.bg, None);
+                    assert_eq!(role.bg, resolved.normal.bg);
                     assert!(role.add_modifier.is_empty());
                     assert_eq!(role.sub_modifier, Modifier::all());
                 }
@@ -372,7 +439,7 @@ mod tests {
             (styles.accent, Color::Rgb(231, 138, 78)),
         ] {
             assert_eq!(role.fg, Some(color));
-            assert_eq!(role.bg, None);
+            assert_eq!(role.bg, Some(Color::Rgb(40, 40, 40)));
             assert!(role.add_modifier.is_empty());
             assert_eq!(role.sub_modifier, Modifier::all());
         }

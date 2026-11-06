@@ -128,7 +128,7 @@ fn run() -> Result<()> {
     }
     let Some(options) = parse_arguments(arguments)? else {
         println!(
-            "{USAGE}\n\n--theme NAME      Select a built-in theme (available: {available_themes}; default: default).\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--logo / --no-logo  Show / hide the sati border title.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--completed-at-bottom / --no-completed-at-bottom  Enable / disable grouping.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: lightyellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, logo, keybinds, rounded_corners, ascii_markers, completed_at_bottom.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg and modifiers. --accent overrides only the accent foreground.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file.",
+            "{USAGE}\n\n--theme NAME      Select a built-in theme (available: {available_themes}; default: default).\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--logo / --no-logo  Show / hide the sati border title.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--completed-at-bottom / --no-completed-at-bottom  Enable / disable grouping.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: lightyellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, logo, keybinds, rounded_corners, ascii_markers, completed_at_bottom.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg, bg (#RRGGBB or reset), and modifiers. --accent overrides only the accent foreground.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file.",
             available_themes = themes::BuiltinTheme::names(),
         );
         return Ok(());
@@ -176,7 +176,18 @@ fn run() -> Result<()> {
         event::poll(std::time::Duration::ZERO)?;
         let enhanced = keyboard_support(terminal::supports_keyboard_enhancement())?;
         modes.enable_input(&mut io::stdout(), enhanced)?;
+        let mut background = None;
+        let mut rendered_theme = app.theme;
         loop {
+            let changed = modes.update_background(
+                &mut io::stdout(),
+                &mut background,
+                app.styles.normal.bg,
+            )?;
+            if changed || rendered_theme != app.theme {
+                terminal.clear()?;
+                rendered_theme = app.theme;
+            }
             let draw_started = std::time::Instant::now();
             if app
                 .notification
@@ -244,9 +255,42 @@ struct TerminalModes {
     mouse: AtomicBool,
     paste: AtomicBool,
     keyboard: AtomicBool,
+    background: AtomicBool,
 }
 
 impl TerminalModes {
+    fn update_background(
+        &self,
+        output: &mut impl io::Write,
+        current: &mut Option<ratatui::style::Color>,
+        background: Option<ratatui::style::Color>,
+    ) -> io::Result<bool> {
+        use ratatui::style::Color;
+        let target = background.filter(|color| matches!(color, Color::Rgb(..)));
+        if *current == target {
+            return Ok(false);
+        }
+        if let Some(Color::Rgb(r, g, b)) = target {
+            // Remember attempts too: a failed write may already have changed the terminal.
+            self.background.store(true, Ordering::Relaxed);
+            write!(output, "\x1b]11;#{r:02x}{g:02x}{b:02x}\x1b\\")?;
+            output.flush()?;
+        } else {
+            self.restore_background(output)?;
+        }
+        *current = target;
+        Ok(true)
+    }
+
+    fn restore_background(&self, output: &mut impl io::Write) -> io::Result<()> {
+        if self.background.load(Ordering::Relaxed) {
+            output.write_all(b"\x1b]111\x1b\\")?;
+            output.flush()?;
+            self.background.store(false, Ordering::Relaxed);
+        }
+        Ok(())
+    }
+
     fn enable_input(&self, output: &mut impl io::Write, enhanced: bool) -> io::Result<()> {
         enable_optional(output, &self.mouse, EnableMouseCapture)?;
         // Crossterm's Windows console reader does not emit Paste events.
@@ -295,6 +339,7 @@ impl TerminalModes {
         } else {
             Ok(())
         };
+        let background = self.restore_background(output);
         // Evaluate every cleanup step before returning the first failure.
         keyboard
             .and(paste)
@@ -302,6 +347,7 @@ impl TerminalModes {
             .and(cursor)
             .and(raw)
             .and(alternate)
+            .and(background)
     }
 }
 
@@ -463,6 +509,69 @@ mod tests {
     ) -> Result<Option<Options>> {
         super::parse_arguments(arguments)
             .map(|options| options.map(|cli| cli.resolve(config::Config::default())))
+    }
+
+    #[test]
+    fn background_output_tracks_changes_and_restores_once_even_after_write_failure() {
+        use ratatui::style::Color;
+        let modes = TerminalModes::default();
+        let mut output = Vec::new();
+        let mut current = None;
+        assert!(
+            !modes
+                .update_background(&mut output, &mut current, None)
+                .unwrap()
+        );
+        assert!(output.is_empty());
+        let color = Some(Color::Rgb(40, 40, 40));
+        assert!(
+            modes
+                .update_background(&mut output, &mut current, color)
+                .unwrap()
+        );
+        assert!(
+            !modes
+                .update_background(&mut output, &mut current, color)
+                .unwrap()
+        );
+        assert_eq!(output, b"\x1b]11;#282828\x1b\\");
+        assert!(
+            modes
+                .update_background(&mut output, &mut current, Some(Color::Reset))
+                .unwrap()
+        );
+        assert_eq!(output, b"\x1b]11;#282828\x1b\\\x1b]111\x1b\\");
+        output.clear();
+        modes.restore(&mut output).unwrap();
+        assert!(output.is_empty());
+        modes
+            .update_background(&mut output, &mut current, Some(Color::Rgb(1, 2, 3)))
+            .unwrap();
+        output.clear();
+        modes.restore(&mut output).unwrap();
+        modes.restore(&mut output).unwrap();
+        assert_eq!(output, b"\x1b]111\x1b\\");
+
+        struct Broken;
+        impl io::Write for Broken {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let modes = TerminalModes::default();
+        let mut current = None;
+        assert!(
+            modes
+                .update_background(&mut Broken, &mut current, color)
+                .is_err()
+        );
+        assert!(current.is_none());
+        let mut recovery = Vec::new();
+        modes.restore(&mut recovery).unwrap();
+        assert_eq!(recovery, b"\x1b]111\x1b\\");
     }
 
     #[test]
