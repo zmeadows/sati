@@ -580,6 +580,118 @@ mod tests {
     }
 
     #[test]
+    fn runtime_themes_synchronize_resolved_backgrounds_and_leave_config_unchanged() {
+        use ratatui::{backend::TestBackend, crossterm::event::KeyCode, style::Color};
+        use themes::BuiltinTheme::*;
+
+        let fixture = storage::tests::Fixture::new();
+        let path = fixture.directory.join("config.toml");
+        for (configured, cli_theme, initial, changes) in [
+            (
+                "gruvbox-material",
+                Some("onedark"),
+                OneDark,
+                [('t', GithubDark), ('T', OneDark), ('T', Nightfox)],
+            ),
+            (
+                "solarized-dark",
+                None,
+                SolarizedDark,
+                [('t', Default), ('T', SolarizedDark), ('t', Default)],
+            ),
+        ] {
+            for custom_background in [None, Some(Color::Rgb(32, 36, 45))] {
+                let mut text = format!(
+                    "theme='{configured}'\n[styles.accent]\nfg='red'\nmodifiers=['bold']\n"
+                );
+                if custom_background.is_some() {
+                    text.push_str("[styles.normal]\nbg='#20242d'\n");
+                }
+                std::fs::write(&path, &text).unwrap();
+                let mut args = vec!["--accent", "blue"];
+                if let Some(name) = cli_theme {
+                    args.extend(["--theme", name]);
+                }
+                let options = super::parse_arguments(args.into_iter().map(Into::into))
+                    .unwrap()
+                    .unwrap()
+                    .resolve(config::Config::load(Some(&path)).unwrap());
+                let mut app = App::new(Vec::new());
+                app.styles = options.styles;
+                app.theme = options.theme;
+                app.style_overrides = options.style_overrides;
+                app.cli_accent = options.cli_accent;
+                let modes = TerminalModes::default();
+                let mut current = None;
+                let mut output = Vec::new();
+                let mut terminal = ratatui::Terminal::new(TestBackend::new(40, 10)).unwrap();
+                for (key, expected) in std::iter::once((None, initial))
+                    .chain(changes.map(|(key, theme)| (Some(key), theme)))
+                {
+                    if let Some(key) = key {
+                        app.key(KeyCode::Char(key).into(), &fixture.storage)
+                            .unwrap();
+                        assert_eq!(
+                            app.notification.as_ref().unwrap().message(),
+                            format!("Theme: {}", expected.display_name())
+                        );
+                    }
+                    assert_eq!(app.theme, expected);
+                    assert_eq!(app.styles.normal.fg, expected.base_styles().normal.fg);
+                    assert_eq!(app.styles.accent.fg, Some(Color::Blue));
+                    assert_eq!(
+                        app.styles.accent.add_modifier,
+                        ratatui::style::Modifier::BOLD
+                    );
+                    let background = custom_background.or(expected.base_styles().normal.bg);
+                    assert_eq!(app.styles.normal.bg, background);
+                    let previous = current;
+                    output.clear();
+                    let changed = modes
+                        .update_background(&mut output, &mut current, app.styles.normal.bg)
+                        .unwrap();
+                    let expected_output = if previous == background {
+                        String::new()
+                    } else if let Some(Color::Rgb(r, g, b)) = background {
+                        format!("\x1b]11;#{r:02x}{g:02x}{b:02x}\x1b\\")
+                    } else {
+                        "\x1b]111\x1b\\".into()
+                    };
+                    assert_eq!(changed, previous != background);
+                    assert_eq!(output, expected_output.as_bytes());
+                    terminal.clear().unwrap();
+                    terminal
+                        .draw(|frame| {
+                            ui::draw(frame, &mut app);
+                        })
+                        .unwrap();
+                    assert!(
+                        terminal
+                            .backend()
+                            .buffer()
+                            .content
+                            .iter()
+                            .all(|cell| cell.bg == background.unwrap_or(Color::Reset))
+                    );
+                }
+                output.clear();
+                modes.restore(&mut output).unwrap();
+                assert_eq!(
+                    output,
+                    if current.is_some() {
+                        b"\x1b]111\x1b\\".as_slice()
+                    } else {
+                        b""
+                    }
+                );
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+                assert!(!fixture.task_path().exists());
+                assert!(!app.can_undo() && !app.can_redo());
+            }
+        }
+    }
+
+    #[test]
     fn every_theme_is_selectable_from_cli_over_toml() {
         for name in themes::BuiltinTheme::names().split(", ") {
             let config: config::Config = toml::from_str("theme='gruvbox-material'").unwrap();
@@ -838,6 +950,42 @@ mod tests {
         ] {
             assert_eq!(optional_mode(Err(kind.into())).unwrap_err().kind(), kind);
             assert_eq!(keyboard_support(Err(kind.into())).unwrap_err().kind(), kind);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn session_cleanup_orders_cursor_screen_and_background_for_success_and_error() {
+        for themed in [false, true] {
+            for failed in [false, true] {
+                let modes = TerminalModes::default();
+                let mut output = Vec::new();
+                modes
+                    .update_background(
+                        &mut output,
+                        &mut None,
+                        themed.then_some(ratatui::style::Color::Rgb(40, 40, 40)),
+                    )
+                    .unwrap();
+                // Capture cleanup of an initialized screen without changing a real TTY.
+                modes.alternate.store(true, Ordering::Relaxed);
+                output.clear();
+                let result = if failed {
+                    Err("task save failed".into())
+                } else {
+                    Ok(())
+                };
+                let finished = finish_session(result, modes.restore(&mut output));
+                assert_eq!(finished.is_err(), failed);
+                let mut expected = b"\x1b[?25h\x1b[?1049l".to_vec();
+                if themed {
+                    expected.extend_from_slice(b"\x1b]111\x1b\\");
+                }
+                assert_eq!(output, expected);
+                output.clear();
+                modes.restore(&mut output).unwrap();
+                assert!(output.is_empty());
+            }
         }
     }
 

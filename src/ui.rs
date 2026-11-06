@@ -2248,6 +2248,70 @@ mod tests {
     }
 
     #[test]
+    fn legend_width_boundary_preserves_hint_order_and_viewport_height() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = App::new(
+            ["first", "second"]
+                .map(|text| Task {
+                    text: text.into(),
+                    completed: false,
+                    carried: false,
+                })
+                .into(),
+        );
+        for key in [' ', ' ', 'u'] {
+            app.key(
+                KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                &fixture.storage,
+            )
+            .unwrap();
+        }
+        app.list.select(Some(1));
+        assert!(app.can_undo() && app.can_redo());
+        for width in [53, 54, 55] {
+            let lines = shortcut_lines(&app, width);
+            assert_eq!(lines.len(), 3);
+            assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
+            let legend = lines
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            for label in ["Undo", "Clear done", "Clear"] {
+                assert!(legend.contains(label), "{width}: missing {label}");
+            }
+            for label in ["Redo", "Carry", "Theme"] {
+                assert_eq!(legend.contains(label), width == 53, "{width}: {label}");
+            }
+            let keys: Vec<_> = lines[0]
+                .spans
+                .iter()
+                .filter(|span| span.style.add_modifier.contains(Modifier::BOLD))
+                .map(|span| span.content.trim())
+                .take(3)
+                .collect();
+            assert_eq!(
+                keys,
+                if width == 53 {
+                    ["j/k", "Space", "w"]
+                } else {
+                    ["j/k", "g/G", "J/K"]
+                }
+            );
+            // Suppressed footer, exact fit, spacer, and a comfortably tall viewport.
+            for (height, task_height) in [(5, 3), (6, 1), (7, 1), (12, 6)] {
+                let mut terminal = test_terminal(width, height);
+                let rows = render(&mut terminal, &mut app);
+                assert_eq!(rows, Rect::new(1, 1, width - 2, task_height));
+                assert_eq!(screen(&terminal).contains("Quit"), height >= 6);
+                let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
+                assert!(app.row_tasks[app.scroll..end].contains(&Some(1)));
+            }
+        }
+    }
+
+    #[test]
     fn changing_footer_height_preserves_selection_and_mouse_mapping() {
         use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let fixture = crate::storage::tests::Fixture::new();
@@ -2312,9 +2376,14 @@ mod tests {
         let mut terminal = test_terminal(40, 12);
         let mut app = App::new(vec![Task {
             carried: false,
-            text: "日本語 🪷".into(),
+            text: "日本語 🪷 ".repeat(8).trim_end().into(),
             completed: false,
         }]);
+        app.styles = Styles::resolve(
+            crate::themes::BuiltinTheme::Nord,
+            &crate::config::StyleOverrides::default(),
+            None,
+        );
         for width in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 40, 60, 80] {
             for height in [0, 1, 2, 3, 6, 12] {
                 terminal.backend_mut().resize(width, height);
@@ -2336,7 +2405,23 @@ mod tests {
                     Mode::ConfirmClear,
                 ] {
                     app.mode = mode;
-                    render(&mut terminal, &mut app);
+                    let mut rows = Rect::default();
+                    let completed = terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+                    // TestBackend can retain stale placeholders after overlapping wide glyphs.
+                    // Verify backgrounds on the authoritative completed frame instead.
+                    assert!(
+                        completed
+                            .buffer
+                            .content
+                            .iter()
+                            .all(|cell| cell.bg == Color::Rgb(46, 52, 64))
+                    );
+                    assert!(rows.right() <= width && rows.bottom() <= height);
+                    assert!(app.row_tasks.iter().flatten().all(|&index| index == 0));
+                    let buffer = terminal.backend().buffer();
+                    if terminal.backend().cursor_visible() {
+                        assert!(buffer.area.contains(terminal.backend().cursor_position()));
+                    }
                 }
             }
         }
