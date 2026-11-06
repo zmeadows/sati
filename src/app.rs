@@ -540,8 +540,36 @@ impl App {
     }
 
     pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
+        let key = self.normalize_key(key);
+        if key.kind == KeyEventKind::Release
+            || (key.kind == KeyEventKind::Repeat && !self.repeat_allowed(key))
+        {
+            return Ok(false);
+        }
+        self.notification = None;
+        if self.consume_modified_key(key, storage)? {
+            return Ok(false);
+        }
+        match self.mode {
+            Mode::Normal => self.handle_normal_key(key, storage),
+            Mode::Adding(_, _) | Mode::Editing { .. } | Mode::Searching { .. } => {
+                self.handle_text_input_key(key, storage)?;
+                Ok(false)
+            }
+            Mode::SearchResults { .. } => {
+                self.handle_search_results_key(key);
+                Ok(false)
+            }
+            Mode::ConfirmClear => {
+                self.handle_confirm_clear_key(key, storage)?;
+                Ok(false)
+            }
+        }
+    }
+
+    fn normalize_key(&self, key: KeyEvent) -> KeyEvent {
         // Route cancellation through Esc, including its press/repeat policy.
-        let key = if self.mode != Mode::Normal
+        if self.mode != Mode::Normal
             && key.modifiers == KeyModifiers::CONTROL
             && matches!(key.code, KeyCode::Char('g' | 'G'))
         {
@@ -565,8 +593,11 @@ impl App {
             }
         } else {
             key
-        };
-        let repeat_allowed = match &self.mode {
+        }
+    }
+
+    fn repeat_allowed(&self, key: KeyEvent) -> bool {
+        match &self.mode {
             Mode::Normal
                 if matches!(
                     key.code,
@@ -603,13 +634,11 @@ impl App {
                 KeyCode::Char('n' | 'N') | KeyCode::Up | KeyCode::Down
             ),
             Mode::ConfirmClear => false,
-        };
-        if key.kind == KeyEventKind::Release
-            || (key.kind == KeyEventKind::Repeat && !repeat_allowed)
-        {
-            return Ok(false);
         }
-        self.notification = None;
+    }
+
+    // Returns true when the event was consumed, including ignored modifier combinations.
+    fn consume_modified_key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
         // Windows reports AltGr text as Ctrl+Alt; the backend cannot distinguish
         // it from a literal Ctrl+Alt character shortcut. Accept it only in input modes.
         if cfg!(windows)
@@ -625,7 +654,7 @@ impl App {
         {
             input.insert(character.encode_utf8(&mut [0; 4]));
             self.refresh_search();
-            return Ok(false);
+            return Ok(true);
         }
         if key.modifiers == KeyModifiers::ALT
             && matches!(key.code, KeyCode::Char('b' | 'B' | 'f' | 'F' | 'd' | 'D'))
@@ -640,21 +669,21 @@ impl App {
                 _ => unreachable!(),
             }
             self.refresh_search();
-            return Ok(false);
+            return Ok(true);
         }
         if self.mode == Mode::Normal
             && key.modifiers == KeyModifiers::ALT
             && matches!(key.code, KeyCode::Char('w' | 'W'))
         {
             self.yank_task();
-            return Ok(false);
+            return Ok(true);
         }
         // Only the explicitly supported input shortcuts may consume other Control events.
         if key
             .modifiers
             .intersects(KeyModifiers::ALT | KeyModifiers::SUPER)
         {
-            return Ok(false);
+            return Ok(true);
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             if key.modifiers == KeyModifiers::CONTROL {
@@ -668,7 +697,7 @@ impl App {
                         KeyCode::Char('f' | 'F') => self.start_search(),
                         _ => {}
                     }
-                    return Ok(false);
+                    return Ok(true);
                 }
                 if let Mode::Adding(input, _)
                 | Mode::Editing { input, .. }
@@ -690,27 +719,16 @@ impl App {
                 }
             }
             self.refresh_search();
-            return Ok(false);
+            return Ok(true);
         }
-        if matches!(
-            self.mode,
-            Mode::Searching { .. } | Mode::SearchResults { .. }
-        ) {
+        Ok(false)
+    }
+
+    fn handle_text_input_key(&mut self, key: KeyEvent, storage: &Storage) -> Result<()> {
+        if matches!(self.mode, Mode::Searching { .. }) {
             if key.code == KeyCode::Esc {
                 self.finish_search(false);
-                return Ok(false);
-            }
-            if matches!(self.mode, Mode::SearchResults { .. }) {
-                match key.code {
-                    KeyCode::Enter => self.finish_search(true),
-                    KeyCode::Char('N') | KeyCode::Up => self.search_next(false),
-                    KeyCode::Char('n') => {
-                        self.search_next(!key.modifiers.contains(KeyModifiers::SHIFT))
-                    }
-                    KeyCode::Down => self.search_next(true),
-                    _ => {}
-                }
-                return Ok(false);
+                return Ok(());
             }
             if key.code == KeyCode::Enter {
                 if self.search_query() == Some("") {
@@ -731,7 +749,7 @@ impl App {
                         self.finish_search(true);
                     }
                 }
-                return Ok(false);
+                return Ok(());
             }
         }
         let placement = match self.mode {
@@ -742,170 +760,184 @@ impl App {
             Mode::Editing { index, .. } => Some(*index),
             _ => None,
         };
-        match &mut self.mode {
-            Mode::Adding(input, _)
-            | Mode::Editing { input, .. }
-            | Mode::Searching { input, .. } => match key.code {
-                KeyCode::Esc => {
-                    self.mode = Mode::Normal;
-                    self.reveal_selection = true;
-                }
-                KeyCode::Backspace => input.delete_before(),
-                KeyCode::Delete => input.delete_after(),
-                KeyCode::Left => input.move_left(),
-                KeyCode::Right => input.move_right(),
-                KeyCode::Home => input.set_cursor(0),
-                KeyCode::End => input.set_cursor(input.text().len()),
-                KeyCode::Char(character) if !character.is_control() => {
-                    input.insert(character.encode_utf8(&mut [0; 4]))
-                }
-                KeyCode::Enter => {
-                    let text = input.text().trim().to_owned();
-                    if !text.is_empty() {
-                        let mut tasks = self.tasks.clone();
-                        if let Some(index) = edited_task {
-                            if tasks[index].text != text {
-                                tasks[index].text = text;
-                                self.replace(tasks, Some(index), storage)?;
-                            }
-                        } else {
-                            let index = self.insertion_index(placement);
-                            tasks.insert(
-                                index,
-                                Task {
-                                    carried: false,
-                                    text,
-                                    completed: false,
-                                },
-                            );
+        let (Mode::Adding(input, _) | Mode::Editing { input, .. } | Mode::Searching { input, .. }) =
+            &mut self.mode
+        else {
+            unreachable!("text input mode");
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                self.reveal_selection = true;
+            }
+            KeyCode::Backspace => input.delete_before(),
+            KeyCode::Delete => input.delete_after(),
+            KeyCode::Left => input.move_left(),
+            KeyCode::Right => input.move_right(),
+            KeyCode::Home => input.set_cursor(0),
+            KeyCode::End => input.set_cursor(input.text().len()),
+            KeyCode::Char(character) if !character.is_control() => {
+                input.insert(character.encode_utf8(&mut [0; 4]))
+            }
+            KeyCode::Enter => {
+                let text = input.text().trim().to_owned();
+                if !text.is_empty() {
+                    let mut tasks = self.tasks.clone();
+                    if let Some(index) = edited_task {
+                        if tasks[index].text != text {
+                            tasks[index].text = text;
                             self.replace(tasks, Some(index), storage)?;
                         }
-                    }
-                    self.mode = Mode::Normal;
-                    self.reveal_selection = true;
-                }
-                _ => {}
-            },
-            Mode::ConfirmClear => match key.code {
-                KeyCode::Enter => {
-                    self.clear_unmarked(storage)?;
-                    self.mode = Mode::Normal;
-                }
-                KeyCode::Esc => self.mode = Mode::Normal,
-                _ => {}
-            },
-            Mode::Normal => match key.code {
-                KeyCode::Char('/') => self.start_search(),
-                KeyCode::Char('n' | 'N')
-                    if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
-                {
-                    self.resume_search(
-                        key.code == KeyCode::Char('n')
-                            && !key.modifiers.contains(KeyModifiers::SHIFT),
-                    );
-                }
-                KeyCode::Char('t' | 'T')
-                    if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
-                {
-                    self.cycle_theme(
-                        key.code == KeyCode::Char('t')
-                            && !key.modifiers.contains(KeyModifiers::SHIFT),
-                    );
-                }
-                KeyCode::Char('y') => self.yank_task(),
-                KeyCode::Char('p' | 'P') => {
-                    let above = key.code == KeyCode::Char('P')
-                        || key.modifiers.contains(KeyModifiers::SHIFT);
-                    self.paste_task(
-                        if above {
-                            AddPlacement::Above
-                        } else {
-                            AddPlacement::Below
-                        },
-                        storage,
-                    )?;
-                }
-                KeyCode::Char('c') => self.copy_markdown(&mut std::io::stdout().lock()),
-                KeyCode::Char('q') => return Ok(true),
-                KeyCode::Char('u') => self.undo(storage)?,
-                KeyCode::Char('w') => {
-                    self.wrap = !self.wrap;
-                    self.reveal_selection = true;
-                }
-                KeyCode::Char('s') => self.group_by_prefix(storage)?,
-                KeyCode::Char('m') => self.toggle_carryover(storage)?,
-                KeyCode::Char('x') => self.clear_completed(storage)?,
-                KeyCode::Char('J') => self.move_selected(true, storage)?,
-                KeyCode::Char('K') => self.move_selected(false, storage)?,
-                KeyCode::Char('j') | KeyCode::Down
-                    if key.modifiers.contains(KeyModifiers::SHIFT) =>
-                {
-                    self.move_selected(true, storage)?;
-                }
-                KeyCode::Char('k') | KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                    self.move_selected(false, storage)?;
-                }
-                KeyCode::Char('j') | KeyCode::Down => self.navigate(true),
-                KeyCode::Char('k') | KeyCode::Up => self.navigate(false),
-                KeyCode::Tab | KeyCode::BackTab
-                    if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
-                {
-                    self.navigate_unfinished(
-                        key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT),
-                    );
-                }
-                KeyCode::PageUp => self.page(false),
-                KeyCode::PageDown => self.page(true),
-                KeyCode::Char('g' | 'G') | KeyCode::Home | KeyCode::End
-                    if !self.tasks.is_empty() =>
-                {
-                    let first = key.code == KeyCode::Home
-                        || (key.code == KeyCode::Char('g')
-                            && !key.modifiers.contains(KeyModifiers::SHIFT));
-                    let index = if first { 0 } else { self.tasks.len() - 1 };
-                    self.list.select(Some(index));
-                    self.reveal_selection = true;
-                }
-                KeyCode::Char(' ') | KeyCode::Enter => {
-                    if let Some(index) = self.list.selected() {
-                        self.toggle(index, storage)?;
-                    }
-                }
-                KeyCode::Char('a' | 'o' | 'O') => {
-                    let placement = match key.code {
-                        KeyCode::Char('a') => AddPlacement::End,
-                        KeyCode::Char('O') => AddPlacement::Above,
-                        _ if key.modifiers.contains(KeyModifiers::SHIFT) => AddPlacement::Above,
-                        _ => AddPlacement::Below,
-                    };
-                    self.mode = Mode::Adding(TextInput::default(), placement);
-                }
-                KeyCode::Char('e') => {
-                    if let Some(index) = self.list.selected() {
-                        self.mode = Mode::Editing {
+                    } else {
+                        let index = self.insertion_index(placement);
+                        tasks.insert(
                             index,
-                            input: self.tasks[index].text.clone().into(),
-                        };
+                            Task {
+                                carried: false,
+                                text,
+                                completed: false,
+                            },
+                        );
+                        self.replace(tasks, Some(index), storage)?;
                     }
                 }
-                KeyCode::Char('d') | KeyCode::Delete => {
-                    if let Some(index) = self.list.selected() {
-                        let mut tasks = self.tasks.clone();
-                        tasks.remove(index);
-                        let selected = if tasks.is_empty() {
-                            None
-                        } else {
-                            Some(index.min(tasks.len() - 1))
-                        };
-                        self.replace(tasks, selected, storage)?;
-                    }
+                self.mode = Mode::Normal;
+                self.reveal_selection = true;
+            }
+            _ => {}
+        }
+        self.refresh_search();
+        Ok(())
+    }
+
+    fn handle_search_results_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.finish_search(false),
+            KeyCode::Enter => self.finish_search(true),
+            KeyCode::Char('N') | KeyCode::Up => self.search_next(false),
+            KeyCode::Char('n') => self.search_next(!key.modifiers.contains(KeyModifiers::SHIFT)),
+            KeyCode::Down => self.search_next(true),
+            _ => {}
+        }
+    }
+
+    fn handle_confirm_clear_key(&mut self, key: KeyEvent, storage: &Storage) -> Result<()> {
+        match key.code {
+            KeyCode::Enter => {
+                self.clear_unmarked(storage)?;
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_normal_key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
+        match key.code {
+            KeyCode::Char('/') => self.start_search(),
+            KeyCode::Char('n' | 'N')
+                if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
+            {
+                self.resume_search(
+                    key.code == KeyCode::Char('n') && !key.modifiers.contains(KeyModifiers::SHIFT),
+                );
+            }
+            KeyCode::Char('t' | 'T')
+                if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
+            {
+                self.cycle_theme(
+                    key.code == KeyCode::Char('t') && !key.modifiers.contains(KeyModifiers::SHIFT),
+                );
+            }
+            KeyCode::Char('y') => self.yank_task(),
+            KeyCode::Char('p' | 'P') => {
+                let above =
+                    key.code == KeyCode::Char('P') || key.modifiers.contains(KeyModifiers::SHIFT);
+                self.paste_task(
+                    if above {
+                        AddPlacement::Above
+                    } else {
+                        AddPlacement::Below
+                    },
+                    storage,
+                )?;
+            }
+            KeyCode::Char('c') => self.copy_markdown(&mut std::io::stdout().lock()),
+            KeyCode::Char('q') => return Ok(true),
+            KeyCode::Char('u') => self.undo(storage)?,
+            KeyCode::Char('w') => {
+                self.wrap = !self.wrap;
+                self.reveal_selection = true;
+            }
+            KeyCode::Char('s') => self.group_by_prefix(storage)?,
+            KeyCode::Char('m') => self.toggle_carryover(storage)?,
+            KeyCode::Char('x') => self.clear_completed(storage)?,
+            KeyCode::Char('J') => self.move_selected(true, storage)?,
+            KeyCode::Char('K') => self.move_selected(false, storage)?,
+            KeyCode::Char('j') | KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.move_selected(true, storage)?;
+            }
+            KeyCode::Char('k') | KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.move_selected(false, storage)?;
+            }
+            KeyCode::Char('j') | KeyCode::Down => self.navigate(true),
+            KeyCode::Char('k') | KeyCode::Up => self.navigate(false),
+            KeyCode::Tab | KeyCode::BackTab
+                if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
+            {
+                self.navigate_unfinished(
+                    key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT),
+                );
+            }
+            KeyCode::PageUp => self.page(false),
+            KeyCode::PageDown => self.page(true),
+            KeyCode::Char('g' | 'G') | KeyCode::Home | KeyCode::End if !self.tasks.is_empty() => {
+                let first = key.code == KeyCode::Home
+                    || (key.code == KeyCode::Char('g')
+                        && !key.modifiers.contains(KeyModifiers::SHIFT));
+                let index = if first { 0 } else { self.tasks.len() - 1 };
+                self.list.select(Some(index));
+                self.reveal_selection = true;
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                if let Some(index) = self.list.selected() {
+                    self.toggle(index, storage)?;
                 }
-                KeyCode::Char('D') if self.tasks.iter().any(|task| !task.carried) => {
-                    self.mode = Mode::ConfirmClear
+            }
+            KeyCode::Char('a' | 'o' | 'O') => {
+                let placement = match key.code {
+                    KeyCode::Char('a') => AddPlacement::End,
+                    KeyCode::Char('O') => AddPlacement::Above,
+                    _ if key.modifiers.contains(KeyModifiers::SHIFT) => AddPlacement::Above,
+                    _ => AddPlacement::Below,
+                };
+                self.mode = Mode::Adding(TextInput::default(), placement);
+            }
+            KeyCode::Char('e') => {
+                if let Some(index) = self.list.selected() {
+                    self.mode = Mode::Editing {
+                        index,
+                        input: self.tasks[index].text.clone().into(),
+                    };
                 }
-                _ => {}
-            },
-            Mode::SearchResults { .. } => unreachable!("results keys handled above"),
+            }
+            KeyCode::Char('d') | KeyCode::Delete => {
+                if let Some(index) = self.list.selected() {
+                    let mut tasks = self.tasks.clone();
+                    tasks.remove(index);
+                    let selected = if tasks.is_empty() {
+                        None
+                    } else {
+                        Some(index.min(tasks.len() - 1))
+                    };
+                    self.replace(tasks, selected, storage)?;
+                }
+            }
+            KeyCode::Char('D') if self.tasks.iter().any(|task| !task.carried) => {
+                self.mode = Mode::ConfirmClear
+            }
+            _ => {}
         }
         self.refresh_search();
         Ok(false)
@@ -981,6 +1013,57 @@ impl App {
 mod tests {
     use super::*;
     use crate::storage::tests::Fixture;
+
+    #[test]
+    fn modifier_early_returns_preserve_search_refresh_and_notification_dismissal() {
+        let fixture = Fixture::new();
+        for (modifiers, refresh) in [
+            (KeyModifiers::CONTROL, true),
+            (KeyModifiers::CONTROL | KeyModifiers::SHIFT, true),
+            (KeyModifiers::ALT, false),
+            (KeyModifiers::SUPER, false),
+        ] {
+            for kind in [
+                KeyEventKind::Press,
+                KeyEventKind::Repeat,
+                KeyEventKind::Release,
+            ] {
+                let mut app = app_with_tasks(3);
+                app.tasks[0].text = "hit first".into();
+                app.tasks[2].text = "hit second".into();
+                app.mode = Mode::Searching {
+                    input: "hit".into(),
+                    original: Some(0),
+                };
+                app.list.select(Some(2));
+                app.notification = Some(Notification::new("Copied task"));
+                app.key(
+                    KeyEvent::new_with_kind(KeyCode::Char('z'), modifiers, kind),
+                    &fixture.storage,
+                )
+                .unwrap();
+                let accepted = kind != KeyEventKind::Release;
+                assert_eq!(app.notification.is_none(), accepted);
+                assert_eq!(
+                    app.list.selected(),
+                    Some(if accepted && refresh { 0 } else { 2 })
+                );
+                assert_eq!(
+                    app.last_search_query.as_deref(),
+                    if accepted && refresh {
+                        Some("hit")
+                    } else {
+                        None
+                    }
+                );
+                assert!(
+                    matches!(&app.mode, Mode::Searching { input, .. } if input.text() == "hit")
+                );
+                assert!(!app.can_undo() && !app.can_redo());
+            }
+        }
+        assert!(!fixture.task_path().exists());
+    }
 
     #[test]
     fn restart_keeps_saved_tasks_but_never_restores_or_creates_history_files() {
