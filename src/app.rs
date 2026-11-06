@@ -126,6 +126,9 @@ pub struct App {
     pub unicode_markers: bool,
     pub completed_at_bottom: bool,
     pub styles: crate::styles::Styles,
+    pub theme: crate::themes::BuiltinTheme,
+    pub style_overrides: crate::config::StyleOverrides,
+    pub cli_accent: Option<ratatui::style::Color>,
     pub scroll: usize,
     // A temporary inline add row has no task until it is confirmed.
     pub row_tasks: Vec<Option<usize>>,
@@ -152,6 +155,9 @@ impl App {
             unicode_markers: true,
             completed_at_bottom: false,
             styles: crate::styles::Styles::default(),
+            theme: crate::themes::BuiltinTheme::default(),
+            style_overrides: crate::config::StyleOverrides::default(),
+            cli_accent: None,
             scroll: 0,
             row_tasks: Vec::new(),
             viewport_height: 0,
@@ -554,6 +560,16 @@ impl App {
         self.replace(tasks, selected, storage)
     }
 
+    fn cycle_theme(&mut self, forward: bool) {
+        self.theme = self.theme.cycle(forward);
+        self.styles =
+            crate::styles::Styles::resolve(self.theme, &self.style_overrides, self.cli_accent);
+        self.notification = Some(Notification::new(format!(
+            "Theme: {}",
+            self.theme.display_name()
+        )));
+    }
+
     fn yank_task(&mut self) {
         if let Some(task) = self.list.selected().and_then(|index| self.tasks.get(index)) {
             self.task_register = Some(task.text.clone());
@@ -849,6 +865,14 @@ impl App {
                 {
                     self.resume_search(
                         key.code == KeyCode::Char('n')
+                            && !key.modifiers.contains(KeyModifiers::SHIFT),
+                    );
+                }
+                KeyCode::Char('t' | 'T')
+                    if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
+                {
+                    self.cycle_theme(
+                        key.code == KeyCode::Char('t')
                             && !key.modifiers.contains(KeyModifiers::SHIFT),
                     );
                 }
@@ -1254,6 +1278,128 @@ mod tests {
             before
         );
         assert_eq!(app.task_register.as_deref(), Some("task 0"));
+    }
+
+    #[test]
+    fn theme_keys_cycle_from_active_theme_without_mutating_tasks_or_history() {
+        use crate::themes::BuiltinTheme;
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(2);
+        press(&mut app, &fixture, KeyCode::Char(' '));
+        press(&mut app, &fixture, KeyCode::Char('m'));
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        let before = serde_json::to_value((
+            &app.tasks,
+            app.list.selected(),
+            &app.history,
+            &app.redo_history,
+        ))
+        .unwrap();
+        let saved = std::fs::read(fixture.task_path()).unwrap();
+        app.theme = BuiltinTheme::TokyoNightStorm;
+        app.style_overrides = toml::from_str::<crate::config::Config>(
+            "[styles.normal]\nmodifiers=['bold']\n[styles.accent]\nmodifiers=['italic']",
+        )
+        .unwrap()
+        .styles;
+        app.cli_accent = Some(ratatui::style::Color::Blue);
+        for (key, expected) in [
+            (
+                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+                BuiltinTheme::KanagawaWave,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT),
+                BuiltinTheme::TokyoNightStorm,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::SHIFT),
+                BuiltinTheme::CatppuccinMocha,
+            ),
+        ] {
+            app.key(key, &fixture.storage).unwrap();
+            assert_eq!(app.theme, expected);
+            assert_eq!(
+                app.styles,
+                crate::styles::Styles::resolve(expected, &app.style_overrides, app.cli_accent)
+            );
+            assert_eq!(app.styles.accent.fg, Some(ratatui::style::Color::Blue));
+            assert!(
+                app.styles
+                    .accent
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::ITALIC)
+            );
+            assert_eq!(
+                app.notification.as_ref().unwrap().message(),
+                format!("Theme: {}", expected.display_name())
+            );
+        }
+        assert_eq!(
+            serde_json::to_value((
+                &app.tasks,
+                app.list.selected(),
+                &app.history,
+                &app.redo_history
+            ))
+            .unwrap(),
+            before
+        );
+        assert_eq!(std::fs::read(fixture.task_path()).unwrap(), saved);
+        for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+            app.key(
+                KeyEvent {
+                    kind,
+                    ..KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)
+                },
+                &fixture.storage,
+            )
+            .unwrap();
+            assert_eq!(app.theme, BuiltinTheme::CatppuccinMocha);
+        }
+        app.tasks.clear();
+        app.list.select(None);
+        app.theme = BuiltinTheme::Default;
+        press(&mut app, &fixture, KeyCode::Char('T'));
+        assert_eq!(app.theme, BuiltinTheme::SolarizedDark);
+        press(&mut app, &fixture, KeyCode::Char('t'));
+        assert_eq!(app.theme, BuiltinTheme::Default);
+    }
+
+    #[test]
+    fn theme_keys_remain_text_or_are_ignored_in_other_modes() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(1);
+        for mode in [
+            Mode::Adding("".into(), AddPlacement::End),
+            Mode::Editing {
+                index: 0,
+                input: "".into(),
+            },
+            Mode::Searching {
+                input: "".into(),
+                original: Some(0),
+            },
+            Mode::SearchResults {
+                input: "task".into(),
+                original: Some(0),
+            },
+            Mode::ConfirmClear,
+        ] {
+            app.mode = mode;
+            press(&mut app, &fixture, KeyCode::Char('t'));
+            press(&mut app, &fixture, KeyCode::Char('T'));
+            assert_eq!(app.theme, crate::themes::BuiltinTheme::Default);
+            assert!(app.notification.is_none());
+            match &app.mode {
+                Mode::Adding(input, _)
+                | Mode::Editing { input, .. }
+                | Mode::Searching { input, .. } => assert_eq!(input.text(), "tT"),
+                Mode::SearchResults { input, .. } => assert_eq!(input.text(), "task"),
+                Mode::ConfirmClear => {}
+                _ => panic!("unexpected mode change"),
+            }
+        }
     }
 
     fn reopen_with_history(app: App, fixture: &Fixture) -> App {

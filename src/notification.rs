@@ -25,6 +25,15 @@ impl Notification {
         &self.message
     }
 
+    pub fn compact_message(&self) -> &str {
+        match self.message.as_str() {
+            "Copy sent to terminal" => "Copy sent",
+            message if message.starts_with("Copy failed") => "Copy failed",
+            message if message.starts_with("Theme: ") => "Theme changed",
+            message => message,
+        }
+    }
+
     fn timing(&self, now: Instant) -> Option<(usize, Duration)> {
         timing(
             now.saturating_duration_since(self.started),

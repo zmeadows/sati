@@ -30,7 +30,7 @@ pub struct Display {
     pub completed_at_bottom: Option<bool>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct StyleOverrides {
     pub normal: StyleOverride,
@@ -41,7 +41,7 @@ pub struct StyleOverrides {
     pub accent: StyleOverride,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StyleOverride {
     #[serde(default, deserialize_with = "foreground")]

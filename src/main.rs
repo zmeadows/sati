@@ -54,6 +54,9 @@ struct Options {
     ascii_markers: bool,
     completed_at_bottom: bool,
     styles: styles::Styles,
+    theme: themes::BuiltinTheme,
+    style_overrides: config::StyleOverrides,
+    cli_accent: Option<ratatui::style::Color>,
     print_version: bool,
 }
 
@@ -96,6 +99,9 @@ impl CliOptions {
                 &config.styles,
                 self.accent,
             ),
+            theme: self.theme.unwrap_or(config.theme),
+            style_overrides: config.styles,
+            cli_accent: self.accent,
             print_version: self.print_version,
         }
     }
@@ -123,7 +129,7 @@ fn run() -> Result<()> {
     let Some(options) = parse_arguments(arguments)? else {
         println!(
             "{USAGE}\n\n--theme NAME      Select a built-in theme (available: {available_themes}; default: default).\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--logo / --no-logo  Show / hide the sati border title.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--completed-at-bottom / --no-completed-at-bottom  Enable / disable grouping.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: lightyellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, logo, keybinds, rounded_corners, ascii_markers, completed_at_bottom.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg and modifiers. --accent overrides only the accent foreground.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file.",
-            available_themes = themes::BuiltinTheme::NAMES,
+            available_themes = themes::BuiltinTheme::names(),
         );
         return Ok(());
     };
@@ -143,6 +149,9 @@ fn run() -> Result<()> {
     app.unicode_markers = !options.ascii_markers;
     app.completed_at_bottom = options.completed_at_bottom;
     app.styles = options.styles;
+    app.theme = options.theme;
+    app.style_overrides = options.style_overrides;
+    app.cli_accent = options.cli_accent;
     if let Some(cache) = storage.load_history() {
         app.restore_history(cache);
     }
@@ -390,14 +399,14 @@ fn parse_arguments(
             if options.theme.is_some() {
                 return Err(format!(
                     "--theme specified more than once; available themes: {}",
-                    themes::BuiltinTheme::NAMES
+                    themes::BuiltinTheme::names()
                 )
                 .into());
             }
             let name = arguments.next().ok_or_else(|| {
                 format!(
                     "--theme requires a name; available themes: {}",
-                    themes::BuiltinTheme::NAMES
+                    themes::BuiltinTheme::names()
                 )
             })?;
             options.theme = Some(
@@ -458,7 +467,7 @@ mod tests {
 
     #[test]
     fn every_theme_is_selectable_from_cli_over_toml() {
-        for name in themes::BuiltinTheme::NAMES.split(", ") {
+        for name in themes::BuiltinTheme::names().split(", ") {
             let config: config::Config = toml::from_str("theme='gruvbox-material'").unwrap();
             let cli = super::parse_arguments(["--theme", name].map(Into::into))
                 .unwrap()

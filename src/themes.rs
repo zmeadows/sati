@@ -31,28 +31,16 @@ impl FromStr for BuiltinTheme {
     type Err = String;
 
     fn from_str(name: &str) -> Result<Self, Self::Err> {
-        match name {
-            "default" => Ok(Self::Default),
-            "gruvbox-material" => Ok(Self::GruvboxMaterial),
-            "catppuccin-mocha" => Ok(Self::CatppuccinMocha),
-            "tokyonight-storm" => Ok(Self::TokyoNightStorm),
-            "kanagawa-wave" => Ok(Self::KanagawaWave),
-            "rose-pine" => Ok(Self::RosePine),
-            "nightfox" => Ok(Self::Nightfox),
-            "onedark" => Ok(Self::OneDark),
-            "github-dark" => Ok(Self::GithubDark),
-            "everforest-medium" => Ok(Self::EverforestMedium),
-            "cyberdream-muted" => Ok(Self::CyberdreamMuted),
-            "nord" => Ok(Self::Nord),
-            "dracula" => Ok(Self::Dracula),
-            "darcula" => Ok(Self::Darcula),
-            "gruvbox" => Ok(Self::Gruvbox),
-            "solarized-dark" => Ok(Self::SolarizedDark),
-            _ => Err(format!(
-                "unknown theme: {name:?}. Available themes: {}",
-                Self::NAMES
-            )),
-        }
+        Self::ALL
+            .iter()
+            .find(|(_, id, _)| *id == name)
+            .map(|(theme, _, _)| *theme)
+            .ok_or_else(|| {
+                format!(
+                    "unknown theme: {name:?}. Available themes: {}",
+                    Self::names()
+                )
+            })
     }
 }
 
@@ -65,7 +53,74 @@ impl TryFrom<String> for BuiltinTheme {
 }
 
 impl BuiltinTheme {
-    pub const NAMES: &'static str = "default, gruvbox-material, catppuccin-mocha, tokyonight-storm, kanagawa-wave, rose-pine, nightfox, onedark, github-dark, everforest-medium, cyberdream-muted, nord, dracula, darcula, gruvbox, solarized-dark";
+    pub const ALL: &'static [(Self, &'static str, &'static str)] = &[
+        (Self::Default, "default", "Default"),
+        (
+            Self::GruvboxMaterial,
+            "gruvbox-material",
+            "Gruvbox Material",
+        ),
+        (
+            Self::CatppuccinMocha,
+            "catppuccin-mocha",
+            "Catppuccin Mocha",
+        ),
+        (
+            Self::TokyoNightStorm,
+            "tokyonight-storm",
+            "Tokyo Night Storm",
+        ),
+        (Self::KanagawaWave, "kanagawa-wave", "Kanagawa Wave"),
+        (Self::RosePine, "rose-pine", "Rosé Pine"),
+        (Self::Nightfox, "nightfox", "Nightfox"),
+        (Self::OneDark, "onedark", "One Dark"),
+        (Self::GithubDark, "github-dark", "GitHub Dark"),
+        (
+            Self::EverforestMedium,
+            "everforest-medium",
+            "Everforest Dark / Medium",
+        ),
+        (
+            Self::CyberdreamMuted,
+            "cyberdream-muted",
+            "Cyberdream Muted",
+        ),
+        (Self::Nord, "nord", "Nord"),
+        (Self::Dracula, "dracula", "Dracula"),
+        (Self::Darcula, "darcula", "Darcula"),
+        (Self::Gruvbox, "gruvbox", "Gruvbox Classic"),
+        (Self::SolarizedDark, "solarized-dark", "Solarized Dark"),
+    ];
+
+    pub fn names() -> String {
+        Self::ALL
+            .iter()
+            .map(|(_, name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    pub fn display_name(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find(|(theme, _, _)| *theme == self)
+            .expect("registered theme")
+            .2
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|(theme, _, _)| *theme == self)
+            .expect("registered theme");
+        let next = if forward {
+            (index + 1) % Self::ALL.len()
+        } else {
+            (index + Self::ALL.len() - 1) % Self::ALL.len()
+        };
+        Self::ALL[next].0
+    }
+
     // Role defaults patch their resolved parent, allowing TOML overrides on that
     // parent to cascade before the child's theme defaults and overrides apply.
     pub fn base_styles(self) -> Styles {
@@ -239,8 +294,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn registry_drives_both_cycle_directions_and_wraparound() {
+        for (index, &(theme, id, display)) in BuiltinTheme::ALL.iter().enumerate() {
+            assert_eq!(id.parse::<BuiltinTheme>().unwrap(), theme);
+            assert_eq!(theme.display_name(), display);
+            assert_eq!(
+                theme.cycle(true),
+                BuiltinTheme::ALL[(index + 1) % BuiltinTheme::ALL.len()].0
+            );
+            assert_eq!(theme.cycle(true).cycle(false), theme);
+            assert_eq!(theme.cycle(false).cycle(true), theme);
+        }
+        assert_eq!(
+            BuiltinTheme::Default.cycle(false),
+            BuiltinTheme::SolarizedDark
+        );
+    }
+
+    #[test]
     fn all_available_themes_parse_and_preserve_overrides_and_modifier_resets() {
-        let names: Vec<_> = BuiltinTheme::NAMES.split(", ").collect();
+        let available = BuiltinTheme::names();
+        let names: Vec<_> = available.split(", ").collect();
         assert_eq!(names.len(), 16);
         assert_eq!(
             names.iter().collect::<std::collections::HashSet<_>>().len(),

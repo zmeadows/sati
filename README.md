@@ -83,6 +83,7 @@ Then run `sati`.
 | Search | `/`, `Ctrl+F` |
 | Resume previous search forward / backward | `n` / `N` |
 | Toggle wrapping | `w` |
+| Next / previous color theme | `t` / `T` |
 | Quit | `q` |
 
 With `--completed-at-bottom`, new tasks stay in the incomplete section.
@@ -215,6 +216,10 @@ leave the terminal background unchanged.
 
 Select a theme with `theme = "catppuccin-mocha"` at the TOML root or
 `sati --theme catppuccin-mocha`; CLI selection takes precedence.
+Cycle themes during a session with `t` / `T`. Changes are temporary and never
+modify configuration; restarting restores the CLI/configured theme. TOML style
+overrides and CLI accent remain active while cycling.
+
 Explicit `[styles.*]` settings override the chosen theme, and
 `--accent` takes final precedence for the accent foreground only, preserving
 configured modifiers.

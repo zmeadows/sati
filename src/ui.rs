@@ -63,13 +63,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         )
     {
         let available = usize::from(sections[0].width).saturating_sub(counter.width() + 3);
-        let short = if notice.message() == "Copied task" {
-            notice.message()
-        } else if notice.message().starts_with("Copy failed") {
-            "Copy failed"
-        } else {
-            "Copy sent"
-        };
+        let short = notice.compact_message();
         let message = if notice.message().width() <= available {
             notice.message()
         } else {
@@ -425,6 +419,15 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             line.push_span(Span::raw("  "));
             line.push_span(Span::styled("m", keys));
             line.push_span(Span::raw(" Carry"));
+        }
+        if app.mode == Mode::Normal
+            && let Some(line) = lines
+                .iter_mut()
+                .find(|line| line.width() + "  t/T Theme".width() <= usize::from(width))
+        {
+            line.push_span(Span::raw("  "));
+            line.push_span(Span::styled("t/T", keys));
+            line.push_span(Span::raw(" Theme"));
         }
     };
     let available = |key: &str| match key {
@@ -910,6 +913,7 @@ mod tests {
                         "Copy sent to terminal",
                         "Copy failed: output unavailable",
                         "Copied task",
+                        "Theme: Everforest Dark / Medium",
                     ] {
                         app.notification = Some(crate::notification::Notification::new(notice));
                         let mut after = Rect::default();
@@ -924,7 +928,9 @@ mod tests {
                         if width >= 40 {
                             assert!(text.contains(notice));
                         } else if width == 24 {
-                            assert!(text.contains(if notice == "Copied task" {
+                            assert!(text.contains(if notice.starts_with("Theme: ") {
+                                "Theme changed"
+                            } else if notice == "Copied task" {
                                 "Copied task"
                             } else if notice.starts_with("Copy failed") {
                                 "Copy failed"
@@ -2219,8 +2225,11 @@ mod tests {
             &fixture.storage,
         )
         .unwrap();
-        assert_eq!(text(&app, 40), " u Undo  w Wrap  q Quit");
-        assert_eq!(text(&App::new(Vec::new()), 40), " w Wrap  q Quit");
+        assert_eq!(text(&app, 40), " u Undo  w Wrap  q Quit  t/T Theme");
+        assert_eq!(
+            text(&App::new(Vec::new()), 40),
+            " w Wrap  q Quit  t/T Theme"
+        );
         app.keybinds = false;
         assert!(shortcut_lines(&app, 80).is_empty());
         app.mode = Mode::Adding(TextInput::default(), AddPlacement::End);
