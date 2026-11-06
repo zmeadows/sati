@@ -47,7 +47,8 @@
 - Task wrapping affects visual-row scrolling, Page Up/Down, mouse hit mapping, and selection visibility. Account for narrow/short windows and tasks taller than the viewport.
 - Keep footer hints contextual and compact. **Do not advertise Page Up/Down in the bottom shortcut legend**; those are intentionally unlisted convenience shortcuts.
 - Preserve raw-mode, alternate-screen, keyboard enhancement, paste, and mouse setup/cleanup. The terminal should be restored on normal exit, errors, and panic paths; unsupported optional features should degrade gracefully.
-- Respect the existing CLI flags, terminal-native colors, and subdued styling. The terminal provides the background; `--accent` overrides the selection accent.
+- Respect the existing CLI flags and subdued styling. The `default` theme inherits terminal foreground/background colors; the 15 named themes supply RGB foregrounds and backgrounds. TOML can override foregrounds, backgrounds, and modifiers for `normal`, `muted`, `completed`, `border`, and `accent`; `--accent` overrides only the resolved accent foreground.
+- Apply the resolved normal background through Ratatui cells and, for RGB colors, OSC 11 (including terminal padding). Use OSC 111 to restore the terminal's configured default when Sati changed it. Runtime `t` / `T` theme cycling is session-only and preserves TOML style and CLI accent overrides.
 
 ## Development conventions
 

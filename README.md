@@ -126,12 +126,13 @@ The add, edit, and search prompts share these shortcuts:
 | `--round-corners` / `--square-corners` | Use rounded / sharp borders. |
 | `--ascii-markers` / `--unicode-markers` | Use ASCII / Unicode task markers. |
 | `--completed-at-bottom` / `--no-completed-at-bottom` | Enable / disable completion grouping. |
-| `--accent COLOR` | Set an ANSI color name, hex RGB, or palette index 0–255 (default `lightyellow`). |
+| `--accent COLOR` | Override the theme/TOML accent foreground: ANSI name, hex RGB, or palette index 0–255. |
 
 Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--ascii-markers` changes only task markers; other UI symbols remain Unicode.
 
-By default, Sati uses your terminal’s color scheme: normal text inherits its foreground, muted
-items use dimming, and the default accent uses its ANSI bright-yellow palette entry.
+The `default` theme uses your terminal’s foreground and background, with dimming for muted
+items and ANSI bright yellow (`lightyellow`) for its accent. Named themes supply their own
+colors; TOML styles can override them, followed by CLI `--accent` for the accent foreground.
 
 ```sh
 sati
@@ -224,7 +225,7 @@ overrides and CLI accent remain active while cycling.
 
 Explicit `[styles.*]` settings override the chosen theme, and
 `--accent` takes final precedence for the accent foreground only, preserving
-configured modifiers.
+configured background and modifiers.
 
 The five style roles support `fg`, `bg`, and `modifiers`. Foregrounds accept Ratatui ANSI
 names, hex RGB, and palette indices (as strings). `reset` inherits the terminal
@@ -242,11 +243,12 @@ Backgrounds accept exact hex RGB strings or `reset` (terminal default). A normal
 background cascades to every role unless that role overrides it. For example,
 `[styles.normal]` with `bg = "#20242d"` replaces the selected theme's background.
 
-Sati fills character cells through Ratatui and sends OSC 11 for the resolved normal
+Sati fills character cells through Ratatui and sends OSC 11 for the resolved RGB normal
 background, including terminal padding. Runtime `t` / `T` changes both. Terminals
 that ignore OSC 11 still get cell backgrounds. OSC 111 restores the configured
-terminal background on exit or when switching back to an uncolored theme; it
-cannot recover a temporary OSC override that existed before Sati started.
+terminal background, if Sati changed it, on exit or when switching to a theme without an
+effective background. It cannot recover a temporary OSC override that existed before
+Sati started.
 Help, version output, and Markdown export do not load display configuration.
 
 ## Export
