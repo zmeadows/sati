@@ -125,7 +125,7 @@ pub struct App {
     pub rounded: bool,
     pub unicode_markers: bool,
     pub completed_at_bottom: bool,
-    pub accent: ratatui::style::Color,
+    pub styles: crate::styles::Styles,
     pub scroll: usize,
     // A temporary inline add row has no task until it is confirmed.
     pub row_tasks: Vec<Option<usize>>,
@@ -151,7 +151,7 @@ impl App {
             rounded: false,
             unicode_markers: true,
             completed_at_bottom: false,
-            accent: crate::ui::DEFAULT_ACCENT,
+            styles: crate::styles::Styles::default(),
             scroll: 0,
             row_tasks: Vec::new(),
             viewport_height: 0,

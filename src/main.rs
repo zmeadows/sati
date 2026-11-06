@@ -5,6 +5,7 @@ mod input;
 mod notification;
 mod search;
 mod storage;
+mod styles;
 mod ui;
 
 use std::{
@@ -134,7 +135,7 @@ fn run() -> Result<()> {
     app.rounded = options.rounded;
     app.unicode_markers = !options.ascii_markers;
     app.completed_at_bottom = options.completed_at_bottom;
-    app.accent = options.accent;
+    app.styles.accent = app.styles.accent.fg(options.accent);
     if let Some(cache) = storage.load_history() {
         app.restore_history(cache);
     }
@@ -344,7 +345,7 @@ fn parse_arguments(
 ) -> Result<Option<CliOptions>> {
     let mut options = CliOptions {
         display: config::Display::default(),
-        accent: ui::DEFAULT_ACCENT,
+        accent: styles::DEFAULT_ACCENT,
         print_version: false,
         config: None,
     };
@@ -816,7 +817,7 @@ mod tests {
                 .unwrap()
                 .ascii_markers
         );
-        assert_eq!(defaults.accent, ui::DEFAULT_ACCENT);
+        assert_eq!(defaults.accent, styles::DEFAULT_ACCENT);
         assert!(!defaults.print_version);
         assert!(!parse_arguments(["--no-wrap".into()]).unwrap().unwrap().wrap);
         assert!(
