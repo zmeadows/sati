@@ -457,6 +457,21 @@ mod tests {
     }
 
     #[test]
+    fn every_theme_is_selectable_from_cli_over_toml() {
+        for name in themes::BuiltinTheme::NAMES.split(", ") {
+            let config: config::Config = toml::from_str("theme='gruvbox-material'").unwrap();
+            let cli = super::parse_arguments(["--theme", name].map(Into::into))
+                .unwrap()
+                .unwrap();
+            let selected = name.parse::<themes::BuiltinTheme>().unwrap();
+            assert_eq!(
+                cli.resolve(config).styles,
+                styles::Styles::resolve(selected, &config::StyleOverrides::default(), None)
+            );
+        }
+    }
+
+    #[test]
     fn cli_theme_overrides_toml_in_both_directions() {
         for (configured, cli, expected) in [
             (

@@ -11,6 +11,20 @@ pub enum BuiltinTheme {
     #[default]
     Default,
     GruvboxMaterial,
+    CatppuccinMocha,
+    TokyoNightStorm,
+    KanagawaWave,
+    RosePine,
+    Nightfox,
+    OneDark,
+    GithubDark,
+    EverforestMedium,
+    CyberdreamMuted,
+    Nord,
+    Dracula,
+    Darcula,
+    Gruvbox,
+    SolarizedDark,
 }
 
 impl FromStr for BuiltinTheme {
@@ -20,6 +34,20 @@ impl FromStr for BuiltinTheme {
         match name {
             "default" => Ok(Self::Default),
             "gruvbox-material" => Ok(Self::GruvboxMaterial),
+            "catppuccin-mocha" => Ok(Self::CatppuccinMocha),
+            "tokyonight-storm" => Ok(Self::TokyoNightStorm),
+            "kanagawa-wave" => Ok(Self::KanagawaWave),
+            "rose-pine" => Ok(Self::RosePine),
+            "nightfox" => Ok(Self::Nightfox),
+            "onedark" => Ok(Self::OneDark),
+            "github-dark" => Ok(Self::GithubDark),
+            "everforest-medium" => Ok(Self::EverforestMedium),
+            "cyberdream-muted" => Ok(Self::CyberdreamMuted),
+            "nord" => Ok(Self::Nord),
+            "dracula" => Ok(Self::Dracula),
+            "darcula" => Ok(Self::Darcula),
+            "gruvbox" => Ok(Self::Gruvbox),
+            "solarized-dark" => Ok(Self::SolarizedDark),
             _ => Err(format!(
                 "unknown theme: {name:?}. Available themes: {}",
                 Self::NAMES
@@ -37,7 +65,7 @@ impl TryFrom<String> for BuiltinTheme {
 }
 
 impl BuiltinTheme {
-    pub const NAMES: &'static str = "default, gruvbox-material";
+    pub const NAMES: &'static str = "default, gruvbox-material, catppuccin-mocha, tokyonight-storm, kanagawa-wave, rose-pine, nightfox, onedark, github-dark, everforest-medium, cyberdream-muted, nord, dracula, darcula, gruvbox, solarized-dark";
     // Role defaults patch their resolved parent, allowing TOML overrides on that
     // parent to cascade before the child's theme defaults and overrides apply.
     pub fn base_styles(self) -> Styles {
@@ -62,6 +90,146 @@ impl BuiltinTheme {
                     accent: plain.fg(Color::Rgb(231, 138, 78)),
                 }
             }
+            Self::CatppuccinMocha => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(205, 214, 244)),
+                    muted: plain.fg(Color::Rgb(166, 173, 200)),
+                    completed: plain.fg(Color::Rgb(108, 112, 134)),
+                    border: plain.fg(Color::Rgb(88, 91, 112)),
+                    accent: plain.fg(Color::Rgb(203, 166, 247)),
+                }
+            }
+            Self::TokyoNightStorm => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(192, 202, 245)),
+                    muted: plain.fg(Color::Rgb(115, 122, 162)),
+                    completed: plain.fg(Color::Rgb(86, 95, 137)),
+                    border: plain.fg(Color::Rgb(84, 92, 126)),
+                    accent: plain.fg(Color::Rgb(122, 162, 247)),
+                }
+            }
+            Self::KanagawaWave => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(220, 215, 186)),
+                    muted: plain.fg(Color::Rgb(200, 192, 147)),
+                    completed: plain.fg(Color::Rgb(114, 113, 105)),
+                    border: plain.fg(Color::Rgb(84, 84, 109)),
+                    accent: plain.fg(Color::Rgb(126, 156, 216)),
+                }
+            }
+            Self::RosePine => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(224, 222, 244)),
+                    muted: plain.fg(Color::Rgb(144, 140, 170)),
+                    completed: plain.fg(Color::Rgb(110, 106, 134)),
+                    border: plain.fg(Color::Rgb(82, 79, 103)),
+                    accent: plain.fg(Color::Rgb(235, 188, 186)),
+                }
+            }
+            Self::Nightfox => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(205, 206, 207)),
+                    muted: plain.fg(Color::Rgb(174, 175, 176)),
+                    completed: plain.fg(Color::Rgb(115, 128, 145)),
+                    border: plain.fg(Color::Rgb(57, 80, 109)),
+                    accent: plain.fg(Color::Rgb(113, 156, 214)),
+                }
+            }
+            Self::OneDark => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(171, 178, 191)),
+                    muted: plain.fg(Color::Rgb(132, 139, 152)),
+                    completed: plain.fg(Color::Rgb(92, 99, 112)),
+                    border: plain.fg(Color::Rgb(57, 63, 74)),
+                    accent: plain.fg(Color::Rgb(97, 175, 239)),
+                }
+            }
+            Self::GithubDark => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(201, 209, 217)),
+                    muted: plain.fg(Color::Rgb(139, 148, 158)),
+                    completed: plain.fg(Color::Rgb(110, 118, 129)),
+                    border: plain.fg(Color::Rgb(48, 54, 61)),
+                    accent: plain.fg(Color::Rgb(88, 166, 255)),
+                }
+            }
+            Self::EverforestMedium => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(211, 198, 170)),
+                    muted: plain.fg(Color::Rgb(157, 169, 160)),
+                    completed: plain.fg(Color::Rgb(122, 132, 120)),
+                    border: plain.fg(Color::Rgb(79, 88, 94)),
+                    accent: plain.fg(Color::Rgb(167, 192, 128)),
+                }
+            }
+            Self::CyberdreamMuted => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(255, 255, 255)),
+                    muted: plain.fg(Color::Rgb(155, 163, 178)),
+                    completed: plain.fg(Color::Rgb(123, 132, 150)),
+                    border: plain.fg(Color::Rgb(60, 64, 72)),
+                    accent: plain.fg(Color::Rgb(120, 168, 232)),
+                }
+            }
+            Self::Nord => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(216, 222, 233)),
+                    muted: plain.fg(Color::Rgb(156, 168, 184)),
+                    completed: plain.fg(Color::Rgb(76, 86, 106)),
+                    border: plain.fg(Color::Rgb(67, 76, 94)),
+                    accent: plain.fg(Color::Rgb(136, 192, 208)),
+                }
+            }
+            Self::Dracula => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(248, 248, 242)),
+                    muted: plain.fg(Color::Rgb(98, 114, 164)),
+                    completed: plain.fg(Color::Rgb(75, 82, 99)),
+                    border: plain.fg(Color::Rgb(68, 71, 90)),
+                    accent: plain.fg(Color::Rgb(189, 147, 249)),
+                }
+            }
+            Self::Darcula => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(169, 183, 198)),
+                    muted: plain.fg(Color::Rgb(128, 128, 128)),
+                    completed: plain.fg(Color::Rgb(96, 99, 102)),
+                    border: plain.fg(Color::Rgb(96, 96, 96)),
+                    accent: plain.fg(Color::Rgb(255, 198, 109)),
+                }
+            }
+            Self::Gruvbox => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(235, 219, 178)),
+                    muted: plain.fg(Color::Rgb(168, 153, 132)),
+                    completed: plain.fg(Color::Rgb(146, 131, 116)),
+                    border: plain.fg(Color::Rgb(102, 92, 84)),
+                    accent: plain.fg(Color::Rgb(254, 128, 25)),
+                }
+            }
+            Self::SolarizedDark => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(131, 148, 150)),
+                    muted: plain.fg(Color::Rgb(101, 123, 131)),
+                    completed: plain.fg(Color::Rgb(88, 110, 117)),
+                    border: plain.fg(Color::Rgb(88, 110, 117)),
+                    accent: plain.fg(Color::Rgb(38, 139, 210)),
+                }
+            }
         }
     }
 }
@@ -69,6 +237,48 @@ impl BuiltinTheme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn all_available_themes_parse_and_preserve_overrides_and_modifier_resets() {
+        let names: Vec<_> = BuiltinTheme::NAMES.split(", ").collect();
+        assert_eq!(names.len(), 16);
+        assert_eq!(
+            names.iter().collect::<std::collections::HashSet<_>>().len(),
+            16
+        );
+        for name in names {
+            let theme = name.parse::<BuiltinTheme>().unwrap();
+            let config: crate::config::Config = toml::from_str(&format!("theme='{name}'")).unwrap();
+            assert_eq!(config.theme, theme);
+            assert!(name.to_uppercase().parse::<BuiltinTheme>().is_err());
+            let resolved = Styles::resolve(theme, &config.styles, None);
+            if theme != BuiltinTheme::Default {
+                for role in [
+                    resolved.normal,
+                    resolved.muted,
+                    resolved.completed,
+                    resolved.border,
+                    resolved.accent,
+                ] {
+                    assert!(matches!(role.fg, Some(Color::Rgb(_, _, _))));
+                    assert_eq!(role.bg, None);
+                    assert!(role.add_modifier.is_empty());
+                    assert_eq!(role.sub_modifier, Modifier::all());
+                }
+            }
+            let config: crate::config::Config = toml::from_str(&format!("theme='{name}'\n[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers=['italic']\n[styles.accent]\nfg='red'\nmodifiers=['bold']")).unwrap();
+            let resolved = Styles::resolve(config.theme, &config.styles, Some(Color::Blue));
+            assert_eq!(resolved.normal.add_modifier, Modifier::BOLD);
+            assert_eq!(resolved.muted.fg, Some(Color::Green));
+            assert_eq!(resolved.muted.add_modifier, Modifier::ITALIC);
+            assert_eq!(resolved.accent.fg, Some(Color::Blue));
+            assert_eq!(resolved.accent.add_modifier, Modifier::BOLD);
+            if theme != BuiltinTheme::Default {
+                assert!(resolved.completed.add_modifier.is_empty());
+                assert!(resolved.border.add_modifier.is_empty());
+            }
+        }
+    }
 
     #[test]
     fn gruvbox_material_has_exact_palette_and_clears_inherited_modifiers() {
@@ -122,7 +332,7 @@ mod tests {
             "default".parse::<BuiltinTheme>().unwrap(),
             BuiltinTheme::Default
         );
-        for name in ["", "Default", "DEFAULT", "gruvbox", " default"] {
+        for name in ["", "Default", "DEFAULT", "not-a-theme", " default"] {
             let error = name.parse::<BuiltinTheme>().unwrap_err();
             assert!(error.contains("Available themes: default"));
         }

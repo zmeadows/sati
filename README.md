@@ -117,7 +117,7 @@ The add, edit, and search prompts share these shortcuts:
 
 | Flag | Effect |
 | --- | --- |
-| `--theme NAME` | Select `default` or `gruvbox-material`. |
+| `--theme NAME` | Select a built-in theme (listed below). |
 | `--config PATH` | Use an explicit configuration file. |
 | `--wrap` / `--no-wrap` | Enable / disable task wrapping. |
 | `--logo` / `--no-logo` | Show / hide the border title. |
@@ -190,12 +190,31 @@ must be absolute; `--config` also accepts relative paths without expanding `~`.
 CLI pairs override either TOML value: `--no-wrap` disables wrapping, and `--wrap`
 re-enables it. Contradictory pairs are rejected.
 
-The `default` theme uses terminal-native colors and remains the default.
-`gruvbox-material` uses the Gruvbox Material Dark / Medium palette: normal
-`#d4be98`, muted `#a89984`, completed `#928374`, border `#5a524c`, and accent
-`#e78a4e`, with no base text modifiers. It leaves the terminal background unchanged.
-Select it with `theme = "gruvbox-material"` at the TOML root or
-`sati --theme gruvbox-material`; CLI selection takes precedence.
+The `default` theme uses terminal-native colors and remains the default. Other
+built-in themes provide five RGB foregrounds with no base text modifiers; all
+leave the terminal background unchanged.
+
+| Theme | Identifier | Variant |
+| --- | --- | --- |
+| Terminal default | `default` | Terminal-native |
+| Catppuccin | `catppuccin-mocha` | Mocha |
+| Tokyo Night | `tokyonight-storm` | Storm |
+| Kanagawa | `kanagawa-wave` | Wave |
+| Rosé Pine | `rose-pine` | Main |
+| Nightfox | `nightfox` | Nightfox |
+| One Dark | `onedark` | Dark |
+| Gruvbox Material | `gruvbox-material` | Dark / Medium |
+| GitHub Dark | `github-dark` | GitHub Dark Default / classic dark palette |
+| Everforest | `everforest-medium` | Dark / Medium |
+| Cyberdream | `cyberdream-muted` | Dark / Muted |
+| Nord | `nord` | Dark |
+| Dracula | `dracula` | Dark |
+| Darcula | `darcula` | JetBrains Darcula (Vim port) |
+| Gruvbox Classic | `gruvbox` | Dark / Medium |
+| Solarized | `solarized-dark` | Dark |
+
+Select a theme with `theme = "catppuccin-mocha"` at the TOML root or
+`sati --theme catppuccin-mocha`; CLI selection takes precedence.
 Explicit `[styles.*]` settings override the chosen theme, and
 `--accent` takes final precedence for the accent foreground only, preserving
 configured modifiers.
@@ -204,9 +223,9 @@ The five style roles support `fg` and `modifiers`. Foregrounds accept Ratatui AN
 names, hex RGB, and palette indices (as strings). `reset` inherits the terminal
 foreground and is allowed except for accent. In the `default` theme, muted
 inherits normal and adds DIM; completed and border inherit resolved muted.
-Accent inherits normal, then defaults its foreground to `lightyellow`. Gruvbox
-Material instead supplies the explicit foregrounds and empty base modifier sets
-listed above.
+Accent inherits normal, then defaults its foreground to `lightyellow`. The RGB
+themes instead supply explicit foregrounds and empty base modifier sets for each
+role.
 
 Omitted properties retain those inherited values. A modifier array **replaces**
 inherited modifiers; `modifiers = []` clears them. Supported names are `bold`,
