@@ -114,6 +114,8 @@ pub struct App {
     last_search_query: Option<String>,
     history: VecDeque<UndoState>,
     redo_history: VecDeque<UndoState>,
+    persisted_selection: Option<usize>,
+    needs_migration: bool,
 }
 
 impl App {
@@ -142,7 +144,31 @@ impl App {
             last_search_query: None,
             history: VecDeque::new(),
             redo_history: VecDeque::new(),
+            persisted_selection: selected,
+            needs_migration: false,
         }
+    }
+
+    pub fn from_document(document: crate::storage::TaskDocument) -> Self {
+        let mut app = Self::new(document.tasks);
+        app.list.select(document.selected);
+        app.persisted_selection = document.selected;
+        app.needs_migration = document.needs_migration;
+        app
+    }
+
+    pub fn save_selection(&mut self, storage: &Storage) -> Result<()> {
+        let selected = match self.mode {
+            Mode::Searching { original, .. } | Mode::SearchResults { original, .. } => original,
+            _ => self.list.selected(),
+        };
+        let selected = crate::storage::valid_selection(&self.tasks, selected);
+        if self.needs_migration || selected != self.persisted_selection {
+            storage.save_selected(&self.tasks, selected)?;
+            self.persisted_selection = selected;
+            self.needs_migration = false;
+        }
+        Ok(())
     }
 
     pub fn navigate(&mut self, forward: bool) {
@@ -268,7 +294,9 @@ impl App {
         selected: Option<usize>,
         storage: &Storage,
     ) -> Result<()> {
-        storage.save(&tasks)?;
+        storage.save_selected(&tasks, selected)?;
+        self.persisted_selection = crate::storage::valid_selection(&tasks, selected);
+        self.needs_migration = false;
         if self.history.len() == HISTORY_LIMIT {
             self.history.pop_front();
         }
@@ -392,7 +420,10 @@ impl App {
             (&mut self.history, &mut self.redo_history)
         };
         if let Some(previous) = source.back() {
-            storage.save(&previous.tasks)?;
+            storage.save_selected(&previous.tasks, previous.selected)?;
+            self.persisted_selection =
+                crate::storage::valid_selection(&previous.tasks, previous.selected);
+            self.needs_migration = false;
             let previous = source.pop_back().unwrap();
             if destination.len() == HISTORY_LIMIT {
                 destination.pop_front();
@@ -1073,6 +1104,70 @@ mod tests {
             fixture.directory.join("data"),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn selection_migrates_on_clean_save_and_tracks_mutations_without_navigation_writes() {
+        let fixture = Fixture::new();
+        let mut empty = App::from_document(fixture.storage.load_document().unwrap());
+        empty.save_selection(&fixture.storage).unwrap();
+        assert!(!fixture.task_path().exists());
+        fixture.storage.save(&[]).unwrap();
+        std::fs::write(fixture.task_path(), "[]").unwrap();
+        let mut empty = App::from_document(fixture.storage.load_document().unwrap());
+        empty.save_selection(&fixture.storage).unwrap();
+        assert!(!fixture.storage.load_document().unwrap().needs_migration);
+        let tasks = app_with_tasks(3).tasks;
+        fixture.storage.save(&tasks).unwrap();
+        let legacy = serde_json::to_vec(&tasks).unwrap();
+        std::fs::write(fixture.task_path(), &legacy).unwrap();
+        let mut app = App::from_document(fixture.storage.load_document().unwrap());
+        assert_eq!(std::fs::read(fixture.task_path()).unwrap(), legacy);
+        block_saves(&fixture);
+        assert!(app.save_selection(&fixture.storage).is_err());
+        assert!(app.needs_migration);
+        restore_saves(&fixture);
+        app.save_selection(&fixture.storage).unwrap();
+        assert!(!app.needs_migration && !app.can_undo());
+        assert!(!fixture.storage.load_document().unwrap().needs_migration);
+        app.list.select(Some(2));
+        assert_eq!(fixture.storage.load_document().unwrap().selected, Some(0));
+        block_saves(&fixture);
+        assert!(app.save_selection(&fixture.storage).is_err());
+        assert_eq!(app.persisted_selection, Some(0));
+        assert_eq!(app.list.selected(), Some(2));
+        restore_saves(&fixture);
+        app.save_selection(&fixture.storage).unwrap();
+        let restarted = App::from_document(fixture.storage.load_document().unwrap());
+        assert_eq!(restarted.list.selected(), Some(2));
+        assert!(!restarted.can_undo() && !restarted.can_redo());
+        block_saves(&fixture);
+        app.save_selection(&fixture.storage).unwrap(); // No redundant write.
+        app.start_search();
+        app.paste("task 0");
+        app.save_selection(&fixture.storage).unwrap(); // Original settled focus is still 2.
+        restore_saves(&fixture);
+        app.finish_search(true);
+        app.save_selection(&fixture.storage).unwrap();
+        assert_eq!(fixture.storage.load_document().unwrap().selected, Some(0));
+        app.list.select(Some(2));
+        press(&mut app, &fixture, KeyCode::Char('d'));
+        assert_eq!(fixture.storage.load_document().unwrap().selected, Some(1));
+        app.undo(&fixture.storage).unwrap();
+        assert_eq!(fixture.storage.load_document().unwrap().selected, Some(2));
+        app.redo(&fixture.storage).unwrap();
+        assert_eq!(fixture.storage.load_document().unwrap().selected, Some(1));
+        app.toggle(0, &fixture.storage).unwrap();
+        app.undo(&fixture.storage).unwrap();
+        block_saves(&fixture);
+        app.save_selection(&fixture.storage).unwrap();
+        app.list.select(Some(0));
+        let before = task_state(&app);
+        assert!(app.toggle(0, &fixture.storage).is_err());
+        assert!(app.undo(&fixture.storage).is_err());
+        assert!(app.redo(&fixture.storage).is_err());
+        assert_eq!(task_state(&app), before);
+        assert_eq!(app.persisted_selection, Some(1));
     }
 
     #[test]

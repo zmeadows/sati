@@ -28,6 +28,7 @@
 - A task has `text`, `completed`, and optional `carried` (default false); list order is meaningful. Completed tasks cannot be carried. `m` toggles carryover on unfinished tasks; `D` preserves carried tasks.
 - Task text is a nonempty, trimmed, single-line description. Preserve arbitrary valid Unicode; reject corrupt persisted data rather than silently repairing or overwriting it.
 - The normal list selection refers to a **task**, not a wrapped display row. Keep indices valid after deletion, reordering, clearing, and undo.
+- `tasks.json` stores `{tasks, selected}`. Temporarily accept legacy arrays and migrate on the next save or clean exit. Save resulting selection with mutations and undo/redo; navigation-only focus is saved on clean exit, without persisting temporary search selection. Remap focus by original index during startup grouping.
 - `a` appends, `o` inserts below selection, and `O` inserts above selection. With `--completed-at-bottom`, new tasks stay in the incomplete section. Keep insertion, navigation, and undo coherent with this grouping.
 - Undo and redo each hold at most **256 in-memory snapshots** of tasks and selection. Only successful mutations enter ordinary history and clear redo. Undo/redo transfer snapshots between stacks after saving. Navigation, cancellation, and no-ops leave both histories unchanged.
 - Undo/redo history is session-only. Never read, write, or delete legacy `history.json` files. Undo/redo still save their resulting task lists to authoritative `tasks.json` before transferring snapshots.

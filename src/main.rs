@@ -140,7 +140,7 @@ fn run() -> Result<()> {
     let options = options.resolve(config);
     let storage = Storage::discover()?;
     let _instance_lock = storage.lock()?;
-    let mut app = App::new(load_tasks(&storage, options.completed_at_bottom)?);
+    let mut app = App::from_document(load_tasks(&storage, options.completed_at_bottom)?);
     app.wrap = options.wrap;
     app.logo = options.logo;
     app.keybinds = options.keybinds;
@@ -218,7 +218,8 @@ fn run() -> Result<()> {
         Ok(())
     })();
     let restore_result = modes.restore(&mut io::stdout());
-    finish_session(result, restore_result)
+    finish_session(result, restore_result)?;
+    app.save_selection(&storage)
 }
 
 fn finish_session(result: Result<()>, restore_result: io::Result<()>) -> Result<()> {
@@ -374,17 +375,27 @@ fn keyboard_support(result: io::Result<bool>) -> io::Result<bool> {
     }
 }
 
-fn load_tasks(storage: &Storage, completed_at_bottom: bool) -> Result<Vec<app::Task>> {
-    let mut tasks = storage.load()?;
+fn load_tasks(storage: &Storage, completed_at_bottom: bool) -> Result<storage::TaskDocument> {
+    let mut document = storage.load_document()?;
     if completed_at_bottom
-        && tasks
+        && document
+            .tasks
             .windows(2)
             .any(|pair| pair[0].completed && !pair[1].completed)
     {
-        tasks.sort_by_key(|task| task.completed);
-        storage.save(&tasks)?;
+        let mut order: Vec<_> = (0..document.tasks.len()).collect();
+        order.sort_by_key(|&index| document.tasks[index].completed);
+        document.selected = document
+            .selected
+            .and_then(|selected| order.iter().position(|&index| index == selected));
+        document.tasks = order
+            .into_iter()
+            .map(|index| document.tasks[index].clone())
+            .collect();
+        storage.save_selected(&document.tasks, document.selected)?;
+        document.needs_migration = false;
     }
-    Ok(tasks)
+    Ok(document)
 }
 
 fn parse_arguments(
@@ -892,6 +903,33 @@ mod tests {
     }
 
     #[test]
+    fn startup_grouping_remaps_selected_original_indices_including_duplicates() {
+        let fixture = storage::tests::Fixture::new();
+        let tasks: Vec<_> = [true, false, true, false]
+            .map(|completed| app::Task {
+                text: "duplicate".into(),
+                completed,
+                carried: false,
+            })
+            .into();
+        for (selected, remapped) in [(0, 2), (1, 0), (2, 3), (3, 1)] {
+            fixture
+                .storage
+                .save_selected(&tasks, Some(selected))
+                .unwrap();
+            let document = load_tasks(&fixture.storage, true).unwrap();
+            assert_eq!(document.selected, Some(remapped));
+            assert_eq!(
+                fixture.storage.load_document().unwrap().selected,
+                Some(remapped)
+            );
+            let bytes = std::fs::read(fixture.task_path()).unwrap();
+            load_tasks(&fixture.storage, true).unwrap();
+            assert_eq!(std::fs::read(fixture.task_path()).unwrap(), bytes);
+        }
+    }
+
+    #[test]
     fn completed_at_bottom_groups_existing_tasks_stably_and_is_opt_in() {
         let fixture = crate::storage::tests::Fixture::new();
         let original: Vec<_> = [
@@ -908,9 +946,9 @@ mod tests {
         .into();
         fixture.storage.save(&original).unwrap();
         let contents = std::fs::read(fixture.task_path()).unwrap();
-        assert_eq!(load_tasks(&fixture.storage, false).unwrap(), original);
+        assert_eq!(load_tasks(&fixture.storage, false).unwrap().tasks, original);
         assert_eq!(std::fs::read(fixture.task_path()).unwrap(), contents);
-        let grouped = load_tasks(&fixture.storage, true).unwrap();
+        let grouped = load_tasks(&fixture.storage, true).unwrap().tasks;
         assert_eq!(
             grouped,
             [
@@ -921,7 +959,7 @@ mod tests {
             ]
         );
         assert_eq!(fixture.storage.load().unwrap(), grouped);
-        assert_eq!(load_tasks(&fixture.storage, true).unwrap(), grouped);
+        assert_eq!(load_tasks(&fixture.storage, true).unwrap().tasks, grouped);
         assert!(!parse_arguments([]).unwrap().unwrap().completed_at_bottom);
         let options = parse_arguments(
             ["--completed-at-bottom", "--add-to-bottom", "--no-wrap"].map(Into::into),

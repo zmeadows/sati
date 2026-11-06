@@ -9,11 +9,27 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::app::Task;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDocument {
+    pub tasks: Vec<Task>,
+    #[serde(default)]
+    pub selected: Option<usize>,
+    #[serde(skip)]
+    pub needs_migration: bool,
+}
+
+pub fn valid_selection(tasks: &[Task], selected: Option<usize>) -> Option<usize> {
+    selected
+        .filter(|&index| index < tasks.len())
+        .or_else(|| (!tasks.is_empty()).then_some(0))
+}
 
 pub struct Storage {
     path: PathBuf,
@@ -127,9 +143,15 @@ impl Storage {
     }
 
     pub fn load(&self) -> Result<Vec<Task>> {
+        Ok(self.load_document()?.tasks)
+    }
+
+    pub fn load_document(&self) -> Result<TaskDocument> {
         let contents = match fs::read(&self.path) {
             Ok(contents) => contents,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(TaskDocument::default());
+            }
             Err(error) => {
                 return Err(format!("could not read {}: {error}", self.path.display()).into());
             }
@@ -140,20 +162,49 @@ impl Storage {
                 self.path.display()
             )
         };
-        let tasks: Vec<Task> =
+        // Temporary compatibility: legacy arrays migrate on the next save or clean exit.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Input {
+            Document(TaskDocument),
+            Legacy(Vec<Task>),
+        }
+        let input: Input =
             serde_json::from_slice(&contents).map_err(|error| invalid_file(error.to_string()))?;
-        for (index, task) in tasks.iter().enumerate() {
+        let mut document = match input {
+            Input::Document(document) => document,
+            Input::Legacy(tasks) => TaskDocument {
+                tasks,
+                selected: None,
+                needs_migration: true,
+            },
+        };
+        for (index, task) in document.tasks.iter().enumerate() {
             if let Some(problem) = task.validation_error() {
                 return Err(invalid_file(format!("task {} {problem}", index + 1)).into());
             }
         }
-        Ok(tasks)
+        document.selected = valid_selection(&document.tasks, document.selected);
+        Ok(document)
     }
 
+    #[cfg(test)]
     pub fn save(&self, tasks: &[Task]) -> Result<()> {
+        self.save_selected(tasks, None)
+    }
+
+    pub fn save_selected(&self, tasks: &[Task], selected: Option<usize>) -> Result<()> {
+        #[derive(Serialize)]
+        struct Saved<'a> {
+            tasks: &'a [Task],
+            selected: Option<usize>,
+        }
         atomic_save(
             &self.path,
-            tasks,
+            &Saved {
+                tasks,
+                selected: valid_selection(tasks, selected),
+            },
             "Original tasks are unchanged",
             "The new task list is already visible",
         )
@@ -286,6 +337,54 @@ pub mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.directory);
         }
+    }
+
+    #[test]
+    fn task_documents_load_legacy_and_normalize_selection_without_writing() {
+        let fixture = Fixture::new();
+        let absent = fixture.storage.load_document().unwrap();
+        assert!(absent.tasks.is_empty() && !absent.needs_migration);
+        assert!(!fixture.task_path().exists());
+        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+        let tasks = r#"[{"text":"first","completed":false},{"text":"second","completed":false}]"#;
+        for (json, selected, legacy) in [
+            (tasks.to_owned(), Some(0), true),
+            (
+                format!(r#"{{"tasks":{tasks},"selected":1}}"#),
+                Some(1),
+                false,
+            ),
+            (format!(r#"{{"tasks":{tasks}}}"#), Some(0), false),
+            (
+                format!(r#"{{"tasks":{tasks},"selected":null}}"#),
+                Some(0),
+                false,
+            ),
+            (
+                format!(r#"{{"tasks":{tasks},"selected":99}}"#),
+                Some(0),
+                false,
+            ),
+            (r#"{"tasks":[],"selected":5}"#.into(), None, false),
+        ] {
+            fs::write(fixture.task_path(), &json).unwrap();
+            let document = fixture.storage.load_document().unwrap();
+            assert_eq!(document.selected, selected);
+            assert_eq!(document.needs_migration, legacy);
+            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
+        }
+        for json in [
+            r#"{"tasks":[],"selected":null,"extra":true}"#,
+            r#"{"tasks":[{"text":"bad\ntext","completed":false}],"selected":0}"#,
+        ] {
+            fs::write(fixture.task_path(), json).unwrap();
+            assert!(fixture.storage.load_document().is_err());
+            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
+        }
+        fixture.storage.save_selected(&[], Some(99)).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixture.task_path()).unwrap()).unwrap();
+        assert_eq!(json, serde_json::json!({"tasks":[], "selected":null}));
     }
 
     #[test]
@@ -541,7 +640,7 @@ pub mod tests {
         fixture.storage.save(&tasks).unwrap();
         assert_eq!(fixture.storage.load().unwrap(), tasks);
         let json = fs::read_to_string(fixture.task_path()).unwrap();
-        assert!(json.starts_with("[\n"));
+        assert!(json.starts_with("{\n"));
         assert!(json.ends_with('\n'));
         let mut replacement = tasks.clone();
         replacement.reverse();
@@ -705,7 +804,9 @@ pub mod tests {
             0o600
         );
         assert_eq!(
-            serde_json::from_slice::<Vec<Task>>(&fs::read(temporary).unwrap()).unwrap(),
+            serde_json::from_slice::<TaskDocument>(&fs::read(temporary).unwrap())
+                .unwrap()
+                .tasks,
             tasks
         );
     }
@@ -751,7 +852,9 @@ pub mod tests {
             .find(|path| path.extension().is_some_and(|extension| extension == "tmp"))
             .unwrap();
         assert_eq!(
-            serde_json::from_slice::<Vec<Task>>(&fs::read(temporary).unwrap()).unwrap(),
+            serde_json::from_slice::<TaskDocument>(&fs::read(temporary).unwrap())
+                .unwrap()
+                .tasks,
             replacement
         );
     }

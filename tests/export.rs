@@ -77,6 +77,18 @@ fn export_reads_committed_tasks_while_the_writer_lock_is_held() {
     assert_eq!(output.stdout, MARKDOWN.as_bytes());
     assert!(output.stderr.is_empty());
     assert_eq!(fs::read(fixture.data.join("tasks.json")).unwrap(), before);
+    let document = format!(
+        r#"{{"tasks":{},"selected":1}}"#,
+        String::from_utf8(before).unwrap()
+    );
+    fs::write(fixture.data.join("tasks.json"), &document).unwrap();
+    let output = fixture.run(&[]);
+    assert!(output.status.success() && output.stderr.is_empty());
+    assert_eq!(output.stdout, MARKDOWN.as_bytes());
+    assert_eq!(
+        fs::read_to_string(fixture.data.join("tasks.json")).unwrap(),
+        document
+    );
     assert_eq!(
         fs::read_to_string(fixture.data.join("history.json")).unwrap(),
         "deliberately invalid unused history"
