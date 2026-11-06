@@ -108,12 +108,50 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     rows
 }
 
+// Prepared once per draw; the row mapping is moved back to App for navigation.
+struct TaskLayout {
+    lines: Vec<Line<'static>>,
+    row_tasks: Vec<Option<usize>>,
+    input_row: Option<usize>,
+    selected_task: Option<usize>,
+}
+
 fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
-    app.viewport_height = area.height;
-    app.row_tasks.clear();
+    let mapping = std::mem::take(&mut app.row_tasks);
+    let layout = prepare_task_layout(app, area.width, mapping);
+    let visible = update_task_viewport(app, &layout, area.height);
+    let TaskLayout {
+        lines,
+        row_tasks,
+        input_row,
+        ..
+    } = layout;
+    app.row_tasks = row_tasks;
+    if lines.is_empty() {
+        frame.render_widget(
+            Paragraph::new(" Press a to add a task").style(app.styles.muted),
+            area,
+        );
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(
+            lines
+                .into_iter()
+                .skip(visible.start)
+                .take(visible.len())
+                .collect::<Vec<_>>(),
+        ),
+        area,
+    );
+    draw_inline_input(frame, app, area, input_row, visible);
+}
+
+fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>) -> TaskLayout {
+    row_tasks.clear();
     let inline = match &app.mode {
-        Mode::Adding(input, placement) => Some((app.insertion_index(*placement), input, "add")),
-        Mode::Editing { index, input } => Some((*index, input, "edit")),
+        Mode::Adding(_, placement) => Some(app.insertion_index(*placement)),
+        Mode::Editing { index, .. } => Some(*index),
         _ => None,
     };
     let editing = matches!(app.mode, Mode::Editing { .. });
@@ -122,24 +160,16 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         app.list.selected()
     };
-    if app.tasks.is_empty() && inline.is_none() {
-        app.scroll = 0;
-        frame.render_widget(
-            Paragraph::new(" Press a to add a task").style(app.styles.muted),
-            area,
-        );
-        return;
-    }
     let mut lines = Vec::new();
     let mut input_row = None;
-    let text_width = usize::from(area.width.saturating_sub(6));
+    let text_width = usize::from(width.saturating_sub(6));
     for index in 0..=app.tasks.len() {
-        if let Some((position, _, _)) = inline
+        if let Some(position) = inline
             && position == index
         {
             input_row = Some(lines.len());
             lines.push(Line::default());
-            app.row_tasks.push(editing.then_some(index));
+            row_tasks.push(editing.then_some(index));
             if editing {
                 continue;
             }
@@ -174,7 +204,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
             app.styles.normal
         };
         for (row, (source, text)) in wrapped.into_iter().enumerate() {
-            app.row_tasks.push(Some(index));
+            row_tasks.push(Some(index));
             let prefix = if row > 0 {
                 "     "
             } else if searching {
@@ -220,19 +250,33 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
             lines.push(line);
         }
     }
-    let height = usize::from(area.height);
-    app.scroll = app.scroll.min(lines.len().saturating_sub(height));
-    if height == 0 {
-        return;
+    TaskLayout {
+        lines,
+        row_tasks,
+        input_row,
+        selected_task: selected,
     }
-    let focus = input_row.map(|row| (row, row + 1)).or_else(|| {
-        selected.map(|selected| {
-            let start = app
+}
+
+fn update_task_viewport(app: &mut App, layout: &TaskLayout, height: u16) -> Range<usize> {
+    app.viewport_height = height;
+    if layout.lines.is_empty() {
+        app.scroll = 0;
+        return 0..0;
+    }
+    let height = usize::from(height);
+    app.scroll = app.scroll.min(layout.lines.len().saturating_sub(height));
+    if height == 0 {
+        return app.scroll..app.scroll;
+    }
+    let focus = layout.input_row.map(|row| (row, row + 1)).or_else(|| {
+        layout.selected_task.map(|selected| {
+            let start = layout
                 .row_tasks
                 .iter()
                 .position(|&task| task == Some(selected))
                 .unwrap_or(0);
-            let end = app
+            let end = layout
                 .row_tasks
                 .iter()
                 .rposition(|&task| task == Some(selected))
@@ -251,27 +295,32 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
     app.reveal_selection = false;
-    frame.render_widget(
-        Paragraph::new(
-            lines
-                .into_iter()
-                .skip(app.scroll)
-                .take(height)
-                .collect::<Vec<_>>(),
-        ),
-        area,
-    );
-    if let Some((_, input, label)) = inline
+    app.scroll..(app.scroll + height).min(layout.lines.len())
+}
+
+fn draw_inline_input(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    input_row: Option<usize>,
+    visible: Range<usize>,
+) {
+    let inline = match &app.mode {
+        Mode::Adding(input, _) => Some((input, "add")),
+        Mode::Editing { input, .. } => Some((input, "edit")),
+        _ => None,
+    };
+    if let Some((input, label)) = inline
         && let Some(row) = input_row
-        && row >= app.scroll
-        && row - app.scroll < height
+        && row >= visible.start
+        && row < visible.end
     {
         let indent = area.width.saturating_sub(1).min(2);
         draw_input(
             frame,
             Rect::new(
                 area.x + indent,
-                area.y + (row - app.scroll) as u16,
+                area.y + (row - visible.start) as u16,
                 area.width - indent,
                 1,
             ),
