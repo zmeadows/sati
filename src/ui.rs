@@ -60,7 +60,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
             std::time::Instant::now(),
             app.styles.accent,
             app.styles.normal,
-            app.styles.muted,
         )
     {
         let available = usize::from(sections[0].width).saturating_sub(counter.width() + 3);

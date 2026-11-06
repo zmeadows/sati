@@ -4,9 +4,8 @@ use ratatui::style::Style;
 
 // Phases run sequentially; their durations determine the total lifetime.
 // Any nonnegative Duration is valid; zero skips a phase (all zero expires immediately).
-const NOTIFICATION_ACCENT_DURATION: Duration = Duration::from_millis(180);
-const NOTIFICATION_NORMAL_DURATION: Duration = Duration::from_millis(1200);
-const NOTIFICATION_DIM_DURATION: Duration = Duration::from_millis(400);
+const NOTIFICATION_ACCENT_DURATION: Duration = Duration::from_millis(300);
+const NOTIFICATION_NORMAL_DURATION: Duration = Duration::from_millis(3260);
 
 pub struct Notification {
     message: String,
@@ -37,11 +36,7 @@ impl Notification {
     fn timing(&self, now: Instant) -> Option<(usize, Duration)> {
         timing(
             now.saturating_duration_since(self.started),
-            [
-                NOTIFICATION_ACCENT_DURATION,
-                NOTIFICATION_NORMAL_DURATION,
-                NOTIFICATION_DIM_DURATION,
-            ],
+            [NOTIFICATION_ACCENT_DURATION, NOTIFICATION_NORMAL_DURATION],
         )
     }
 
@@ -49,13 +44,12 @@ impl Notification {
         self.timing(now).map(|(_, wait)| wait)
     }
 
-    pub fn style(&self, now: Instant, accent: Style, normal: Style, dim: Style) -> Option<Style> {
-        self.timing(now)
-            .map(|(phase, _)| [accent, normal, dim][phase])
+    pub fn style(&self, now: Instant, accent: Style, normal: Style) -> Option<Style> {
+        self.timing(now).map(|(phase, _)| [accent, normal][phase])
     }
 }
 
-fn timing(mut elapsed: Duration, phases: [Duration; 3]) -> Option<(usize, Duration)> {
+fn timing(mut elapsed: Duration, phases: [Duration; 2]) -> Option<(usize, Duration)> {
     for (phase, duration) in phases.into_iter().enumerate() {
         if elapsed < duration {
             return Some((phase, duration - elapsed));
@@ -69,7 +63,7 @@ fn timing(mut elapsed: Duration, phases: [Duration; 3]) -> Option<(usize, Durati
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::{Color, Modifier};
+    use ratatui::style::Color;
 
     #[test]
     fn notifications_use_configured_semantic_styles_without_changing_deadlines() {
@@ -78,22 +72,22 @@ mod tests {
         let notice = Notification::new("Copied task");
         for (elapsed, expected) in [
             (0, styles.accent),
-            (180, styles.normal),
-            (1380, styles.muted),
+            (299, styles.accent),
+            (300, styles.normal),
+            (3559, styles.normal),
         ] {
             assert_eq!(
                 notice.style(
                     notice.started + Duration::from_millis(elapsed),
                     styles.accent,
-                    styles.normal,
-                    styles.muted
+                    styles.normal
                 ),
                 Some(expected)
             );
         }
         assert!(
             notice
-                .next_redraw(notice.started + Duration::from_millis(1780))
+                .next_redraw(notice.started + Duration::from_millis(3560))
                 .is_none()
         );
     }
@@ -101,18 +95,17 @@ mod tests {
     #[test]
     fn waits_only_for_boundaries_and_skips_elapsed_phases() {
         let ms = Duration::from_millis;
-        let phases = [ms(180), ms(1200), ms(400)];
+        let phases = [ms(300), ms(3260)];
         for (elapsed, phase, wait) in [
-            (0, 0, 180),
-            (179, 0, 1),
-            (180, 1, 1200),
-            (1000, 1, 380),
-            (1380, 2, 400),
-            (1779, 2, 1),
+            (0, 0, 300),
+            (299, 0, 1),
+            (300, 1, 3260),
+            (1000, 1, 2560),
+            (3559, 1, 1),
         ] {
             assert_eq!(timing(ms(elapsed), phases), Some((phase, ms(wait))));
         }
-        assert!(timing(ms(1780), phases).is_none());
+        assert!(timing(ms(3560), phases).is_none());
         assert!(timing(ms(5000), phases).is_none());
     }
 
@@ -120,83 +113,63 @@ mod tests {
     fn zero_short_and_large_durations_skip_without_overflow() {
         let zero = Duration::ZERO;
         let tick = Duration::from_nanos(1);
-        assert!(timing(zero, [zero; 3]).is_none());
-        for phase in 0..3 {
-            let mut phases = [zero; 3];
+        assert!(timing(zero, [zero; 2]).is_none());
+        for phase in 0..2 {
+            let mut phases = [zero; 2];
             phases[phase] = tick;
             assert_eq!(timing(zero, phases), Some((phase, tick)));
             assert!(timing(tick, phases).is_none());
         }
         assert_eq!(
-            timing(Duration::MAX, [Duration::MAX; 3]),
+            timing(Duration::MAX, [Duration::MAX; 2]),
             Some((1, Duration::MAX))
         );
     }
 
     #[test]
-    fn phases_select_colors_directly_and_replacements_restart() {
+    fn phases_select_styles_directly_and_replacements_restart() {
         let first = Notification::new("Copied task");
         let start = first.started;
         for colors in [
-            [
-                Color::Rgb(255, 0, 128),
-                Color::Rgb(212, 190, 152),
-                Color::Rgb(146, 131, 116),
-            ],
-            [Color::Red, Color::Reset, Color::Indexed(8)],
+            [Color::Rgb(255, 0, 128), Color::Rgb(212, 190, 152)],
+            [Color::Red, Color::Reset],
+            [Color::Indexed(3), Color::Indexed(8)],
         ] {
-            for (elapsed, phase) in [
-                (0, 0),
-                (90, 0),
-                (179, 0),
-                (180, 1),
-                (1379, 1),
-                (1380, 2),
-                (1779, 2),
-            ] {
+            let [accent, normal] = colors.map(|color| Style::default().fg(color));
+            for (elapsed, expected) in [(0, accent), (299, accent), (300, normal), (3559, normal)] {
                 assert_eq!(
-                    first.style(
-                        start + Duration::from_millis(elapsed),
-                        Style::default().fg(colors[0]),
-                        Style::default().fg(colors[1]),
-                        Style::default().fg(colors[2]).add_modifier(Modifier::DIM)
-                    ),
-                    Some(if phase == 2 {
-                        Style::default()
-                            .fg(colors[phase])
-                            .add_modifier(Modifier::DIM)
-                    } else {
-                        Style::default().fg(colors[phase])
-                    })
+                    first.style(start + Duration::from_millis(elapsed), accent, normal),
+                    Some(expected)
                 );
             }
             assert!(
                 first
-                    .style(
-                        start + Duration::from_millis(1780),
-                        Style::default().fg(colors[0]),
-                        Style::default().fg(colors[1]),
-                        Style::default().fg(colors[2]).add_modifier(Modifier::DIM)
-                    )
+                    .style(start + Duration::from_millis(3560), accent, normal)
                     .is_none()
             );
         }
         let replacement = Notification {
             message: "Copy sent to terminal".into(),
-            started: start + Duration::from_secs(2),
+            started: start + Duration::from_secs(4),
         };
         assert_eq!(
             replacement.style(
                 replacement.started,
                 Style::default().fg(Color::Blue),
-                Style::default(),
-                Style::default().add_modifier(Modifier::DIM)
+                Style::default()
             ),
             Some(Style::default().fg(Color::Blue))
         );
-        assert_eq!(
-            replacement.next_redraw(replacement.started),
-            Some(NOTIFICATION_ACCENT_DURATION)
-        );
+        for (elapsed, wait) in [
+            (0, Some(300)),
+            (300, Some(3260)),
+            (3559, Some(1)),
+            (3560, None),
+        ] {
+            assert_eq!(
+                replacement.next_redraw(replacement.started + Duration::from_millis(elapsed)),
+                wait.map(Duration::from_millis)
+            );
+        }
     }
 }
