@@ -117,7 +117,7 @@ The add, edit, and search prompts share these shortcuts:
 
 | Flag | Effect |
 | --- | --- |
-| `--theme NAME` | Select a built-in theme (currently only `default`). |
+| `--theme NAME` | Select `default` or `gruvbox-material`. |
 | `--config PATH` | Use an explicit configuration file. |
 | `--wrap` / `--no-wrap` | Enable / disable task wrapping. |
 | `--logo` / `--no-logo` | Show / hide the border title. |
@@ -129,7 +129,7 @@ The add, edit, and search prompts share these shortcuts:
 
 Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--ascii-markers` changes only task markers; other UI symbols remain Unicode.
 
-Sati uses your terminal’s color scheme: normal text inherits its foreground, muted
+By default, Sati uses your terminal’s color scheme: normal text inherits its foreground, muted
 items use dimming, and the default accent uses its ANSI bright-yellow palette entry.
 
 ```sh
@@ -190,17 +190,23 @@ must be absolute; `--config` also accepts relative paths without expanding `~`.
 CLI pairs override either TOML value: `--no-wrap` disables wrapping, and `--wrap`
 re-enables it. Contradictory pairs are rejected.
 
-The only built-in theme is `default`, using terminal-native colors. Select it with
-`theme = "default"` at the TOML root or `sati --theme default`; CLI selection takes
-precedence. Explicit `[styles.*]` settings override the chosen theme, and
+The `default` theme uses terminal-native colors and remains the default.
+`gruvbox-material` uses the Gruvbox Material Dark / Medium palette: normal
+`#d4be98`, muted `#a89984`, completed `#928374`, border `#5a524c`, and accent
+`#e78a4e`, with no base text modifiers. It leaves the terminal background unchanged.
+Select it with `theme = "gruvbox-material"` at the TOML root or
+`sati --theme gruvbox-material`; CLI selection takes precedence.
+Explicit `[styles.*]` settings override the chosen theme, and
 `--accent` takes final precedence for the accent foreground only, preserving
 configured modifiers.
 
 The five style roles support `fg` and `modifiers`. Foregrounds accept Ratatui ANSI
 names, hex RGB, and palette indices (as strings). `reset` inherits the terminal
-foreground and is allowed except for accent, which defaults to ANSI bright yellow.
-Muted inherits normal and adds DIM; completed and border inherit resolved muted.
-Accent inherits normal, then defaults its foreground to `lightyellow`.
+foreground and is allowed except for accent. In the `default` theme, muted
+inherits normal and adds DIM; completed and border inherit resolved muted.
+Accent inherits normal, then defaults its foreground to `lightyellow`. Gruvbox
+Material instead supplies the explicit foregrounds and empty base modifier sets
+listed above.
 
 Omitted properties retain those inherited values. A modifier array **replaces**
 inherited modifiers; `modifiers = []` clears them. Supported names are `bold`,

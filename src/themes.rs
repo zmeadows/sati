@@ -10,6 +10,7 @@ use crate::styles::{DEFAULT_ACCENT, Styles};
 pub enum BuiltinTheme {
     #[default]
     Default,
+    GruvboxMaterial,
 }
 
 impl FromStr for BuiltinTheme {
@@ -18,6 +19,7 @@ impl FromStr for BuiltinTheme {
     fn from_str(name: &str) -> Result<Self, Self::Err> {
         match name {
             "default" => Ok(Self::Default),
+            "gruvbox-material" => Ok(Self::GruvboxMaterial),
             _ => Err(format!(
                 "unknown theme: {name:?}. Available themes: {}",
                 Self::NAMES
@@ -35,7 +37,7 @@ impl TryFrom<String> for BuiltinTheme {
 }
 
 impl BuiltinTheme {
-    pub const NAMES: &'static str = "default";
+    pub const NAMES: &'static str = "default, gruvbox-material";
     // Role defaults patch their resolved parent, allowing TOML overrides on that
     // parent to cascade before the child's theme defaults and overrides apply.
     pub fn base_styles(self) -> Styles {
@@ -49,6 +51,17 @@ impl BuiltinTheme {
                 border: Style::default(),
                 accent: Style::default().fg(DEFAULT_ACCENT),
             },
+            Self::GruvboxMaterial => {
+                // Each palette role explicitly clears inherited modifiers.
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(212, 190, 152)),
+                    muted: plain.fg(Color::Rgb(168, 153, 132)),
+                    completed: plain.fg(Color::Rgb(146, 131, 116)),
+                    border: plain.fg(Color::Rgb(90, 82, 76)),
+                    accent: plain.fg(Color::Rgb(231, 138, 78)),
+                }
+            }
         }
     }
 }
@@ -56,6 +69,52 @@ impl BuiltinTheme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gruvbox_material_has_exact_palette_and_clears_inherited_modifiers() {
+        let config: crate::config::Config = toml::from_str("theme='gruvbox-material'").unwrap();
+        assert_eq!(config.theme, BuiltinTheme::GruvboxMaterial);
+        assert_eq!(
+            "gruvbox-material".parse::<BuiltinTheme>().unwrap(),
+            config.theme
+        );
+        assert!("Gruvbox-Material".parse::<BuiltinTheme>().is_err());
+        let styles = Styles::resolve(config.theme, &config.styles, None);
+        for (role, color) in [
+            (styles.normal, Color::Rgb(212, 190, 152)),
+            (styles.muted, Color::Rgb(168, 153, 132)),
+            (styles.completed, Color::Rgb(146, 131, 116)),
+            (styles.border, Color::Rgb(90, 82, 76)),
+            (styles.accent, Color::Rgb(231, 138, 78)),
+        ] {
+            assert_eq!(role.fg, Some(color));
+            assert_eq!(role.bg, None);
+            assert!(role.add_modifier.is_empty());
+            assert_eq!(role.sub_modifier, Modifier::all());
+        }
+        let inherited: crate::config::Config =
+            toml::from_str("theme='gruvbox-material'\n[styles.normal]\nmodifiers=['bold']")
+                .unwrap();
+        let inherited = Styles::resolve(inherited.theme, &inherited.styles, None);
+        assert_eq!(inherited.normal.add_modifier, Modifier::BOLD);
+        for role in [
+            inherited.muted,
+            inherited.completed,
+            inherited.border,
+            inherited.accent,
+        ] {
+            assert!(role.add_modifier.is_empty());
+        }
+        let config: crate::config::Config = toml::from_str("theme='gruvbox-material'\n[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers=['italic']\n[styles.completed]\nmodifiers=['dim']\n[styles.border]\nmodifiers=[]\n[styles.accent]\nfg='blue'\nmodifiers=['bold']").unwrap();
+        let styles = Styles::resolve(config.theme, &config.styles, Some(Color::Red));
+        assert_eq!(styles.normal.add_modifier, Modifier::BOLD);
+        assert_eq!(styles.muted.fg, Some(Color::Green));
+        assert_eq!(styles.muted.add_modifier, Modifier::ITALIC);
+        assert_eq!(styles.completed.add_modifier, Modifier::DIM);
+        assert!(styles.border.add_modifier.is_empty());
+        assert_eq!(styles.accent.fg, Some(Color::Red));
+        assert_eq!(styles.accent.add_modifier, Modifier::BOLD);
+    }
 
     #[test]
     fn names_are_strict_and_default_preserves_the_existing_palette() {

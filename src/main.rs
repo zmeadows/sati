@@ -122,7 +122,7 @@ fn run() -> Result<()> {
     }
     let Some(options) = parse_arguments(arguments)? else {
         println!(
-            "{USAGE}\n\n--theme NAME      Select a built-in theme (available: {available_themes}; terminal-native colors).\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--logo / --no-logo  Show / hide the sati border title.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--completed-at-bottom / --no-completed-at-bottom  Enable / disable grouping.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: lightyellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, logo, keybinds, rounded_corners, ascii_markers, completed_at_bottom.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg and modifiers. --accent overrides only the accent foreground.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file.",
+            "{USAGE}\n\n--theme NAME      Select a built-in theme (available: {available_themes}; default: default).\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--logo / --no-logo  Show / hide the sati border title.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--completed-at-bottom / --no-completed-at-bottom  Enable / disable grouping.\n--accent COLOR    Set accent: ANSI name, #RRGGBB, or index 0-255 (default: lightyellow).\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, logo, keybinds, rounded_corners, ascii_markers, completed_at_bottom.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg and modifiers. --accent overrides only the accent foreground.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file.",
             available_themes = themes::BuiltinTheme::NAMES,
         );
         return Ok(());
@@ -454,6 +454,34 @@ mod tests {
     ) -> Result<Option<Options>> {
         super::parse_arguments(arguments)
             .map(|options| options.map(|cli| cli.resolve(config::Config::default())))
+    }
+
+    #[test]
+    fn cli_theme_overrides_toml_in_both_directions() {
+        for (configured, cli, expected) in [
+            (
+                "default",
+                Some("gruvbox-material"),
+                ratatui::style::Color::Rgb(212, 190, 152),
+            ),
+            (
+                "gruvbox-material",
+                Some("default"),
+                ratatui::style::Color::Reset,
+            ),
+            (
+                "gruvbox-material",
+                None,
+                ratatui::style::Color::Rgb(212, 190, 152),
+            ),
+        ] {
+            let config = toml::from_str(&format!("theme='{configured}'")).unwrap();
+            let args = cli.map_or_else(Vec::new, |name| vec!["--theme", name]);
+            let cli = super::parse_arguments(args.into_iter().map(Into::into))
+                .unwrap()
+                .unwrap();
+            assert_eq!(cli.resolve(config).styles.normal.fg, Some(expected));
+        }
     }
 
     #[test]
