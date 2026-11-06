@@ -163,6 +163,7 @@ fn run() -> Result<()> {
     let result = (|| -> Result<()> {
         terminal::enable_raw_mode()?;
         modes.raw.store(true, Ordering::Relaxed);
+        modes.cursor.store(true, Ordering::Relaxed);
         // An output failure may occur after the screen-switch command was sent.
         modes.alternate.store(true, Ordering::Relaxed);
         execute!(io::stdout(), EnterAlternateScreen)?;
@@ -235,6 +236,8 @@ fn finish_session(result: Result<()>, restore_result: io::Result<()>) -> Result<
 struct TerminalModes {
     raw: AtomicBool,
     alternate: AtomicBool,
+    // Showing the cursor may still be pending after raw/screen cleanup succeeds.
+    cursor: AtomicBool,
     mouse: AtomicBool,
     paste: AtomicBool,
     keyboard: AtomicBool,
@@ -290,38 +293,26 @@ impl TerminalModes {
     }
 
     fn restore(&self, output: &mut impl io::Write) -> io::Result<()> {
-        let active = self.raw.load(Ordering::Relaxed) || self.alternate.load(Ordering::Relaxed);
+        // A pop may have reached the terminal even if flushing failed. Never pop twice.
         let keyboard = if self.keyboard.swap(false, Ordering::Relaxed) {
             execute!(output, PopKeyboardEnhancementFlags)
         } else {
             Ok(())
         };
-        let paste = if self.paste.swap(false, Ordering::Relaxed) {
-            execute!(output, DisableBracketedPaste)
-        } else {
-            Ok(())
-        };
-        // On Windows this restores the console mode captured after raw mode was enabled.
+        let paste = restore_mode(&self.paste, || execute!(output, DisableBracketedPaste));
+        // Windows restores a raw-mode console snapshot; retrying after raw cleanup
+        // could re-enable raw mode. Keep this operation one-shot on that backend.
+        #[cfg(windows)]
         let mouse = if self.mouse.swap(false, Ordering::Relaxed) {
             execute!(output, DisableMouseCapture)
         } else {
             Ok(())
         };
-        let cursor = if active {
-            execute!(output, Show)
-        } else {
-            Ok(())
-        };
-        let raw = if self.raw.swap(false, Ordering::Relaxed) {
-            terminal::disable_raw_mode()
-        } else {
-            Ok(())
-        };
-        let alternate = if self.alternate.swap(false, Ordering::Relaxed) {
-            execute!(output, LeaveAlternateScreen)
-        } else {
-            Ok(())
-        };
+        #[cfg(not(windows))]
+        let mouse = restore_mode(&self.mouse, || execute!(output, DisableMouseCapture));
+        let cursor = restore_mode(&self.cursor, || execute!(output, Show));
+        let raw = restore_mode(&self.raw, terminal::disable_raw_mode);
+        let alternate = restore_mode(&self.alternate, || execute!(output, LeaveAlternateScreen));
         let background = self.restore_background(output);
         // Evaluate every cleanup step before returning the first failure.
         keyboard
@@ -332,6 +323,16 @@ impl TerminalModes {
             .and(alternate)
             .and(background)
     }
+}
+
+// Only for idempotent resets: an error leaves completion uncertain, so retain
+// the flag for a later cleanup attempt, including when writing succeeded but flushing failed.
+fn restore_mode(enabled: &AtomicBool, restore: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
+    if enabled.load(Ordering::Relaxed) {
+        restore()?;
+        enabled.store(false, Ordering::Relaxed);
+    }
+    Ok(())
 }
 
 fn enable_optional(
@@ -492,6 +493,44 @@ mod tests {
     ) -> Result<Option<Options>> {
         super::parse_arguments(arguments)
             .map(|options| options.map(|cli| cli.resolve(config::Config::default())))
+    }
+
+    // Records bytes even when flushing fails, making ambiguous command delivery explicit.
+    #[derive(Default)]
+    struct FailOnce {
+        bytes: Vec<u8>,
+        write_remaining: Option<usize>,
+        flush_remaining: Option<usize>,
+    }
+
+    impl io::Write for FailOnce {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let count = match self.write_remaining {
+                Some(0) => {
+                    self.write_remaining = None;
+                    return Err(io::ErrorKind::BrokenPipe.into());
+                }
+                Some(remaining) => {
+                    let count = bytes.len().min(remaining);
+                    self.write_remaining = Some(remaining - count);
+                    count
+                }
+                None => bytes.len(),
+            };
+            self.bytes.extend_from_slice(&bytes[..count]);
+            Ok(count)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if let Some(remaining) = self.flush_remaining.as_mut() {
+                if *remaining == 0 {
+                    self.flush_remaining = None;
+                    return Err(io::ErrorKind::BrokenPipe.into());
+                }
+                *remaining -= 1;
+            }
+            Ok(())
+        }
     }
 
     #[test]
@@ -969,6 +1008,7 @@ mod tests {
                     .unwrap();
                 // Capture cleanup of an initialized screen without changing a real TTY.
                 modes.alternate.store(true, Ordering::Relaxed);
+                modes.cursor.store(true, Ordering::Relaxed);
                 output.clear();
                 let result = if failed {
                     Err("task save failed".into())
@@ -1009,32 +1049,12 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn partial_setup_and_cleanup_failures_do_not_leave_other_modes_enabled() {
-        struct FailOnce {
-            bytes: Vec<u8>,
-            remaining: usize,
-        }
-        impl io::Write for FailOnce {
-            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-                if self.remaining == 0 {
-                    self.remaining = usize::MAX;
-                    return Err(io::ErrorKind::BrokenPipe.into());
-                }
-                let count = bytes.len().min(self.remaining);
-                self.bytes.extend_from_slice(&bytes[..count]);
-                self.remaining -= count;
-                Ok(count)
-            }
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
-
         let mut mouse = String::new();
         EnableMouseCapture.write_ansi(&mut mouse).unwrap();
         let modes = TerminalModes::default();
         let mut output = FailOnce {
-            bytes: Vec::new(),
-            remaining: mouse.len(),
+            write_remaining: Some(mouse.len()),
+            ..FailOnce::default()
         };
         assert_eq!(
             modes.enable_input(&mut output, true).unwrap_err().kind(),
@@ -1049,8 +1069,8 @@ mod tests {
         let modes = TerminalModes::default();
         modes.enable_input(&mut Vec::new(), true).unwrap();
         let mut output = FailOnce {
-            bytes: Vec::new(),
-            remaining: 0,
+            write_remaining: Some(0),
+            ..FailOnce::default()
         };
         assert_eq!(
             modes.restore(&mut output).unwrap_err().kind(),
@@ -1062,6 +1082,90 @@ mod tests {
         let mut repeated = Vec::new();
         modes.restore(&mut repeated).unwrap();
         assert!(repeated.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cleanup_retries_only_safe_resets_after_partial_writes_and_flush_failures() {
+        let mut mouse = String::new();
+        DisableMouseCapture.write_ansi(&mut mouse).unwrap();
+        let commands = [
+            "\x1b[<1u",
+            "\x1b[?2004l",
+            &mouse,
+            "\x1b[?25h",
+            "\x1b[?1049l",
+            "\x1b]111\x1b\\",
+        ];
+        for (failed, command) in commands.iter().enumerate() {
+            let preceding: usize = commands[..failed].iter().map(|command| command.len()).sum();
+            for (partial, flush) in [(0, false), (command.len() / 2, false), (0, true)] {
+                let modes = TerminalModes::default();
+                for enabled in [
+                    &modes.keyboard,
+                    &modes.paste,
+                    &modes.mouse,
+                    &modes.cursor,
+                    &modes.alternate,
+                    &modes.background,
+                ] {
+                    enabled.store(true, Ordering::Relaxed);
+                }
+                let mut output = FailOnce {
+                    write_remaining: (!flush).then_some(preceding + partial),
+                    flush_remaining: flush.then_some(failed),
+                    ..FailOnce::default()
+                };
+                assert_eq!(
+                    modes.restore(&mut output).unwrap_err().kind(),
+                    io::ErrorKind::BrokenPipe
+                );
+                let mut expected = String::new();
+                for (index, command) in commands.iter().enumerate() {
+                    expected.push_str(if index == failed && !flush {
+                        &command[..partial]
+                    } else {
+                        command
+                    });
+                }
+                // Every later cleanup step still runs, including OSC 111.
+                assert_eq!(
+                    output.bytes,
+                    expected.as_bytes(),
+                    "step {failed}, flush {flush}"
+                );
+                output.bytes.clear();
+                modes.restore(&mut output).unwrap();
+                // A failed keyboard pop is deliberately consumed, even after a partial write.
+                let retry = if failed == 0 {
+                    b"".as_slice()
+                } else {
+                    command.as_bytes()
+                };
+                assert_eq!(output.bytes, retry, "step {failed}, flush {flush}");
+                output.bytes.clear();
+                modes.restore(&mut output).unwrap();
+                assert!(output.bytes.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn failed_windows_mouse_cleanup_never_retries_the_raw_console_snapshot() {
+        let modes = TerminalModes::default();
+        modes.mouse.store(true, Ordering::Relaxed);
+        // Crossterm flushes before its Windows API call. Fail there without touching a console.
+        let mut output = FailOnce {
+            flush_remaining: Some(0),
+            ..FailOnce::default()
+        };
+        assert_eq!(
+            modes.restore(&mut output).unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        modes.restore(&mut output).unwrap();
+        assert!(output.bytes.is_empty());
     }
 
     #[test]
