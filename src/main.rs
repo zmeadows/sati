@@ -359,7 +359,8 @@ fn optional_mode(result: io::Result<()>) -> io::Result<bool> {
 
 fn keyboard_support(result: io::Result<bool>) -> io::Result<bool> {
     match result {
-        // Crossterm 0.28 reports its unanswered-query timeout as Other.
+        // Crossterm 0.29's Unix query returns Other + this message, with no typed timeout.
+        // Match both narrowly so genuine I/O errors propagate; revisit on dependency upgrades.
         Err(error)
             if error.kind() == io::ErrorKind::Unsupported
                 || error.kind() == io::ErrorKind::TimedOut
@@ -989,6 +990,25 @@ mod tests {
         ] {
             assert_eq!(optional_mode(Err(kind.into())).unwrap_err().kind(), kind);
             assert_eq!(keyboard_support(Err(kind.into())).unwrap_err().kind(), kind);
+        }
+        for (kind, message) in [
+            (io::ErrorKind::Other, "keyboard query reader failed"),
+            (
+                io::ErrorKind::Other,
+                "The keyboard enhancement status could not be read within a normal duration: reader failed",
+            ),
+            (
+                io::ErrorKind::Other,
+                "The keyboard enhancement status could not be read within a normal duration ",
+            ),
+            (
+                io::ErrorKind::PermissionDenied,
+                "The keyboard enhancement status could not be read within a normal duration",
+            ),
+        ] {
+            let error = keyboard_support(Err(io::Error::new(kind, message))).unwrap_err();
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.to_string(), message);
         }
     }
 
