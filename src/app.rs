@@ -43,6 +43,13 @@ pub(crate) fn task_prefix(text: &str) -> Option<&str> {
         .map(|end| &text[..end])
 }
 
+fn completion_boundary(tasks: &[Task]) -> usize {
+    tasks
+        .iter()
+        .position(|task| task.completed)
+        .unwrap_or(tasks.len())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AddPlacement {
     End,
@@ -173,15 +180,29 @@ impl App {
             AddPlacement::Above => self.list.selected().unwrap_or(self.tasks.len()),
         };
         if self.completed_at_bottom {
-            index.min(
-                self.tasks
-                    .iter()
-                    .position(|task| task.completed)
-                    .unwrap_or(self.tasks.len()),
-            )
+            index.min(completion_boundary(&self.tasks))
         } else {
             index
         }
+    }
+
+    fn insert_task(
+        &mut self,
+        text: String,
+        placement: AddPlacement,
+        storage: &Storage,
+    ) -> Result<()> {
+        let index = self.insertion_index(placement);
+        let mut tasks = self.tasks.clone();
+        tasks.insert(
+            index,
+            Task {
+                text,
+                completed: false,
+                carried: false,
+            },
+        );
+        self.replace(tasks, Some(index), storage)
     }
 
     fn page(&mut self, forward: bool) {
@@ -385,10 +406,7 @@ impl App {
         tasks[index].carried = false;
         let selected = if self.completed_at_bottom {
             let task = tasks.remove(index);
-            let boundary = tasks
-                .iter()
-                .position(|task| task.completed)
-                .unwrap_or(tasks.len());
+            let boundary = completion_boundary(&tasks);
             tasks.insert(boundary, task);
             boundary
         } else {
@@ -517,17 +535,7 @@ impl App {
         let Some(text) = self.task_register.clone() else {
             return Ok(());
         };
-        let index = self.insertion_index(placement);
-        let mut tasks = self.tasks.clone();
-        tasks.insert(
-            index,
-            Task {
-                text,
-                completed: false,
-                carried: false,
-            },
-        );
-        self.replace(tasks, Some(index), storage)
+        self.insert_task(text, placement, storage)
     }
 
     pub fn copy_markdown(&mut self, output: &mut impl std::io::Write) {
@@ -782,23 +790,14 @@ impl App {
             KeyCode::Enter => {
                 let text = input.text().trim().to_owned();
                 if !text.is_empty() {
-                    let mut tasks = self.tasks.clone();
                     if let Some(index) = edited_task {
-                        if tasks[index].text != text {
+                        if self.tasks[index].text != text {
+                            let mut tasks = self.tasks.clone();
                             tasks[index].text = text;
                             self.replace(tasks, Some(index), storage)?;
                         }
                     } else {
-                        let index = self.insertion_index(placement);
-                        tasks.insert(
-                            index,
-                            Task {
-                                carried: false,
-                                text,
-                                completed: false,
-                            },
-                        );
-                        self.replace(tasks, Some(index), storage)?;
+                        self.insert_task(text, placement, storage)?;
                     }
                 }
                 self.mode = Mode::Normal;
