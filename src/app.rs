@@ -1013,6 +1013,65 @@ mod tests {
     use super::*;
     use crate::storage::tests::Fixture;
 
+    use unicode_segmentation::UnicodeSegmentation;
+
+    fn app_with_tasks(count: usize) -> App {
+        App::new(
+            (0..count)
+                .map(|index| Task {
+                    carried: false,
+                    text: format!("task {index}"),
+                    completed: false,
+                })
+                .collect(),
+        )
+    }
+
+    // KeyCode means an unmodified press; explicit events retain modifiers and kind.
+    #[track_caller]
+    fn press(app: &mut App, fixture: &Fixture, key: impl Into<KeyEvent>) -> bool {
+        app.key(key.into(), &fixture.storage).unwrap()
+    }
+
+    fn repeat(app: &mut App, fixture: &Fixture, code: KeyCode, modifiers: KeyModifiers) {
+        let key = KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Repeat);
+        assert!(!press(app, fixture, key));
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct TaskState {
+        tasks: Vec<Task>,
+        selected: Option<usize>,
+        history: VecDeque<UndoState>,
+        redo_history: VecDeque<UndoState>,
+    }
+
+    fn task_state(app: &App) -> TaskState {
+        TaskState {
+            tasks: app.tasks.clone(),
+            selected: app.list.selected(),
+            history: app.history.clone(),
+            redo_history: app.redo_history.clone(),
+        }
+    }
+
+    #[track_caller]
+    fn block_saves(fixture: &Fixture) {
+        let data = fixture.directory.join("data");
+        std::fs::rename(&data, fixture.directory.join("backup")).unwrap();
+        std::fs::write(data, "blocked").unwrap();
+    }
+
+    #[track_caller]
+    fn restore_saves(fixture: &Fixture) {
+        std::fs::remove_file(fixture.directory.join("data")).unwrap();
+        std::fs::rename(
+            fixture.directory.join("backup"),
+            fixture.directory.join("data"),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn modifier_early_returns_preserve_search_refresh_and_notification_dismissal() {
         let fixture = Fixture::new();
@@ -1036,11 +1095,11 @@ mod tests {
                 };
                 app.list.select(Some(2));
                 app.notification = Some(Notification::new("Copied task"));
-                app.key(
+                press(
+                    &mut app,
+                    &fixture,
                     KeyEvent::new_with_kind(KeyCode::Char('z'), modifiers, kind),
-                    &fixture.storage,
-                )
-                .unwrap();
+                );
                 let accepted = kind != KeyEventKind::Release;
                 assert_eq!(app.notification.is_none(), accepted);
                 assert_eq!(
@@ -1137,14 +1196,14 @@ mod tests {
             Some("Copy sent to terminal")
         );
         for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
-            app.key(
+            press(
+                &mut app,
+                &fixture,
                 KeyEvent {
                     kind,
                     ..KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)
                 },
-                &fixture.storage,
-            )
-            .unwrap();
+            );
             assert_eq!(
                 app.notification.as_ref().map(Notification::message),
                 Some("Copy sent to terminal")
@@ -1238,7 +1297,7 @@ mod tests {
                         app.list.select(Some(2));
                         fixture.storage.save(&app.tasks).unwrap();
                         let before = app.tasks.clone();
-                        app.key(copy, &fixture.storage).unwrap();
+                        press(&mut app, &fixture, copy);
                         assert_eq!(
                             app.notification.as_ref().map(Notification::message),
                             Some("Copied task")
@@ -1247,7 +1306,7 @@ mod tests {
                         assert_eq!(fixture.storage.load().unwrap(), before);
                         assert!(!app.can_undo() && !app.can_redo());
                         let index = app.insertion_index(placement);
-                        app.key(paste, &fixture.storage).unwrap();
+                        press(&mut app, &fixture, paste);
                         assert!(app.notification.is_none());
                         assert_eq!(
                             app.tasks[index],
@@ -1263,15 +1322,15 @@ mod tests {
                         let pasted = app.tasks.clone();
                         app.undo(&fixture.storage).unwrap();
                         assert_eq!(app.tasks, before);
-                        app.key(
+                        press(
+                            &mut app,
+                            &fixture,
                             KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
-                            &fixture.storage,
-                        )
-                        .unwrap();
+                        );
                         assert_eq!(app.tasks, pasted);
                         assert_eq!(app.task_register.as_deref(), Some(text));
                         app.undo(&fixture.storage).unwrap();
-                        app.key(paste, &fixture.storage).unwrap();
+                        press(&mut app, &fixture, paste);
                         assert!(!app.can_redo());
                     }
                 }
@@ -1307,15 +1366,8 @@ mod tests {
         }
         assert_eq!(app.tasks.len(), 3);
         app.undo(&fixture.storage).unwrap();
-        let before = (
-            app.tasks.clone(),
-            app.list.selected(),
-            app.history.clone(),
-            app.redo_history.clone(),
-        );
-        let data = fixture.directory.join("data");
-        std::fs::rename(&data, fixture.directory.join("backup")).unwrap();
-        std::fs::write(data, "blocked").unwrap();
+        let before = task_state(&app);
+        block_saves(&fixture);
         assert!(
             app.key(
                 KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
@@ -1323,15 +1375,7 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(
-            (
-                app.tasks.clone(),
-                app.list.selected(),
-                app.history.clone(),
-                app.redo_history.clone()
-            ),
-            before
-        );
+        assert_eq!(task_state(&app), before);
         assert_eq!(app.task_register.as_deref(), Some("task 0"));
     }
 
@@ -1343,12 +1387,7 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Char(' '));
         press(&mut app, &fixture, KeyCode::Char('m'));
         press(&mut app, &fixture, KeyCode::Char('u'));
-        let before = (
-            app.tasks.clone(),
-            app.list.selected(),
-            app.history.clone(),
-            app.redo_history.clone(),
-        );
+        let before = task_state(&app);
         let saved = std::fs::read(fixture.task_path()).unwrap();
         app.theme = BuiltinTheme::TokyoNightStorm;
         app.style_overrides = toml::from_str::<crate::config::Config>(
@@ -1371,7 +1410,7 @@ mod tests {
                 BuiltinTheme::CatppuccinMocha,
             ),
         ] {
-            app.key(key, &fixture.storage).unwrap();
+            press(&mut app, &fixture, key);
             assert_eq!(app.theme, expected);
             assert_eq!(
                 app.styles,
@@ -1389,25 +1428,17 @@ mod tests {
                 format!("Theme: {}", expected.display_name())
             );
         }
-        assert_eq!(
-            (
-                app.tasks.clone(),
-                app.list.selected(),
-                app.history.clone(),
-                app.redo_history.clone()
-            ),
-            before
-        );
+        assert_eq!(task_state(&app), before);
         assert_eq!(std::fs::read(fixture.task_path()).unwrap(), saved);
         for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
-            app.key(
+            press(
+                &mut app,
+                &fixture,
                 KeyEvent {
                     kind,
                     ..KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)
                 },
-                &fixture.storage,
-            )
-            .unwrap();
+            );
             assert_eq!(app.theme, BuiltinTheme::CatppuccinMocha);
         }
         app.tasks.clear();
@@ -1563,27 +1594,15 @@ mod tests {
             app.toggle(0, &fixture.storage).unwrap();
             app.toggle(1, &fixture.storage).unwrap();
             app.undo(&fixture.storage).unwrap();
-            let state = |app: &App| {
-                (
-                    app.tasks.clone(),
-                    app.list.selected(),
-                    app.history.clone(),
-                    app.redo_history.clone(),
-                )
-            };
-            let before = state(&app);
-            let data = fixture.directory.join("data");
-            let backup = fixture.directory.join("backup");
-            std::fs::rename(&data, &backup).unwrap();
-            std::fs::write(&data, "blocked").unwrap();
+            let before = task_state(&app);
+            block_saves(&fixture);
             let result = app.key(
                 KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
                 &fixture.storage,
             );
             assert_eq!(result.is_ok(), sorted);
-            assert_eq!(state(&app), before);
-            std::fs::remove_file(&data).unwrap();
-            std::fs::rename(backup, data).unwrap();
+            assert_eq!(task_state(&app), before);
+            restore_saves(&fixture);
             assert_eq!(fixture.storage.load().unwrap(), app.tasks);
             if !sorted {
                 press(&mut app, &fixture, KeyCode::Char('s'));
@@ -1660,11 +1679,11 @@ mod tests {
             app.mode = mode;
             let original = app.tasks.clone();
             for kind in [KeyEventKind::Release, KeyEventKind::Repeat] {
-                app.key(
+                press(
+                    &mut app,
+                    &fixture,
                     KeyEvent::new_with_kind(KeyCode::Char('s'), KeyModifiers::NONE, kind),
-                    &fixture.storage,
-                )
-                .unwrap();
+                );
                 assert_eq!(app.tasks, original);
             }
             if app.mode != Mode::Normal {
@@ -1716,22 +1735,20 @@ mod tests {
                         let mut actual = setup();
                         let mut expected = setup();
                         let original = actual.tasks.clone();
-                        actual
-                            .key(
-                                KeyEvent::new_with_kind(
-                                    KeyCode::Char(alias),
-                                    KeyModifiers::CONTROL,
-                                    kind,
-                                ),
-                                &fixture.storage,
-                            )
-                            .unwrap();
-                        expected
-                            .key(
-                                KeyEvent::new_with_kind(arrow, KeyModifiers::NONE, kind),
-                                &fixture.storage,
-                            )
-                            .unwrap();
+                        press(
+                            &mut actual,
+                            &fixture,
+                            KeyEvent::new_with_kind(
+                                KeyCode::Char(alias),
+                                KeyModifiers::CONTROL,
+                                kind,
+                            ),
+                        );
+                        press(
+                            &mut expected,
+                            &fixture,
+                            KeyEvent::new_with_kind(arrow, KeyModifiers::NONE, kind),
+                        );
                         assert_eq!(actual.list.selected(), expected.list.selected());
                         assert_eq!(actual.mode, expected.mode);
                         let mut terminal =
@@ -1771,22 +1788,21 @@ mod tests {
             app.mode = mode;
             let before = format!("{:?}", app.mode);
             for code in ['p', 'n'] {
-                app.key(
+                press(
+                    &mut app,
+                    &fixture,
                     KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL),
-                    &fixture.storage,
-                )
-                .unwrap();
+                );
                 assert_eq!(format!("{:?}", app.mode), before);
             }
         }
         let mut empty = App::new(Vec::new());
         for code in ['p', 'n'] {
-            empty
-                .key(
-                    KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL),
-                    &fixture.storage,
-                )
-                .unwrap();
+            press(
+                &mut empty,
+                &fixture,
+                KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL),
+            );
             assert_eq!(empty.list.selected(), None);
         }
         assert!(!fixture.task_path().exists());
@@ -1852,11 +1868,11 @@ mod tests {
                                     original: Some(0),
                                 },
                             };
-                            app.key(
+                            press(
+                                &mut app,
+                                &fixture,
                                 KeyEvent::new_with_kind(KeyCode::Char(command), modifiers, kind),
-                                &fixture.storage,
-                            )
-                            .unwrap();
+                            );
                             let actual = match &app.mode {
                                 Mode::Adding(input, _)
                                 | Mode::Editing { input, .. }
@@ -1888,17 +1904,17 @@ mod tests {
         let mut app = app_with_tasks(1);
         press(&mut app, &fixture, KeyCode::Char('d'));
         let tasks = app.tasks.clone();
-        app.key(
+        press(
+            &mut app,
+            &fixture,
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
-            &fixture.storage,
-        )
-        .unwrap();
+        );
         assert_eq!(app.tasks, tasks);
-        app.key(
+        press(
+            &mut app,
+            &fixture,
             KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
-            &fixture.storage,
-        )
-        .unwrap();
+        );
         assert!(matches!(app.mode, Mode::Searching { .. }));
     }
 
@@ -1937,18 +1953,18 @@ mod tests {
             let bytes = std::fs::read(fixture.task_path()).unwrap();
             let mode_before = format!("{:?}", app.mode);
             for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
-                app.key(
+                press(
+                    &mut app,
+                    &fixture,
                     KeyEvent::new_with_kind(KeyCode::Char('g'), KeyModifiers::CONTROL, kind),
-                    &fixture.storage,
-                )
-                .unwrap();
+                );
                 assert_eq!(format!("{:?}", app.mode), mode_before);
             }
-            app.key(
+            press(
+                &mut app,
+                &fixture,
                 KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
-                &fixture.storage,
-            )
-            .unwrap();
+            );
             assert_eq!(app.mode, Mode::Normal);
             assert_eq!(app.list.selected(), Some(if search { 1 } else { 0 }));
             assert_eq!(
@@ -2051,30 +2067,29 @@ mod tests {
                     ),
                 ] {
                     app.list.select(selected);
-                    app.key(
+                    press(
+                        &mut app,
+                        &fixture,
                         KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Release),
-                        &fixture.storage,
-                    )
-                    .unwrap();
+                    );
                     assert_eq!(app.mode, Mode::Normal);
-                    app.key(
+                    press(
+                        &mut app,
+                        &fixture,
                         KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Repeat),
-                        &fixture.storage,
-                    )
-                    .unwrap();
+                    );
                     assert!(matches!(app.mode, Mode::SearchResults { .. }));
                     assert_eq!(app.list.selected(), Some(first));
-                    app.key(
+                    press(
+                        &mut app,
+                        &fixture,
                         KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Repeat),
-                        &fixture.storage,
-                    )
-                    .unwrap();
+                    );
                     assert_eq!(app.list.selected(), Some(next));
                     press(&mut app, &fixture, KeyCode::Esc);
                     assert_eq!(app.list.selected(), selected);
                     assert_eq!(app.mode, Mode::Normal);
-                    app.key(KeyEvent::new(code, modifiers), &fixture.storage)
-                        .unwrap();
+                    press(&mut app, &fixture, KeyEvent::new(code, modifiers));
                     press(&mut app, &fixture, KeyCode::Enter);
                     assert_eq!(app.list.selected(), Some(first));
                     assert_eq!(app.search_query(), None);
@@ -2106,29 +2121,21 @@ mod tests {
             input: "changed".into(),
         };
         press(&mut app, &fixture, KeyCode::Enter);
-        let snapshot = |app: &App| {
-            (
-                app.tasks.clone(),
-                app.list.selected(),
-                app.history.clone(),
-                app.redo_history.clone(),
-            )
-        };
-        let changed = snapshot(&app);
+        let changed = task_state(&app);
         app.reveal_selection = false;
         for key in ['n', 'N'] {
             press(&mut app, &fixture, KeyCode::Char(key));
-            assert_eq!(snapshot(&app), changed);
+            assert_eq!(task_state(&app), changed);
             assert_eq!(app.mode, Mode::Normal);
             assert!(!app.reveal_selection);
         }
         press(&mut app, &fixture, KeyCode::Char('u'));
         press(&mut app, &fixture, KeyCode::Char('K'));
-        let reordered = snapshot(&app);
+        let reordered = task_state(&app);
         press(&mut app, &fixture, KeyCode::Char('n'));
         assert_eq!(app.list.selected(), Some(0));
         press(&mut app, &fixture, KeyCode::Enter);
-        assert_eq!(snapshot(&app), reordered);
+        assert_eq!(task_state(&app), reordered);
         assert_eq!(fixture.storage.load().unwrap(), app.tasks);
         assert_eq!(app.last_search_query.as_deref(), Some("hit"));
         app.tasks.clear();
@@ -2179,20 +2186,20 @@ mod tests {
                     for kind in [KeyEventKind::Press, KeyEventKind::Repeat] {
                         app.list.select(selected);
                         app.reveal_selection = false;
-                        app.key(
+                        press(
+                            &mut app,
+                            &fixture,
                             KeyEvent::new_with_kind(code, modifiers, kind),
-                            &fixture.storage,
-                        )
-                        .unwrap();
+                        );
                         assert_eq!(app.list.selected(), Some(expected));
                         assert!(app.reveal_selection);
                     }
                     app.list.select(selected);
-                    app.key(
+                    press(
+                        &mut app,
+                        &fixture,
                         KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Release),
-                        &fixture.storage,
-                    )
-                    .unwrap();
+                    );
                     assert_eq!(app.list.selected(), selected);
                 }
             }
@@ -2303,20 +2310,12 @@ mod tests {
             press(&mut app, &fixture, KeyCode::Char('m'));
         }
         app.undo(&fixture.storage).unwrap();
-        let snapshot = |app: &App| {
-            (
-                app.tasks.clone(),
-                app.list.selected(),
-                app.history.clone(),
-                app.redo_history.clone(),
-            )
-        };
-        let carried = snapshot(&app);
+        let carried = task_state(&app);
         let bytes = std::fs::read(fixture.task_path()).unwrap();
         for code in [KeyCode::Char('D'), KeyCode::Char('x')] {
             press(&mut app, &fixture, code);
             assert_eq!(app.mode, Mode::Normal);
-            assert_eq!(snapshot(&app), carried);
+            assert_eq!(task_state(&app), carried);
             assert_eq!(std::fs::read(fixture.task_path()).unwrap(), bytes);
         }
         press(&mut app, &fixture, KeyCode::Enter);
@@ -2324,10 +2323,10 @@ mod tests {
         app.paste("temporary");
         press(&mut app, &fixture, KeyCode::Enter);
         app.undo(&fixture.storage).unwrap();
-        let completed = snapshot(&app);
+        let completed = task_state(&app);
         assert!(app.can_redo());
         press(&mut app, &fixture, KeyCode::Char('m'));
-        assert_eq!(snapshot(&app), completed);
+        assert_eq!(task_state(&app), completed);
         let mut mixed = app_with_tasks(2);
         mixed.tasks[0].carried = true;
         mixed.tasks[1].completed = true;
@@ -2452,21 +2451,10 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Enter);
         assert!(!app.tasks[2].carried);
         app.undo(&fixture.storage).unwrap();
-        let snapshot = |app: &App| {
-            (
-                app.tasks.clone(),
-                app.list.selected(),
-                app.history.clone(),
-                app.redo_history.clone(),
-            )
-        };
-        let original = snapshot(&app);
-        let data = fixture.directory.join("data");
-        let backup = fixture.directory.join("backup");
-        std::fs::rename(&data, &backup).unwrap();
-        std::fs::write(&data, "blocked").unwrap();
+        let original = task_state(&app);
+        block_saves(&fixture);
         assert!(app.toggle_carryover(&fixture.storage).is_err());
-        assert_eq!(snapshot(&app), original);
+        assert_eq!(task_state(&app), original);
         press(&mut app, &fixture, KeyCode::Char('D'));
         assert!(
             app.key(
@@ -2475,22 +2463,21 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(snapshot(&app), original);
-        std::fs::remove_file(&data).unwrap();
-        std::fs::rename(backup, data).unwrap();
+        assert_eq!(task_state(&app), original);
+        restore_saves(&fixture);
         assert_eq!(fixture.storage.load().unwrap(), app.tasks);
         app.mode = Mode::Normal;
         app.list.select(None);
-        let before = snapshot(&app);
+        let before = task_state(&app);
         press(&mut app, &fixture, KeyCode::Char('m'));
-        assert_eq!(snapshot(&app), before);
+        assert_eq!(task_state(&app), before);
         for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
-            app.key(
+            press(
+                &mut app,
+                &fixture,
                 KeyEvent::new_with_kind(KeyCode::Char('m'), KeyModifiers::NONE, kind),
-                &fixture.storage,
-            )
-            .unwrap();
-            assert_eq!(snapshot(&app), before);
+            );
+            assert_eq!(task_state(&app), before);
         }
         for mode in [
             Mode::Adding("".into(), AddPlacement::End),
@@ -2511,8 +2498,8 @@ mod tests {
             app.mode = mode;
             press(&mut app, &fixture, KeyCode::Char('m'));
             assert_eq!(app.tasks, fixture.storage.load().unwrap());
-            assert_eq!(app.history.len(), original.2.len());
-            assert_eq!(app.redo_history.len(), original.3.len());
+            assert_eq!(app.history.len(), original.history.len());
+            assert_eq!(app.redo_history.len(), original.redo_history.len());
         }
     }
 
@@ -2551,11 +2538,11 @@ mod tests {
                         app.redo_history.clone(),
                     );
                     for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
-                        app.key(
+                        press(
+                            &mut app,
+                            &fixture,
                             KeyEvent::new_with_kind(event.code, event.modifiers, kind),
-                            &fixture.storage,
-                        )
-                        .unwrap();
+                        );
                         assert_eq!(app.mode, Mode::Normal);
                         assert_eq!(
                             (
@@ -2566,17 +2553,9 @@ mod tests {
                             before
                         );
                     }
-                    assert!(!app.key(event, &fixture.storage).unwrap());
+                    assert!(!press(&mut app, &fixture, event));
                     let mode = format!("{:?}", app.mode);
-                    outcomes.push((
-                        (
-                            app.tasks.clone(),
-                            app.list.selected(),
-                            app.history.clone(),
-                            app.redo_history.clone(),
-                        ),
-                        mode,
-                    ));
+                    outcomes.push((task_state(&app), mode));
                 }
                 assert_eq!(outcomes[0], outcomes[1]);
                 if count == 0 {
@@ -2623,18 +2602,14 @@ mod tests {
             );
             let original_mode = format!("{:?}", app.mode);
             for character in ['z', 'y'] {
-                app.key(
+                press(
+                    &mut app,
+                    &fixture,
                     KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL),
-                    &fixture.storage,
-                )
-                .unwrap();
+                );
                 assert_eq!(format!("{:?}", app.mode), original_mode);
             }
-            app.key(
-                KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
-                &fixture.storage,
-            )
-            .unwrap();
+            press(&mut app, &fixture, KeyCode::Delete);
             if let Mode::Adding(input, _)
             | Mode::Editing { input, .. }
             | Mode::Searching { input, .. } = &app.mode
@@ -2661,58 +2636,16 @@ mod tests {
         app.toggle(0, &fixture.storage).unwrap();
         app.toggle(1, &fixture.storage).unwrap();
         app.undo(&fixture.storage).unwrap();
-        let before = (
-            app.tasks.clone(),
-            app.list.selected(),
-            app.history.clone(),
-            app.redo_history.clone(),
-        );
-        let data = fixture.directory.join("data");
-        std::fs::rename(&data, fixture.directory.join("backup")).unwrap();
-        std::fs::write(data, "blocked").unwrap();
+        let before = task_state(&app);
+        block_saves(&fixture);
         for event in [
             KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
             KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
             KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
         ] {
             assert!(app.key(event, &fixture.storage).is_err());
-            assert_eq!(
-                (
-                    app.tasks.clone(),
-                    app.list.selected(),
-                    app.history.clone(),
-                    app.redo_history.clone()
-                ),
-                before
-            );
+            assert_eq!(task_state(&app), before);
         }
-    }
-
-    use unicode_segmentation::UnicodeSegmentation;
-
-    fn app_with_tasks(count: usize) -> App {
-        App::new(
-            (0..count)
-                .map(|index| Task {
-                    carried: false,
-                    text: format!("task {index}"),
-                    completed: false,
-                })
-                .collect(),
-        )
-    }
-
-    fn press(app: &mut App, fixture: &Fixture, code: KeyCode) -> bool {
-        app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
-            .unwrap()
-    }
-
-    fn repeat(app: &mut App, fixture: &Fixture, code: KeyCode, modifiers: KeyModifiers) {
-        let key = KeyEvent {
-            kind: KeyEventKind::Repeat,
-            ..KeyEvent::new(code, modifiers)
-        };
-        assert!(!app.key(key, &fixture.storage).unwrap());
     }
 
     #[test]
@@ -2794,11 +2727,11 @@ mod tests {
                     } else {
                         Mode::Adding(input, AddPlacement::End)
                     };
-                    app.key(
+                    press(
+                        &mut app,
+                        &fixture,
                         KeyEvent::new_with_kind(code, modifiers, kind),
-                        &fixture.storage,
-                    )
-                    .unwrap();
+                    );
                     let input = match &app.mode {
                         Mode::Adding(input, _) | Mode::Editing { input, .. } => input,
                         _ => unreachable!(),
@@ -2830,15 +2763,14 @@ mod tests {
                 (KeyCode::Left, KeyModifiers::ALT),
                 (KeyCode::Char('Q'), KeyModifiers::SUPER),
             ] {
-                app.key(KeyEvent::new(code, modifiers), &fixture.storage)
-                    .unwrap();
+                press(&mut app, &fixture, KeyEvent::new(code, modifiers));
                 assert_eq!(format!("{:?}", app.mode), original_mode);
             }
-            app.key(
+            press(
+                &mut app,
+                &fixture,
                 KeyEvent::new_with_kind(KeyCode::Home, KeyModifiers::NONE, KeyEventKind::Release),
-                &fixture.storage,
-            )
-            .unwrap();
+            );
             assert_eq!(format!("{:?}", app.mode), original_mode);
         }
         for mode in [Mode::Normal, Mode::ConfirmClear] {
@@ -2852,8 +2784,11 @@ mod tests {
                 KeyCode::Right,
                 KeyCode::Backspace,
             ] {
-                app.key(KeyEvent::new(code, KeyModifiers::CONTROL), &fixture.storage)
-                    .unwrap();
+                press(
+                    &mut app,
+                    &fixture,
+                    KeyEvent::new(code, KeyModifiers::CONTROL),
+                );
                 assert_eq!(format!("{:?}", app.mode), original_mode);
                 assert_eq!(app.tasks.len(), 1);
                 assert!(!app.can_undo());
@@ -2983,14 +2918,14 @@ mod tests {
         repeat(&mut app, &fixture, KeyCode::Right, KeyModifiers::NONE);
         app.paste("X\r\n\tY");
         assert_eq!(app.search_query(), Some("e\u{301}X  Yta"));
-        app.key(
+        press(
+            &mut app,
+            &fixture,
             KeyEvent::new(
                 KeyCode::Char('€'),
                 KeyModifiers::CONTROL | KeyModifiers::ALT,
             ),
-            &fixture.storage,
-        )
-        .unwrap();
+        );
         assert_eq!(
             app.search_query(),
             Some(if cfg!(windows) {
@@ -3052,11 +2987,11 @@ mod tests {
                 press(&mut app, &fixture, code);
             }
             assert_eq!(app.list.selected(), selection);
-            app.key(
+            press(
+                &mut app,
+                &fixture,
                 KeyEvent::new_with_kind(KeyCode::Esc, KeyModifiers::NONE, KeyEventKind::Release),
-                &fixture.storage,
-            )
-            .unwrap();
+            );
             assert!(app.search_query().is_some());
             press(&mut app, &fixture, KeyCode::Esc);
             assert_eq!(app.tasks, original);
@@ -3110,17 +3045,13 @@ mod tests {
         app.toggle(0, &fixture.storage).unwrap();
         let before = app.tasks.clone();
         let selected = app.list.selected();
-        let data = fixture.directory.join("data");
-        let backup = fixture.directory.join("backup");
-        std::fs::rename(&data, &backup).unwrap();
-        std::fs::write(&data, "blocked directory").unwrap();
+        block_saves(&fixture);
         assert!(app.toggle(0, &fixture.storage).is_err());
         assert!(app.undo(&fixture.storage).is_err());
         assert_eq!(app.tasks, before);
         assert_eq!(app.list.selected(), selected);
         assert_eq!(app.history.len(), 1);
-        std::fs::remove_file(&data).unwrap();
-        std::fs::rename(backup, data).unwrap();
+        restore_saves(&fixture);
         app.undo(&fixture.storage).unwrap();
         assert_eq!(app.tasks, original);
     }
@@ -3201,13 +3132,11 @@ mod tests {
                         } else {
                             Mode::Adding(input, AddPlacement::End)
                         };
-                        assert!(
-                            !app.key(
-                                KeyEvent::new_with_kind(KeyCode::Char(character), modifiers, kind),
-                                &fixture.storage,
-                            )
-                            .unwrap()
-                        );
+                        assert!(!press(
+                            &mut app,
+                            &fixture,
+                            KeyEvent::new_with_kind(KeyCode::Char(character), modifiers, kind)
+                        ));
                         let actual = match &app.mode {
                             Mode::Adding(input, _) | Mode::Editing { input, .. } => input,
                             _ => panic!("AltGr must not change mode"),
@@ -3224,13 +3153,11 @@ mod tests {
             app.mode = mode;
             let original = format!("{:?}", app.mode);
             for character in ['a', 'e', 'd', 'D', 'u', 'q', ' '] {
-                assert!(
-                    !app.key(
-                        KeyEvent::new(KeyCode::Char(character), ctrl_alt),
-                        &fixture.storage
-                    )
-                    .unwrap()
-                );
+                assert!(!press(
+                    &mut app,
+                    &fixture,
+                    KeyEvent::new(KeyCode::Char(character), ctrl_alt)
+                ));
                 assert_eq!(format!("{:?}", app.mode), original);
                 assert_eq!(app.tasks.len(), 1);
                 assert!(!app.can_undo());
@@ -3476,8 +3403,7 @@ mod tests {
         assert_eq!(app.tasks, original);
         assert_eq!(app.list.selected(), Some(1));
         for code in [KeyCode::Char('G'), KeyCode::Char('g')] {
-            app.key(KeyEvent::new(code, KeyModifiers::SHIFT), &fixture.storage)
-                .unwrap();
+            press(&mut app, &fixture, KeyEvent::new(code, KeyModifiers::SHIFT));
             assert_eq!(app.list.selected(), Some(2));
         }
         app.list.select(Some(1));
@@ -3748,11 +3674,11 @@ mod tests {
             assert!(app.history.is_empty());
             press(&mut app, &fixture, Char('u'));
             assert_eq!(app.tasks, original);
-            app.key(
+            press(
+                &mut app,
+                &fixture,
                 KeyEvent::new(Char('r'), KeyModifiers::CONTROL),
-                &fixture.storage,
-            )
-            .unwrap();
+            );
             assert_eq!(app.tasks, modified);
             assert_eq!(app.list.selected(), selected_before_undo);
             assert_eq!(fixture.storage.load().unwrap(), modified);
@@ -3786,11 +3712,11 @@ mod tests {
         assert_eq!(app.tasks.len(), 2);
         assert_eq!(app.redo_history.len(), HISTORY_LIMIT);
         for remaining in 3..=258 {
-            app.key(
+            press(
+                &mut app,
+                &fixture,
                 KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
-                &fixture.storage,
-            )
-            .unwrap();
+            );
             assert_eq!(app.tasks.len(), remaining);
             assert_eq!(app.list.selected(), Some(remaining - 1));
             assert_eq!(fixture.storage.load().unwrap(), app.tasks);
@@ -3811,14 +3737,8 @@ mod tests {
         }
         app.undo(&fixture.storage).unwrap();
         let original = app.tasks.clone();
-        let snapshots = |stack: &VecDeque<UndoState>| {
-            stack
-                .iter()
-                .map(|s| (s.tasks.clone(), s.selected))
-                .collect::<Vec<_>>()
-        };
-        let undo = snapshots(&app.history);
-        let redo = snapshots(&app.redo_history);
+        let undo = app.history.clone();
+        let redo = app.redo_history.clone();
         for code in [
             KeyCode::Char('j'),
             KeyCode::Char('k'),
@@ -3839,12 +3759,9 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Enter);
         press(&mut app, &fixture, KeyCode::Char('n'));
         press(&mut app, &fixture, KeyCode::Esc);
-        assert_eq!(snapshots(&app.history), undo);
-        assert_eq!(snapshots(&app.redo_history), redo);
-        let data = fixture.directory.join("data");
-        let backup = fixture.directory.join("backup");
-        std::fs::rename(&data, &backup).unwrap();
-        std::fs::write(&data, "blocked").unwrap();
+        assert_eq!(app.history, undo);
+        assert_eq!(app.redo_history, redo);
+        block_saves(&fixture);
         for operation in 0..3 {
             let result = match operation {
                 0 => app.toggle(0, &fixture.storage),
@@ -3854,11 +3771,10 @@ mod tests {
             assert!(result.is_err());
             assert_eq!(app.tasks, original);
             assert_eq!(app.list.selected(), Some(0));
-            assert_eq!(snapshots(&app.history), undo);
-            assert_eq!(snapshots(&app.redo_history), redo);
+            assert_eq!(app.history, undo);
+            assert_eq!(app.redo_history, redo);
         }
-        std::fs::remove_file(&data).unwrap();
-        std::fs::rename(backup, data).unwrap();
+        restore_saves(&fixture);
         app.redo(&fixture.storage).unwrap();
         assert!(app.tasks[0].completed);
         app.undo(&fixture.storage).unwrap();
@@ -3906,22 +3822,22 @@ mod tests {
                 if app.mode == Mode::Normal && kind == KeyEventKind::Press {
                     continue;
                 }
-                app.key(
+                press(
+                    &mut app,
+                    &fixture,
                     KeyEvent::new_with_kind(KeyCode::Char('r'), KeyModifiers::CONTROL, kind),
-                    &fixture.storage,
-                )
-                .unwrap();
+                );
                 assert_eq!(app.tasks, original);
                 assert_eq!(format!("{:?}", app.mode), before);
                 assert_eq!(app.redo_history.len(), 1);
             }
         }
         app.mode = Mode::Normal;
-        app.key(
+        press(
+            &mut app,
+            &fixture,
             KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
-            &fixture.storage,
-        )
-        .unwrap();
+        );
         assert!(app.tasks[0].completed);
         let restarted = App::new(fixture.storage.load().unwrap());
         assert!(!restarted.can_undo() && !restarted.can_redo());
@@ -4068,15 +3984,8 @@ mod tests {
         let intermediate = app.tasks.clone();
         press(&mut app, &fixture, KeyCode::Char('J'));
         let modified = app.tasks.clone();
-        let history: Vec<_> = app
-            .history
-            .iter()
-            .map(|state| (state.tasks.clone(), state.selected))
-            .collect();
-        let data = fixture.directory.join("data");
-        let backup = fixture.directory.join("backup");
-        std::fs::rename(&data, &backup).unwrap();
-        std::fs::write(&data, "blocking file").unwrap();
+        let history = app.history.clone();
+        block_saves(&fixture);
         for code in [KeyCode::Char('d'), KeyCode::Char('x'), KeyCode::Char('u')] {
             assert!(
                 app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
@@ -4084,16 +3993,9 @@ mod tests {
             );
             assert_eq!(app.tasks, modified);
             assert_eq!(app.list.selected(), Some(1));
-            assert_eq!(
-                app.history
-                    .iter()
-                    .map(|state| (state.tasks.clone(), state.selected))
-                    .collect::<Vec<_>>(),
-                history
-            );
+            assert_eq!(app.history, history);
         }
-        std::fs::remove_file(data.clone()).unwrap();
-        std::fs::rename(backup, data).unwrap();
+        restore_saves(&fixture);
         press(&mut app, &fixture, KeyCode::Char('u'));
         assert_eq!(app.tasks, intermediate);
         assert_eq!(app.history.len(), 1);
@@ -4204,8 +4106,7 @@ mod tests {
             app.tasks[1].completed = true;
             app.list.select(Some(1));
             let original = app.tasks.clone();
-            app.key(KeyEvent::new(down, modifiers), &fixture.storage)
-                .unwrap();
+            press(&mut app, &fixture, KeyEvent::new(down, modifiers));
             assert_eq!(app.list.selected(), Some(2));
             assert_eq!(
                 app.tasks,
@@ -4216,8 +4117,7 @@ mod tests {
                 ]
             );
             assert_eq!(fixture.storage.load().unwrap(), app.tasks);
-            app.key(KeyEvent::new(up, modifiers), &fixture.storage)
-                .unwrap();
+            press(&mut app, &fixture, KeyEvent::new(up, modifiers));
             assert_eq!(app.list.selected(), Some(1));
             assert_eq!(app.tasks, original);
             assert_eq!(fixture.storage.load().unwrap(), original);
@@ -4259,8 +4159,7 @@ mod tests {
                 KeyCode::Down,
                 KeyCode::Up,
             ] {
-                app.key(KeyEvent::new(code, KeyModifiers::SHIFT), &fixture.storage)
-                    .unwrap();
+                press(&mut app, &fixture, KeyEvent::new(code, KeyModifiers::SHIFT));
             }
             assert_eq!(app.tasks, original);
             assert_eq!(app.list.selected(), Some(1));
@@ -4393,15 +4292,7 @@ mod tests {
             app.toggle(0, &fixture.storage).unwrap();
             app.toggle(1, &fixture.storage).unwrap();
             app.undo(&fixture.storage).unwrap();
-            let snapshot = |app: &App| {
-                (
-                    app.tasks.clone(),
-                    app.list.selected(),
-                    app.history.clone(),
-                    app.redo_history.clone(),
-                )
-            };
-            let original = snapshot(&app);
+            let original = task_state(&app);
             for ending in [KeyCode::Esc, KeyCode::Enter] {
                 press(&mut app, &fixture, KeyCode::Char(key));
                 app.paste(if ending == KeyCode::Esc {
@@ -4410,23 +4301,20 @@ mod tests {
                     " "
                 });
                 press(&mut app, &fixture, ending);
-                assert_eq!(snapshot(&app), original);
+                assert_eq!(task_state(&app), original);
                 assert_eq!(app.mode, Mode::Normal);
             }
             for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
-                app.key(
+                press(
+                    &mut app,
+                    &fixture,
                     KeyEvent::new_with_kind(KeyCode::Char(key), KeyModifiers::NONE, kind),
-                    &fixture.storage,
-                )
-                .unwrap();
+                );
                 assert_eq!(app.mode, Mode::Normal);
             }
             press(&mut app, &fixture, KeyCode::Char(key));
             app.paste("new task");
-            let data = fixture.directory.join("data");
-            let backup = fixture.directory.join("backup");
-            std::fs::rename(&data, &backup).unwrap();
-            std::fs::write(&data, "blocked").unwrap();
+            block_saves(&fixture);
             assert!(
                 app.key(
                     KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
@@ -4434,10 +4322,9 @@ mod tests {
                 )
                 .is_err()
             );
-            assert_eq!(snapshot(&app), original);
+            assert_eq!(task_state(&app), original);
             assert!(matches!(app.mode, Mode::Adding(_, _)));
-            std::fs::remove_file(&data).unwrap();
-            std::fs::rename(backup, data).unwrap();
+            restore_saves(&fixture);
             assert_eq!(fixture.storage.load().unwrap(), app.tasks);
         }
     }

@@ -730,7 +730,39 @@ fn draw_confirmation(frame: &mut Frame, area: Rect, styles: &Styles) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::{AddPlacement, Task};
     use crate::styles::DEFAULT_ACCENT;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[track_caller]
+    fn test_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
+        Terminal::new(TestBackend::new(width, height)).unwrap()
+    }
+
+    #[track_caller]
+    fn render(terminal: &mut Terminal<TestBackend>, app: &mut App) -> Rect {
+        let mut rows = Rect::default();
+        terminal.draw(|frame| rows = draw(frame, app)).unwrap();
+        rows
+    }
+
+    fn screen(terminal: &Terminal<TestBackend>) -> String {
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                let mut line = String::new();
+                let mut x = 0;
+                while x < buffer.area.width {
+                    let symbol = buffer[(x, y)].symbol();
+                    line.push_str(symbol);
+                    // Wide characters occupy subsequent cells that contain placeholders.
+                    x += symbol.width().max(1) as u16;
+                }
+                line
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 
     #[test]
     fn semantic_styles_and_reverse_highlights_preserve_modifier_hierarchy() {
@@ -761,12 +793,8 @@ mod tests {
                 input: "Work".into(),
                 original: Some(0),
             };
-            let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
-            terminal
-                .draw(|frame| {
-                    draw(frame, &mut app);
-                })
-                .unwrap();
+            let mut terminal = test_terminal(40, 10);
+            render(&mut terminal, &mut app);
             let buffer = terminal.backend().buffer();
             let marker = &buffer[(4, 1)];
             assert_eq!(marker.fg, accent);
@@ -815,12 +843,8 @@ mod tests {
                 }]);
                 app.unicode_markers = unicode;
                 app.styles.accent = app.styles.accent.fg(accent);
-                let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
-                terminal
-                    .draw(|frame| {
-                        draw(frame, &mut app);
-                    })
-                    .unwrap();
+                let mut terminal = test_terminal(40, 10);
+                render(&mut terminal, &mut app);
                 let buffer = terminal.backend().buffer();
                 let focus = &buffer[(1, 1)];
                 assert_eq!(focus.symbol(), focus_marker(unicode));
@@ -852,12 +876,8 @@ mod tests {
         app.styles.completed = app.styles.completed.fg(Color::Blue);
         app.styles.border = app.styles.border.fg(Color::Cyan);
         app.styles.accent = app.styles.accent.fg(Color::Magenta);
-        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        let mut terminal = test_terminal(60, 12);
+        render(&mut terminal, &mut app);
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].fg, Color::Cyan);
         assert_eq!(buffer[(1, 1)].fg, Color::Magenta);
@@ -865,7 +885,7 @@ mod tests {
         assert_eq!(buffer[(7, 1)].fg, Color::Red);
         assert_eq!(buffer[(7, 2)].fg, Color::Blue);
         assert!(buffer[(7, 2)].modifier.contains(Modifier::CROSSED_OUT));
-        let mut input_terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
+        let mut input_terminal = test_terminal(40, 1);
         input_terminal
             .draw(|frame| {
                 draw_input(
@@ -893,12 +913,8 @@ mod tests {
                 carried: false,
             }]);
             app.styles = Styles::resolve(config.theme, &config.styles, None);
-            let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-            terminal
-                .draw(|frame| {
-                    draw(frame, &mut app);
-                })
-                .unwrap();
+            let mut terminal = test_terminal(40, 12);
+            render(&mut terminal, &mut app);
             let buffer = terminal.backend().buffer();
             assert_eq!(buffer[(1, 1)].fg, Color::Blue);
             assert!(
@@ -922,11 +938,7 @@ mod tests {
                 input: "Work".into(),
                 original: Some(0),
             };
-            terminal
-                .draw(|frame| {
-                    draw(frame, &mut app);
-                })
-                .unwrap();
+            render(&mut terminal, &mut app);
             let cell = &terminal.backend().buffer()[(7, 1)];
             assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
             assert!(
@@ -966,12 +978,8 @@ mod tests {
                     },
                     _ => Mode::ConfirmClear,
                 };
-                let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
-                terminal
-                    .draw(|frame| {
-                        draw(frame, &mut app);
-                    })
-                    .unwrap();
+                let mut terminal = test_terminal(width, 12);
+                render(&mut terminal, &mut app);
                 for cell in &terminal.backend().buffer().content {
                     assert_eq!(
                         cell.bg,
@@ -985,12 +993,8 @@ mod tests {
         let config: crate::config::Config =
             toml::from_str("theme='nord'\n[styles.border]\nbg='#112233'").unwrap();
         app.styles = Styles::resolve(config.theme, &config.styles, None);
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        let mut terminal = test_terminal(40, 12);
+        render(&mut terminal, &mut app);
         assert_eq!(
             terminal.backend().buffer()[(0, 0)].bg,
             Color::Rgb(17, 34, 51)
@@ -1007,9 +1011,6 @@ mod tests {
             .map(|(_, line)| line)
             .collect()
     }
-    use crate::app::{AddPlacement, Task};
-    use ratatui::{Terminal, backend::TestBackend};
-
     #[test]
     fn copy_feedback_uses_the_border_without_changing_the_viewport_or_counter() {
         for width in [0, 1, 2, 8, 15, 17, 24, 80] {
@@ -1018,11 +1019,8 @@ mod tests {
                     let mut app = App::new(Vec::new());
                     app.keybinds = keybinds;
                     app.rounded = rounded;
-                    let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
-                    let mut before = Rect::default();
-                    terminal
-                        .draw(|frame| before = draw(frame, &mut app))
-                        .unwrap();
+                    let mut terminal = test_terminal(width, 12);
+                    let before = render(&mut terminal, &mut app);
                     app.copy_markdown(&mut Vec::new());
                     for notice in [
                         "Copy sent to terminal",
@@ -1031,10 +1029,7 @@ mod tests {
                         "Theme: Everforest Dark / Medium",
                     ] {
                         app.notification = Some(crate::notification::Notification::new(notice));
-                        let mut after = Rect::default();
-                        terminal
-                            .draw(|frame| after = draw(frame, &mut app))
-                            .unwrap();
+                        let after = render(&mut terminal, &mut app);
                         assert_eq!(before, after);
                         let text = screen(&terminal);
                         if width >= 7 {
@@ -1066,11 +1061,7 @@ mod tests {
                         }
                     }
                     app.notification = None;
-                    terminal
-                        .draw(|frame| {
-                            draw(frame, &mut app);
-                        })
-                        .unwrap();
+                    render(&mut terminal, &mut app);
                     assert!(!screen(&terminal).contains("Copy"));
                 }
             }
@@ -1123,10 +1114,8 @@ mod tests {
                                     },
                                     _ => Mode::ConfirmClear,
                                 };
-                                let mut terminal =
-                                    Terminal::new(TestBackend::new(width, 12)).unwrap();
-                                let mut rows = Rect::default();
-                                terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+                                let mut terminal = test_terminal(width, 12);
+                                let rows = render(&mut terminal, &mut app);
                                 if mode == 5 {
                                     continue;
                                 } // The existing dialog may cover the border.
@@ -1163,12 +1152,8 @@ mod tests {
         }
         for height in [0, 1] {
             let mut app = App::new(Vec::new());
-            let mut terminal = Terminal::new(TestBackend::new(24, height)).unwrap();
-            terminal
-                .draw(|frame| {
-                    draw(frame, &mut app);
-                })
-                .unwrap();
+            let mut terminal = test_terminal(24, height);
+            render(&mut terminal, &mut app);
             assert!(!screen(&terminal).contains('['));
         }
     }
@@ -1195,10 +1180,9 @@ mod tests {
             },
         ]);
         app.keybinds = false;
-        let mut terminal = Terminal::new(TestBackend::new(30, 10)).unwrap();
+        let mut terminal = test_terminal(30, 10);
         let mut check = |app: &mut App, expected: &str| {
-            let mut rows = Rect::default();
-            terminal.draw(|frame| rows = draw(frame, app)).unwrap();
+            let rows = render(&mut terminal, app);
             assert_eq!(rows, Rect::new(1, 1, 28, 8));
             assert!(
                 screen(&terminal)
@@ -1279,10 +1263,9 @@ mod tests {
                 if !single {
                     key(&mut app, KeyCode::Enter);
                 }
-                let mut terminal = Terminal::new(TestBackend::new(28, 7)).unwrap();
+                let mut terminal = test_terminal(28, 7);
                 for _ in 0..2 {
-                    let mut rows = Rect::default();
-                    terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+                    let rows = render(&mut terminal, &mut app);
                     assert_eq!(app.mode, Mode::Normal);
                     assert_eq!(app.list.selected(), Some(19));
                     let rendered = screen(&terminal);
@@ -1305,11 +1288,7 @@ mod tests {
                     assert!(app.row_tasks[app.scroll..end].contains(&Some(19)));
                     key(&mut app, KeyCode::Char('n'));
                     assert_eq!(app.list.selected(), Some(19));
-                    terminal
-                        .draw(|frame| {
-                            draw(frame, &mut app);
-                        })
-                        .unwrap();
+                    render(&mut terminal, &mut app);
                     assert!(screen(&terminal).contains("search › needle"));
                     assert!(screen(&terminal).contains('■'));
                     assert!(
@@ -1357,12 +1336,8 @@ mod tests {
                 app.completed_at_bottom = grouped;
                 app.keybinds = false;
                 let original = app.tasks.clone();
-                let mut terminal = Terminal::new(TestBackend::new(24, 6)).unwrap();
-                terminal
-                    .draw(|frame| {
-                        draw(frame, &mut app);
-                    })
-                    .unwrap();
+                let mut terminal = test_terminal(24, 6);
+                render(&mut terminal, &mut app);
                 assert_eq!(app.scroll, 0);
                 for accept in [false, true] {
                     app.key(
@@ -1371,11 +1346,7 @@ mod tests {
                     )
                     .unwrap();
                     app.paste(query);
-                    terminal
-                        .draw(|frame| {
-                            draw(frame, &mut app);
-                        })
-                        .unwrap();
+                    render(&mut terminal, &mut app);
                     let selected = app.list.selected();
                     app.key(
                         KeyEvent::new(
@@ -1415,8 +1386,7 @@ mod tests {
                             }
                         }
                     }
-                    let mut rows = Rect::default();
-                    terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+                    let rows = render(&mut terminal, &mut app);
                     if let Some(selected) = app.list.selected() {
                         let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
                         assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
@@ -1491,17 +1461,13 @@ mod tests {
                     app.wrap = wrap;
                     app.keybinds = false;
                     app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
-                    let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
-                    let mut rows = Rect::default();
-                    terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+                    let mut terminal = test_terminal(width, 12);
+                    let rows = render(&mut terminal, &mut app);
                     let ascii = terminal.backend().buffer().clone();
                     let mapping = app.row_tasks.clone();
                     let scroll = app.scroll;
                     app.unicode_markers = true;
-                    let mut unicode_rows = Rect::default();
-                    terminal
-                        .draw(|frame| unicode_rows = draw(frame, &mut app))
-                        .unwrap();
+                    let unicode_rows = render(&mut terminal, &mut app);
                     assert_eq!(rows, unicode_rows);
                     assert_eq!(app.row_tasks, mapping);
                     assert_eq!(app.scroll, scroll);
@@ -1539,12 +1505,8 @@ mod tests {
         }]);
         app.keybinds = false;
         app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
-        let mut terminal = Terminal::new(TestBackend::new(24, 12)).unwrap();
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        let mut terminal = test_terminal(24, 12);
+        render(&mut terminal, &mut app);
         let mapping = app.row_tasks.clone();
         assert!(mapping.len() > 1);
         assert!(screen(&terminal).contains("› [↪] carry"));
@@ -1559,11 +1521,7 @@ mod tests {
         )
         .unwrap();
         app.paste("carry");
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert_eq!(app.row_tasks, mapping);
         assert!(screen(&terminal).contains('■'));
         assert!(!screen(&terminal).contains("[↪]"));
@@ -1572,11 +1530,7 @@ mod tests {
             &fixture.storage,
         )
         .unwrap();
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert_eq!(app.row_tasks, mapping);
         assert!(screen(&terminal).contains("[↪]"));
         assert!(app.tasks[0].carried);
@@ -1629,9 +1583,8 @@ mod tests {
                         .unwrap();
                         app.paste("New task");
                         let index = app.insertion_index(placement);
-                        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
-                        let mut rows = Rect::default();
-                        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+                        let mut terminal = test_terminal(40, 10);
+                        let rows = render(&mut terminal, &mut app);
                         let expected: Vec<_> = (0..index)
                             .map(Some)
                             .chain([None])
@@ -1684,11 +1637,7 @@ mod tests {
                         )
                         .unwrap();
                         assert_eq!(app.tasks, added);
-                        terminal
-                            .draw(|frame| {
-                                draw(frame, &mut app);
-                            })
-                            .unwrap();
+                        render(&mut terminal, &mut app);
                         assert!(app.row_tasks.iter().all(Option::is_some));
                         assert!(!screen(&terminal).contains("add ›"));
                         assert!(!terminal.backend().cursor_visible());
@@ -1726,9 +1675,8 @@ mod tests {
             fixture.storage.save(&app.tasks).unwrap();
             let original = app.tasks.clone();
             let bytes = std::fs::read(fixture.task_path()).unwrap();
-            let mut terminal = Terminal::new(TestBackend::new(26, 8)).unwrap();
-            let mut rows = Rect::default();
-            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+            let mut terminal = test_terminal(26, 8);
+            let mut rows = render(&mut terminal, &mut app);
             assert!(
                 app.row_tasks
                     .iter()
@@ -1747,7 +1695,7 @@ mod tests {
             } else {
                 panic!("expected editing");
             }
-            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+            rows = render(&mut terminal, &mut app);
             assert_eq!(app.row_tasks, [Some(0), Some(1), Some(2)]);
             assert!(screen(&terminal).contains("before"));
             assert!(screen(&terminal).contains("after"));
@@ -1761,18 +1709,14 @@ mod tests {
             )
             .unwrap();
             app.paste("New\n");
-            terminal
-                .draw(|frame| {
-                    draw(frame, &mut app);
-                })
-                .unwrap();
+            render(&mut terminal, &mut app);
             assert!(screen(&terminal).contains("edit › New original"));
             assert_eq!(app.tasks, original);
             assert_eq!(std::fs::read(fixture.task_path()).unwrap(), bytes);
             assert!(!app.can_undo());
             app.key(KeyEvent::new(ending, KeyModifiers::NONE), &fixture.storage)
                 .unwrap();
-            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+            rows = render(&mut terminal, &mut app);
             assert!(!screen(&terminal).contains("edit ›"));
             assert!(!terminal.backend().cursor_visible());
             let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
@@ -1830,7 +1774,7 @@ mod tests {
             if key != 'e' {
                 app.paste("new e\u{301}界👩‍💻 text");
             }
-            let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+            let mut terminal = test_terminal(40, 12);
             for wrap in [false, true] {
                 app.wrap = wrap;
                 for width in [0, 1, 2, 3, 8, 16, 40] {
@@ -1845,8 +1789,7 @@ mod tests {
                             .unwrap();
                             app.scroll = usize::MAX;
                             app.reveal_selection = false;
-                            let mut rows = Rect::default();
-                            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+                            let rows = render(&mut terminal, &mut app);
                             assert!(
                                 app.row_tasks
                                     .iter()
@@ -1891,8 +1834,7 @@ mod tests {
             )
             .unwrap();
             terminal.backend_mut().resize(40, 12);
-            let mut rows = Rect::default();
-            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+            let rows = render(&mut terminal, &mut app);
             let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
             assert!(app.row_tasks[app.scroll..end].contains(&Some(18)));
             assert_eq!(app.tasks, original);
@@ -1925,10 +1867,9 @@ mod tests {
         )
         .unwrap();
         app.paste("needle");
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = test_terminal(40, 12);
         for results in [false, true] {
-            let mut rows = Rect::default();
-            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+            let rows = render(&mut terminal, &mut app);
             assert_eq!(rows.height, 9);
             assert!(
                 screen(&terminal)
@@ -1949,11 +1890,7 @@ mod tests {
             )
             .unwrap();
         }
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert!(screen(&terminal).contains("[✓] needle"));
         assert!(!screen(&terminal).contains("search ›"));
         assert!(app.tasks[0].completed);
@@ -1981,18 +1918,14 @@ mod tests {
         app.keybinds = false;
         app.list.select(Some(2));
         app.styles.accent = app.styles.accent.fg(Color::Rgb(20, 40, 60));
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = test_terminal(40, 10);
         let key = |app: &mut App, code| {
             app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
                 .unwrap()
         };
         key(&mut app, KeyCode::Char('/'));
         app.paste("i\u{307}foo");
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(1, 1)].symbol(), "›");
         assert_eq!(buffer[(1, 3)].symbol(), " ");
@@ -2019,19 +1952,11 @@ mod tests {
             assert_eq!(highlighted, expected);
         }
         key(&mut app, KeyCode::Enter);
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert!(screen(&terminal).contains("search › i\u{307}foo"));
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Enter);
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert_eq!(app.list.selected(), Some(1));
         assert_eq!(app.tasks, original);
         assert_eq!(terminal.backend().buffer()[(4, 1)].symbol(), " ");
@@ -2067,12 +1992,8 @@ mod tests {
         ]);
         app.keybinds = false;
         let original = app.tasks.clone();
-        let mut terminal = Terminal::new(TestBackend::new(14, 9)).unwrap();
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        let mut terminal = test_terminal(14, 9);
+        render(&mut terminal, &mut app);
         let mapping = app.row_tasks.clone();
         app.key(
             KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
@@ -2080,11 +2001,7 @@ mod tests {
         )
         .unwrap();
         app.paste("tag: abcd");
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert_eq!(app.row_tasks, mapping);
         for (y, length) in [(1, 4), (2, 4)] {
             for x in 7..7 + length {
@@ -2114,21 +2031,13 @@ mod tests {
         ] {
             app.wrap = wrap;
             terminal.backend_mut().resize(width, height);
-            terminal
-                .draw(|frame| {
-                    draw(frame, &mut app);
-                })
-                .unwrap();
+            render(&mut terminal, &mut app);
             app.key(
                 KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
                 &fixture.storage,
             )
             .unwrap();
-            terminal
-                .draw(|frame| {
-                    draw(frame, &mut app);
-                })
-                .unwrap();
+            render(&mut terminal, &mut app);
             let selected = app.list.selected().unwrap();
             if app.viewport_height > 0 {
                 let end = (app.scroll + usize::from(app.viewport_height)).min(app.row_tasks.len());
@@ -2140,11 +2049,7 @@ mod tests {
             &fixture.storage,
         )
         .unwrap();
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert_eq!(app.list.selected(), Some(0));
         assert_eq!(app.tasks, original);
         assert!(!app.can_undo());
@@ -2164,12 +2069,8 @@ mod tests {
             original: Some(0),
         };
         app.list.select(None);
-        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        let mut terminal = test_terminal(60, 12);
+        render(&mut terminal, &mut app);
         assert!(screen(&terminal).contains("No matches"));
         assert_eq!(terminal.backend().buffer()[(1, 1)].symbol(), " ");
         assert_eq!(terminal.backend().buffer()[(4, 1)].symbol(), "□");
@@ -2249,15 +2150,11 @@ mod tests {
             assert!(lines.len() <= 3);
             assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
         }
-        let mut terminal = Terminal::new(TestBackend::new(18, 7)).unwrap();
+        let mut terminal = test_terminal(18, 7);
         app.scroll = usize::MAX;
         key(&mut app, KeyCode::Char('r'), KeyModifiers::CONTROL);
         assert_eq!(app.tasks, modified);
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert_eq!(app.list.selected(), Some(1));
         assert_eq!(app.row_tasks[app.scroll], Some(1));
         assert!(!app.can_redo());
@@ -2329,9 +2226,8 @@ mod tests {
         }
         app.mode = Mode::ConfirmClear;
         assert!(shortcut_lines(&app, 80).is_empty());
-        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
-        let mut rows = Rect::default();
-        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        let mut terminal = test_terminal(60, 12);
+        let rows = render(&mut terminal, &mut app);
         assert_eq!(rows.height, 10);
         assert_eq!(screen(&terminal).matches("Confirm").count(), 1);
         assert_eq!(screen(&terminal).matches("Cancel").count(), 1);
@@ -2364,7 +2260,7 @@ mod tests {
                 })
                 .collect(),
         );
-        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        let mut terminal = test_terminal(60, 12);
         app.list.select(Some(11));
         let mut heights = Vec::new();
         for mode in [
@@ -2377,8 +2273,7 @@ mod tests {
             Mode::Normal,
         ] {
             app.mode = mode;
-            let mut rows = Rect::default();
-            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+            let rows = render(&mut terminal, &mut app);
             heights.push(rows.height);
             let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
             assert!(app.row_tasks[app.scroll..end].contains(&Some(11)));
@@ -2405,17 +2300,16 @@ mod tests {
         assert_eq!(heights[1], heights[2]);
         assert_eq!(heights[0], heights[3]);
         app.keybinds = false;
-        let mut rows = Rect::default();
-        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        let mut rows = render(&mut terminal, &mut app);
         assert_eq!(rows.height, 10);
         app.mode = Mode::Adding(TextInput::default(), AddPlacement::End);
-        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        rows = render(&mut terminal, &mut app);
         assert_eq!(rows.height, 10);
     }
 
     #[test]
     fn tiny_terminals_and_resizing_are_safe_in_every_mode() {
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = test_terminal(40, 12);
         let mut app = App::new(vec![Task {
             carried: false,
             text: "日本語 🪷".into(),
@@ -2442,11 +2336,7 @@ mod tests {
                     Mode::ConfirmClear,
                 ] {
                     app.mode = mode;
-                    terminal
-                        .draw(|frame| {
-                            draw(frame, &mut app);
-                        })
-                        .unwrap();
+                    render(&mut terminal, &mut app);
                 }
             }
         }
@@ -2456,7 +2346,7 @@ mod tests {
     fn page_navigation_targets_visual_rows_in_mixed_task_heights() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
-        let mut terminal = Terminal::new(TestBackend::new(18, 5)).unwrap();
+        let mut terminal = test_terminal(18, 5);
         let mut app = App::new(
             [
                 "short",
@@ -2473,8 +2363,7 @@ mod tests {
             .into(),
         );
         app.keybinds = false;
-        let mut rows = Rect::default();
-        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        let mut rows = render(&mut terminal, &mut app);
         assert_eq!(rows.height, 3);
         assert_eq!(app.row_tasks, [0, 1, 1, 2, 3, 3, 3, 4].map(Some));
         for (code, selected) in [
@@ -2488,7 +2377,7 @@ mod tests {
             app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
                 .unwrap();
             assert_eq!(app.list.selected(), Some(selected));
-            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+            rows = render(&mut terminal, &mut app);
             let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
             assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
         }
@@ -2499,7 +2388,7 @@ mod tests {
     fn page_navigation_uses_current_viewport_wrapping_and_resize() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut terminal = test_terminal(40, 12);
         let mut app = App::new(
             (0..40)
                 .map(|index| Task {
@@ -2510,8 +2399,7 @@ mod tests {
                 .collect(),
         );
         // Include the real footer so page size excludes its rows as well as borders.
-        let mut rows = Rect::default();
-        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        let mut rows = render(&mut terminal, &mut app);
         assert_eq!(app.viewport_height, rows.height);
         assert!(rows.height < 10);
         let original = app.tasks.clone();
@@ -2521,7 +2409,7 @@ mod tests {
                 &fixture.storage,
             )
             .unwrap();
-            terminal.draw(|frame| rows = draw(frame, app)).unwrap();
+            rows = render(&mut terminal, app);
         };
         let height = usize::from(app.viewport_height);
         press(&mut app, KeyCode::PageDown, KeyEventKind::Press);
@@ -2549,42 +2437,22 @@ mod tests {
         app.keybinds = false;
         app.tasks[1].text = "word ".repeat(60);
         terminal.backend_mut().resize(18, 8);
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         let page = KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE);
         let up = KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE);
         app.key(page, &fixture.storage).unwrap();
         assert_eq!(app.list.selected(), Some(1));
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         // Simulate reading partway through the oversized selected task with the mouse wheel.
         app.scroll += 5;
         app.reveal_selection = false;
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         app.key(page, &fixture.storage).unwrap();
         assert_eq!(app.list.selected(), Some(2));
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         app.key(up, &fixture.storage).unwrap();
         assert_eq!(app.list.selected(), Some(1));
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         app.key(up, &fixture.storage).unwrap();
         assert_eq!(app.list.selected(), Some(0));
 
@@ -2600,11 +2468,7 @@ mod tests {
             app.list.select(Some(0));
             app.scroll = 0;
             terminal.backend_mut().resize(width, height);
-            terminal
-                .draw(|frame| {
-                    draw(frame, &mut app);
-                })
-                .unwrap();
+            render(&mut terminal, &mut app);
             let expected = usize::from(app.viewport_height.max(1));
             app.key(page, &fixture.storage).unwrap();
             // Only task 1 wraps: with wrapping off, or a one-cell width, each task has one row.
@@ -2612,7 +2476,7 @@ mod tests {
                 app.list.selected(),
                 Some(if wrap && width > 6 { 1 } else { expected })
             );
-            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+            rows = render(&mut terminal, &mut app);
             if rows.height > 0 {
                 let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
                 assert!(
@@ -2624,7 +2488,7 @@ mod tests {
 
     #[test]
     fn long_lists_scroll_to_selection_and_wrap_back_to_start() {
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = test_terminal(40, 10);
         let mut app = App::new(
             (0..1000)
                 .map(|index| Task {
@@ -2635,19 +2499,11 @@ mod tests {
                 .collect(),
         );
         app.navigate(false);
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert!(app.scroll > 0);
         assert!(screen(&terminal).contains("task 999"));
         app.navigate(true);
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert_eq!(app.scroll, 0);
         assert!(screen(&terminal).contains("task 0"));
     }
@@ -2678,9 +2534,8 @@ mod tests {
         app.completed_at_bottom = true;
         app.keybinds = false;
         let original = app.tasks.clone();
-        let mut terminal = Terminal::new(TestBackend::new(18, 5)).unwrap();
-        let mut rows = Rect::default();
-        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        let mut terminal = test_terminal(18, 5);
+        let rows = render(&mut terminal, &mut app);
         app.mouse(
             MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
@@ -2695,7 +2550,7 @@ mod tests {
         assert_eq!(app.list.selected(), Some(1));
         assert_eq!(app.tasks[1].text, original[0].text);
         assert!(app.tasks[1].completed);
-        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        render(&mut terminal, &mut app);
         assert_eq!(app.row_tasks[app.scroll], Some(1));
         assert!(screen(&terminal).contains("› [✓] long"));
         app.key(
@@ -2703,11 +2558,7 @@ mod tests {
             &fixture.storage,
         )
         .unwrap();
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert_eq!(app.list.selected(), Some(0));
         assert_eq!(app.tasks, original);
         assert_eq!(app.row_tasks[app.scroll], Some(0));
@@ -2737,12 +2588,8 @@ mod tests {
                     let original = app.tasks.clone();
                     app.keybinds = false;
                     app.wrap = wrap;
-                    let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
-                    terminal
-                        .draw(|frame| {
-                            draw(frame, &mut app);
-                        })
-                        .unwrap();
+                    let mut terminal = test_terminal(width, 20);
+                    render(&mut terminal, &mut app);
                     let buffer = terminal.backend().buffer();
                     let mut bold = String::new();
                     for y in 1..19 {
@@ -2771,18 +2618,14 @@ mod tests {
 
     #[test]
     fn completed_text_stays_muted_with_accented_marker_and_checkbox() {
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = test_terminal(40, 10);
         let mut app = App::new(vec![Task {
             carried: false,
             text: "Completed".into(),
             completed: true,
         }]);
         app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         let buffer = terminal.backend().buffer();
         let marker = &buffer[(1, 1)];
         let checkbox = &buffer[(3, 1)];
@@ -2801,7 +2644,7 @@ mod tests {
     fn disabled_wrapping_keeps_one_row_and_input_shows_its_tail() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
-        let mut terminal = Terminal::new(TestBackend::new(12, 8)).unwrap();
+        let mut terminal = test_terminal(12, 8);
         let mut app = App::new(vec![
             Task {
                 carried: false,
@@ -2818,22 +2661,14 @@ mod tests {
         app.key(toggle, &fixture.storage).unwrap();
         assert!(!app.wrap);
         app.mode = Mode::Adding("a long input ending in 界z".into(), AddPlacement::End);
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         let rendered = screen(&terminal);
         assert!(rendered.contains("[ ] next"));
         assert!(rendered.contains("add › z"));
         app.mode = Mode::Normal;
         app.key(toggle, &fixture.storage).unwrap();
         assert!(app.wrap);
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert!(app.row_tasks.len() > 2);
         assert_eq!(app.list.selected(), Some(0));
         assert!(!fixture.task_path().exists());
@@ -2859,7 +2694,7 @@ mod tests {
                 } else {
                     Mode::Adding(text.clone().into(), AddPlacement::End)
                 };
-                let mut terminal = Terminal::new(TestBackend::new(width, 5)).unwrap();
+                let mut terminal = test_terminal(width, 5);
                 for code in std::iter::repeat_n(KeyCode::Left, text.graphemes(true).count() + 2)
                     .chain(std::iter::repeat_n(
                         KeyCode::Right,
@@ -2872,11 +2707,7 @@ mod tests {
                         &fixture.storage,
                     )
                     .unwrap();
-                    terminal
-                        .draw(|frame| {
-                            draw(frame, &mut app);
-                        })
-                        .unwrap();
+                    render(&mut terminal, &mut app);
                     let cursor = terminal.get_cursor_position().unwrap();
                     assert!(cursor.x < width);
                     assert!(cursor.y < 5);
@@ -2900,7 +2731,7 @@ mod tests {
             let mut input = TextInput::from("hidden text e\u{301}界👩‍💻after");
             input.set_cursor("hidden text e\u{301}界".len());
             for width in 0..=30 {
-                let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+                let mut terminal = test_terminal(width, 1);
                 terminal
                     .draw(|frame| {
                         draw_input(frame, frame.area(), &input, label, &Styles::default())
@@ -2921,7 +2752,7 @@ mod tests {
                 }
             }
             input.set_cursor(0);
-            let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
+            let mut terminal = test_terminal(40, 1);
             terminal
                 .draw(|frame| draw_input(frame, frame.area(), &input, label, &Styles::default()))
                 .unwrap();
@@ -2940,7 +2771,7 @@ mod tests {
             {
                 let prefix_width = label.width() + 3;
                 let cursor = (prefix_width + tail.width()) as u16;
-                let mut terminal = Terminal::new(TestBackend::new(cursor + 1, 1)).unwrap();
+                let mut terminal = test_terminal(cursor + 1, 1);
                 let input = TextInput::from(format!("hidden text {tail}"));
                 let accent = Color::Rgb(169, 182, 101);
                 terminal
@@ -3007,7 +2838,7 @@ mod tests {
             for (width, expected) in expected_rows.into_iter().enumerate() {
                 let width = width as u16;
                 for height in 0..=1 {
-                    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                    let mut terminal = test_terminal(width, height);
                     terminal
                         .draw(|frame| {
                             draw_input(
@@ -3081,9 +2912,8 @@ mod tests {
                 .into(),
         );
         app.keybinds = false;
-        let mut terminal = Terminal::new(TestBackend::new(12, 5)).unwrap();
-        let mut rows = Rect::default();
-        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        let mut terminal = test_terminal(12, 5);
+        let rows = render(&mut terminal, &mut app);
         assert_eq!(app.row_tasks, [0, 0, 1].map(Some));
         assert_eq!(terminal.backend().buffer()[(7, 2)].symbol(), " \u{301}");
         assert_eq!(terminal.backend().buffer()[(8, 2)].symbol(), "X");
@@ -3105,19 +2935,11 @@ mod tests {
         for (code, selected) in [(KeyCode::PageDown, 1), (KeyCode::PageUp, 0)] {
             app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
                 .unwrap();
-            terminal
-                .draw(|frame| {
-                    draw(frame, &mut app);
-                })
-                .unwrap();
+            render(&mut terminal, &mut app);
             assert_eq!(app.list.selected(), Some(selected));
         }
         terminal.backend_mut().resize(13, 5);
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert_eq!(app.row_tasks, [0, 0, 1].map(Some));
         assert_eq!(terminal.backend().buffer()[(11, 1)].symbol(), " \u{301}");
     }
@@ -3126,7 +2948,7 @@ mod tests {
     fn continuation_clicks_toggle_the_correct_task_and_leave_other_rows_alone() {
         use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let fixture = crate::storage::tests::Fixture::new();
-        let mut terminal = Terminal::new(TestBackend::new(18, 12)).unwrap();
+        let mut terminal = test_terminal(18, 12);
         let mut app = App::new(vec![
             Task {
                 carried: false,
@@ -3139,8 +2961,7 @@ mod tests {
                 completed: false,
             },
         ]);
-        let mut rows = Rect::default();
-        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        let rows = render(&mut terminal, &mut app);
         assert_eq!(app.row_tasks, [0, 0, 0, 1].map(Some));
         let rendered = screen(&terminal);
         assert!(rendered.contains("› [ ] alpha beta"));
@@ -3169,7 +2990,7 @@ mod tests {
     fn oversized_task_can_be_scrolled_read_and_navigated_after_resizing() {
         use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
         let fixture = crate::storage::tests::Fixture::new();
-        let mut terminal = Terminal::new(TestBackend::new(18, 8)).unwrap();
+        let mut terminal = test_terminal(18, 8);
         let mut app = App::new(vec![
             Task {
                 carried: false,
@@ -3182,8 +3003,7 @@ mod tests {
                 completed: false,
             },
         ]);
-        let mut rows = Rect::default();
-        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        let mut rows = render(&mut terminal, &mut app);
         let total = app.row_tasks.len();
         assert!(total > usize::from(rows.height));
         let wheel = MouseEvent {
@@ -3194,43 +3014,21 @@ mod tests {
         };
         for _ in 0..total {
             app.mouse(wheel, rows, &fixture.storage).unwrap();
-            terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+            rows = render(&mut terminal, &mut app);
         }
         assert!(screen(&terminal).contains("THE END"));
         assert!(screen(&terminal).contains("next"));
         app.navigate(true);
-        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        render(&mut terminal, &mut app);
         assert_eq!(app.list.selected(), Some(1));
         app.navigate(false);
-        terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+        render(&mut terminal, &mut app);
         assert_eq!(app.scroll, 0);
         assert!(screen(&terminal).contains("[ ] word"));
         terminal.backend_mut().resize(30, 12);
-        terminal
-            .draw(|frame| {
-                draw(frame, &mut app);
-            })
-            .unwrap();
+        render(&mut terminal, &mut app);
         assert!(app.row_tasks.len() < total);
         assert!(screen(&terminal).contains("[ ] word"));
         assert!(!fixture.task_path().exists());
-    }
-
-    fn screen(terminal: &Terminal<TestBackend>) -> String {
-        let buffer = terminal.backend().buffer();
-        (0..buffer.area.height)
-            .map(|y| {
-                let mut line = String::new();
-                let mut x = 0;
-                while x < buffer.area.width {
-                    let symbol = buffer[(x, y)].symbol();
-                    line.push_str(symbol);
-                    // Wide characters occupy subsequent cells that contain placeholders.
-                    x += symbol.width().max(1) as u16;
-                }
-                line
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 }
