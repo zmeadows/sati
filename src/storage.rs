@@ -631,6 +631,7 @@ pub mod tests {
         .chain(
             (0..=0x1f)
                 .chain(0x7f..=0x9f)
+                .chain([0x2028, 0x2029])
                 .map(|code| format!("before{}after", char::from_u32(code).unwrap())),
         );
         for text in invalid {
@@ -652,6 +653,9 @@ pub mod tests {
             assert!(error.contains("invalid task file"));
             assert!(error.contains("task 2 text"));
             assert!(error.contains("left untouched"));
+            if tasks[1].text.contains(['\u{2028}', '\u{2029}']) {
+                assert!(error.contains("Unicode line separator"));
+            }
             assert_eq!(fs::read(fixture.task_path()).unwrap(), original);
             assert_eq!(
                 fs::read_dir(fixture.task_path().parent().unwrap())
@@ -667,7 +671,7 @@ pub mod tests {
         let fixture = Fixture::new();
         let tasks = vec![
             Task { carried: false,
-                text: "日本語 e\u{301} 👩‍💻 👍🏽 — [punctuation!]  spaces\u{a0}inside\u{2003}text\u{2028}and\u{2029}text".into(),
+                text: "日本語 e\u{301} 👩‍💻 👍🏽 — [punctuation!]  spaces\u{a0}inside\u{2003}text\u{2009}and\u{202f}text".into(),
                 completed: true,
             },
             Task { carried: false, text: "long🪷".repeat(100_000), completed: false },

@@ -29,11 +29,19 @@ impl Task {
             Some("text is empty")
         } else if self.text.trim() != self.text {
             Some("text has leading or trailing whitespace")
-        } else if self.text.chars().any(char::is_control) {
-            Some("text contains a control character")
+        } else if self.text.chars().any(|c| single_line_character(c) != c) {
+            Some("text contains a control character or Unicode line separator; use a single line")
         } else {
             None
         }
+    }
+}
+
+fn single_line_character(character: char) -> char {
+    if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
+        ' '
+    } else {
+        character
     }
 }
 
@@ -660,7 +668,7 @@ impl App {
             ) = (&mut self.mode, key.code)
             && !character.is_control()
         {
-            input.insert(character.encode_utf8(&mut [0; 4]));
+            input.insert(single_line_character(character).encode_utf8(&mut [0; 4]));
             self.refresh_search();
             return Ok(true);
         }
@@ -785,7 +793,7 @@ impl App {
             KeyCode::Home => input.set_cursor(0),
             KeyCode::End => input.set_cursor(input.text().len()),
             KeyCode::Char(character) if !character.is_control() => {
-                input.insert(character.encode_utf8(&mut [0; 4]))
+                input.insert(single_line_character(character).encode_utf8(&mut [0; 4]))
             }
             KeyCode::Enter => {
                 let text = input.text().trim().to_owned();
@@ -951,13 +959,7 @@ impl App {
             let normalized: String = text
                 .replace("\r\n", "\n")
                 .chars()
-                .map(|character| {
-                    if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
-                        ' '
-                    } else {
-                        character
-                    }
-                })
+                .map(single_line_character)
                 .collect();
             input.insert(&normalized);
         }
@@ -3100,10 +3102,57 @@ mod tests {
     }
 
     #[test]
+    fn separators_normalize_in_all_input_modes_without_submitting() {
+        let fixture = Fixture::new();
+        let text = "\u{2028}e\u{301}界👩‍💻\u{2029}\u{a0}\u{2003}\u{202f}\r\n\t\0";
+        for mode in 0..3 {
+            for pasted in [false, true] {
+                let mut app = app_with_tasks(1);
+                let original = task_state(&app);
+                let input = TextInput::from("start");
+                app.mode = match mode {
+                    0 => Mode::Adding(input, AddPlacement::End),
+                    1 => Mode::Editing { index: 0, input },
+                    _ => Mode::Searching {
+                        input,
+                        original: Some(0),
+                    },
+                };
+                if pasted {
+                    app.paste(text);
+                } else {
+                    for character in text.chars() {
+                        press(&mut app, &fixture, KeyCode::Char(character));
+                    }
+                }
+                let expected = format!(
+                    "start e\u{301}界👩‍💻 \u{a0}\u{2003}\u{202f}{}",
+                    if pasted { "   " } else { "" }
+                );
+                let input = match &app.mode {
+                    Mode::Adding(input, _)
+                    | Mode::Editing { input, .. }
+                    | Mode::Searching { input, .. } => input,
+                    _ => panic!("input submitted or cancelled unexpectedly"),
+                };
+                assert_eq!(input.text(), expected);
+                assert_eq!(input.cursor(), expected.len());
+                assert_eq!(app.tasks, original.tasks);
+                assert_eq!(app.history, original.history);
+                assert_eq!(app.redo_history, original.redo_history);
+                if mode == 2 {
+                    assert_eq!(app.last_search_query.as_deref(), Some(expected.as_str()));
+                }
+            }
+        }
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
     fn altgr_characters_are_windows_input_only_and_respect_event_kinds() {
         let fixture = Fixture::new();
         let ctrl_alt = KeyModifiers::CONTROL | KeyModifiers::ALT;
-        for edit in [false, true] {
+        for mode in 0..3 {
             for kind in [
                 KeyEventKind::Press,
                 KeyEventKind::Repeat,
@@ -3114,7 +3163,10 @@ mod tests {
                     ctrl_alt | KeyModifiers::SHIFT,
                     ctrl_alt | KeyModifiers::SUPER,
                 ] {
-                    for character in ['@', '{', '€', 'ł', 'A', 'a', 'e', '\u{301}', '\n', '\0'] {
+                    for character in [
+                        '@', '{', '€', 'ł', 'A', 'a', 'e', '\u{301}', '\n', '\0', '\u{2028}',
+                        '\u{2029}',
+                    ] {
                         let mut app = app_with_tasks(1);
                         let original = app.tasks.clone();
                         let mut input = TextInput::from("e\u{301}👩‍💻suffix");
@@ -3125,12 +3177,19 @@ mod tests {
                             && !modifiers.contains(KeyModifiers::SUPER)
                             && !character.is_control()
                         {
+                            let character = match character {
+                                '\u{2028}' | '\u{2029}' => ' ',
+                                other => other,
+                            };
                             expected.insert(character.encode_utf8(&mut [0; 4]));
                         }
-                        app.mode = if edit {
-                            Mode::Editing { index: 0, input }
-                        } else {
-                            Mode::Adding(input, AddPlacement::End)
+                        app.mode = match mode {
+                            0 => Mode::Adding(input, AddPlacement::End),
+                            1 => Mode::Editing { index: 0, input },
+                            _ => Mode::Searching {
+                                input,
+                                original: Some(0),
+                            },
                         };
                         assert!(!press(
                             &mut app,
@@ -3138,7 +3197,9 @@ mod tests {
                             KeyEvent::new_with_kind(KeyCode::Char(character), modifiers, kind)
                         ));
                         let actual = match &app.mode {
-                            Mode::Adding(input, _) | Mode::Editing { input, .. } => input,
+                            Mode::Adding(input, _)
+                            | Mode::Editing { input, .. }
+                            | Mode::Searching { input, .. } => input,
                             _ => panic!("AltGr must not change mode"),
                         };
                         assert_eq!(actual, &expected, "{character:?} {modifiers:?} {kind:?}");
