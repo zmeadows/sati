@@ -28,7 +28,10 @@ impl Notification {
         match self.message.as_str() {
             "Copy sent to terminal" => "Copy sent",
             message if message.starts_with("Copy failed") => "Copy failed",
-            message if message.starts_with("Theme: ") => "Theme changed",
+            message if message.starts_with("Theme: ") => message
+                .rsplit_once(" (")
+                .and_then(|(_, id)| id.strip_suffix(')'))
+                .unwrap_or("Theme changed"),
             message => message,
         }
     }
@@ -64,6 +67,23 @@ fn timing(mut elapsed: Duration, phases: [Duration; 2]) -> Option<(usize, Durati
 mod tests {
     use super::*;
     use ratatui::style::Color;
+
+    #[test]
+    fn compact_theme_messages_keep_exact_identifiers() {
+        for (message, compact) in [
+            ("Theme: Rosé Pine (rose-pine)", "rose-pine"),
+            ("Theme: Default (default)", "default"),
+            (
+                "Theme: Everforest Dark / Medium (everforest-medium)",
+                "everforest-medium",
+            ),
+            ("Copied task", "Copied task"),
+            ("Copy sent to terminal", "Copy sent"),
+            ("Copy failed: output unavailable", "Copy failed"),
+        ] {
+            assert_eq!(Notification::new(message).compact_message(), compact);
+        }
+    }
 
     #[test]
     fn notifications_use_configured_semantic_styles_without_changing_deadlines() {

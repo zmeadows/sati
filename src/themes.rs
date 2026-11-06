@@ -100,6 +100,14 @@ impl BuiltinTheme {
             .join(", ")
     }
 
+    pub fn id(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find(|(theme, _, _)| *theme == self)
+            .expect("registered theme")
+            .1
+    }
+
     pub fn display_name(self) -> &'static str {
         Self::ALL
             .iter()
@@ -365,6 +373,7 @@ mod tests {
         for (index, &(theme, id, display)) in BuiltinTheme::ALL.iter().enumerate() {
             assert_eq!(id.parse::<BuiltinTheme>().unwrap(), theme);
             assert_eq!(theme.display_name(), display);
+            assert_eq!(theme.id(), id);
             assert_eq!(
                 theme.cycle(true),
                 BuiltinTheme::ALL[(index + 1) % BuiltinTheme::ALL.len()].0

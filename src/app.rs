@@ -527,8 +527,9 @@ impl App {
         self.styles =
             crate::styles::Styles::resolve(self.theme, &self.style_overrides, self.cli_accent);
         self.notification = Some(Notification::new(format!(
-            "Theme: {}",
-            self.theme.display_name()
+            "Theme: {} ({})",
+            self.theme.display_name(),
+            self.theme.id()
         )));
     }
 
@@ -1427,7 +1428,7 @@ mod tests {
             );
             assert_eq!(
                 app.notification.as_ref().unwrap().message(),
-                format!("Theme: {}", expected.display_name())
+                format!("Theme: {} ({})", expected.display_name(), expected.id())
             );
         }
         assert_eq!(task_state(&app), before);
@@ -1450,6 +1451,21 @@ mod tests {
         assert_eq!(app.theme, BuiltinTheme::SolarizedDark);
         press(&mut app, &fixture, KeyCode::Char('t'));
         assert_eq!(app.theme, BuiltinTheme::Default);
+        for &(theme, id, display) in BuiltinTheme::ALL {
+            for forward in [false, true] {
+                app.theme = theme.cycle(!forward);
+                press(
+                    &mut app,
+                    &fixture,
+                    KeyCode::Char(if forward { 't' } else { 'T' }),
+                );
+                assert_eq!(app.theme, theme);
+                assert_eq!(
+                    app.notification.as_ref().unwrap().message(),
+                    format!("Theme: {display} ({id})")
+                );
+            }
+        }
     }
 
     #[test]

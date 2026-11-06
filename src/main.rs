@@ -673,7 +673,7 @@ mod tests {
                             .unwrap();
                         assert_eq!(
                             app.notification.as_ref().unwrap().message(),
-                            format!("Theme: {}", expected.display_name())
+                            format!("Theme: {} ({})", expected.display_name(), expected.id())
                         );
                     }
                     assert_eq!(app.theme, expected);

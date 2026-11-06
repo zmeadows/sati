@@ -1012,7 +1012,7 @@ mod tests {
     }
     #[test]
     fn copy_feedback_uses_the_border_without_changing_the_viewport_or_counter() {
-        for width in [0, 1, 2, 8, 15, 17, 24, 80] {
+        for width in [0, 1, 2, 8, 15, 17, 24, 32, 80] {
             for keybinds in [false, true] {
                 for rounded in [false, true] {
                     let mut app = App::new(Vec::new());
@@ -1025,7 +1025,9 @@ mod tests {
                         "Copy sent to terminal",
                         "Copy failed: output unavailable",
                         "Copied task",
-                        "Theme: Everforest Dark / Medium",
+                        "Theme: Everforest Dark / Medium (everforest-medium)",
+                        "Theme: Rosé Pine (rose-pine)",
+                        "Theme: Default (default)",
                     ] {
                         app.notification = Some(crate::notification::Notification::new(notice));
                         let after = render(&mut terminal, &mut app);
@@ -1034,18 +1036,24 @@ mod tests {
                         if width >= 7 {
                             assert!(text.contains("[0/0]"));
                         }
-                        if width >= 40 {
+                        if width == 80 {
                             assert!(text.contains(notice));
-                        } else if width == 24 {
-                            assert!(text.contains(if notice.starts_with("Theme: ") {
-                                "Theme changed"
-                            } else if notice == "Copied task" {
-                                "Copied task"
-                            } else if notice.starts_with("Copy failed") {
-                                "Copy failed"
+                        } else if width == 24 || width == 32 {
+                            let compact = app.notification.as_ref().unwrap().compact_message();
+                            if notice.starts_with("Theme: ") {
+                                assert_eq!(
+                                    text.contains(compact),
+                                    compact.width() <= usize::from(width) - 8
+                                );
                             } else {
-                                "Copy sent"
-                            }));
+                                assert!(text.contains(if notice == "Copied task" {
+                                    "Copied task"
+                                } else if notice.starts_with("Copy failed") {
+                                    "Copy failed"
+                                } else {
+                                    "Copy sent"
+                                }));
+                            }
                         }
                         if width >= 2 {
                             let buffer = terminal.backend().buffer();
