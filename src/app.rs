@@ -726,32 +726,38 @@ impl App {
     }
 
     fn clear_unmarked(&mut self, storage: &Storage) -> Result<()> {
-        if self.tasks.iter().all(|task| task.carried) {
+        // Only the current tab's unmarked tasks are cleared; other tabs are untouched.
+        let survivors: Vec<usize> = (0..self.tasks.len())
+            .filter(|&index| !self.is_visible(index) || self.tasks[index].carried)
+            .collect();
+        let removed = self.tasks.len() - survivors.len();
+
+        if removed == 0 {
             return Ok(());
         }
 
-        // Keep a surviving selection, otherwise choose the closest original position.
+        // Keep the closest surviving task in this tab, otherwise the closest anywhere.
         let anchor = self.list.selected().unwrap_or(0);
+        let closest = |pool: &[usize]| {
+            pool.iter()
+                .copied()
+                .min_by_key(|index| index.abs_diff(anchor))
+        };
 
-        let selected = self
-            .tasks
+        let visible_survivors: Vec<usize> = survivors
             .iter()
-            .enumerate()
-            .filter(|(_, task)| task.carried)
-            .enumerate()
-            .min_by_key(|(_, (index, _))| index.abs_diff(anchor))
-            .map(|(index, _)| index);
-
-        let tasks: Vec<_> = self
-            .tasks
-            .iter()
-            .filter(|task| task.carried)
-            .cloned()
+            .copied()
+            .filter(|&index| self.is_visible(index))
             .collect();
+        let kept = visible_survivors.len();
+        let chosen = closest(&visible_survivors).or_else(|| closest(&survivors));
+        let selected = chosen.and_then(|old| survivors.iter().position(|&index| index == old));
 
-        let kept = tasks.len();
-        let removed = self.tasks.len() - kept;
-        let cleared = format!("{removed} {}", task_noun(removed));
+        let tasks = survivors
+            .iter()
+            .map(|&index| self.tasks[index].clone())
+            .collect();
+        let cleared = self.tasks_phrase(removed, "");
 
         self.replace(tasks, selected, format!("clear {cleared}"), storage)?;
 
@@ -797,33 +803,71 @@ impl App {
     }
 
     fn clear_completed(&mut self, storage: &Storage) -> Result<()> {
-        if !self.tasks.iter().any(|task| task.completed) {
-            self.notify("No completed tasks");
+        // Only the current tab's completed tasks are cleared; other tabs are untouched.
+        let survivors: Vec<usize> = (0..self.tasks.len())
+            .filter(|&index| !self.is_visible(index) || !self.tasks[index].completed)
+            .collect();
+        let removed = self.tasks.len() - survivors.len();
+
+        if removed == 0 {
+            let section = self.scope_label().map(|label| format!("{label} "));
+            self.notify(format!("No completed {}tasks", section.unwrap_or_default()));
 
             return Ok(());
         }
 
-        // Keep the selected task if it survives, otherwise choose the next survivor
-        // or the previous one when there are no survivors after the selection.
-        let before = self.tasks[..self.list.selected().unwrap_or(0)]
-            .iter()
-            .filter(|task| !task.completed)
-            .count();
-        let mut tasks = self.tasks.clone();
-        tasks.retain(|task| !task.completed);
-
-        let selected = if tasks.is_empty() {
-            None
-        } else {
-            Some(before.min(tasks.len() - 1))
+        // Keep the selected task if it survives, otherwise the next survivor or the previous
+        // one, preferring survivors in this tab.
+        let anchor = self.list.selected().unwrap_or(0);
+        let pick = |pool: &[usize]| {
+            pool.iter()
+                .copied()
+                .find(|&index| index >= anchor)
+                .or_else(|| pool.last().copied())
         };
 
-        let removed = self.tasks.len() - tasks.len();
-        let cleared = format!("{removed} completed {}", task_noun(removed));
+        let visible_survivors: Vec<usize> = survivors
+            .iter()
+            .copied()
+            .filter(|&index| self.is_visible(index))
+            .collect();
+        let chosen = pick(&visible_survivors).or_else(|| pick(&survivors));
+        let selected = chosen.and_then(|old| survivors.iter().position(|&index| index == old));
+
+        let tasks = survivors
+            .iter()
+            .map(|&index| self.tasks[index].clone())
+            .collect();
+        let cleared = self.tasks_phrase(removed, "completed ");
+
         self.replace(tasks, selected, format!("clear {cleared}"), storage)?;
         self.notify(format!("Cleared {cleared}"));
 
         Ok(())
+    }
+
+    // How the current tab is named in messages: its section label, "unsectioned", or
+    // nothing in [*].
+    pub fn scope_label(&self) -> Option<String> {
+        match &self.view {
+            SectionView::All => None,
+            SectionView::Unsectioned => Some("unsectioned".to_owned()),
+            SectionView::Named(_) => self
+                .section_tabs()
+                .into_iter()
+                .find(|(view, _)| *view == self.view)
+                .map(|(_, label)| label),
+        }
+    }
+
+    // "2 completed Work tasks", "1 task", ...
+    fn tasks_phrase(&self, count: usize, kind: &str) -> String {
+        let section = self
+            .scope_label()
+            .map(|label| format!("{label} "))
+            .unwrap_or_default();
+
+        format!("{count} {kind}{section}{}", task_noun(count))
     }
 
     fn cycle_theme(&mut self, forward: bool) {
@@ -855,7 +899,14 @@ impl App {
     }
 
     pub fn copy_markdown(&mut self, output: &mut impl std::io::Write) {
-        match crate::export::copy(&self.tasks, output) {
+        // Inside a tab, copy only what that tab shows.
+        let visible: Vec<Task> = self
+            .visible_indices()
+            .into_iter()
+            .map(|index| self.tasks[index].clone())
+            .collect();
+
+        match crate::export::copy(&visible, output) {
             Ok(()) => self.notify("Copy sent to terminal"),
             // Failures are always reported, even when confirmations are disabled.
             Err(error) => {
@@ -1314,7 +1365,10 @@ impl App {
                     self.notify("Deleted task");
                 }
             }
-            KeyCode::Char('D') if self.tasks.iter().any(|task| !task.carried) => {
+            KeyCode::Char('D')
+                if (0..self.tasks.len())
+                    .any(|index| self.is_visible(index) && !self.tasks[index].carried) =>
+            {
                 self.mode = Mode::ConfirmClear
             }
             _ => {}
@@ -2306,6 +2360,91 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Char('/'));
         app.paste("work");
         assert_eq!(app.list.selected(), Some(0));
+    }
+
+    #[test]
+    fn clearing_completed_in_a_section_affects_only_that_section() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c", "Work: d"]);
+        for index in [0, 1, 3] {
+            app.tasks[index].completed = true;
+        }
+        app.show_section(SectionView::Named("work".into()));
+
+        press(&mut app, &fixture, KeyCode::Char('x'));
+
+        assert_eq!(texts(&app), ["Home: b", "Work: c"]);
+        assert_eq!(app.list.selected(), Some(1));
+        assert_eq!(app.view, SectionView::Named("work".into()));
+        assert_eq!(notice(&app), Some("Cleared 2 completed Work tasks"));
+
+        press(&mut app, &fixture, KeyCode::Char('x'));
+        assert_eq!(notice(&app), Some("No completed Work tasks"));
+
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(notice(&app), Some("Undid: clear 2 completed Work tasks"));
+        assert_eq!(app.tasks.len(), 4);
+
+        app.show_section(SectionView::All);
+        press(&mut app, &fixture, KeyCode::Char('x'));
+        assert_eq!(texts(&app), ["Work: c"]);
+        assert_eq!(notice(&app), Some("Cleared 3 completed tasks"));
+    }
+
+    #[test]
+    fn clearing_unmarked_in_a_section_keeps_other_sections_and_carried_tasks() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c", "Work: d"]);
+        app.tasks[2].carried = true;
+        app.show_section(SectionView::Named("work".into()));
+        app.list.select(Some(3));
+
+        press(&mut app, &fixture, KeyCode::Char('D'));
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(texts(&app), ["Home: b", "Work: c"]);
+        assert_eq!(app.list.selected(), Some(1));
+        assert_eq!(app.view, SectionView::Named("work".into()));
+        assert_eq!(notice(&app), Some("Cleared 2 Work tasks, kept 1 carried"));
+
+        // Nothing unmarked is left in this tab, so D does not ask.
+        press(&mut app, &fixture, KeyCode::Char('D'));
+        assert_eq!(app.mode, Mode::Normal);
+
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.show_section(SectionView::Named("work".into()));
+
+        press(&mut app, &fixture, KeyCode::Char('D'));
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(texts(&app), ["Home: b"]);
+        assert_eq!(app.list.selected(), Some(0));
+        assert_eq!(app.view, SectionView::All);
+        assert_eq!(notice(&app), Some("Cleared 1 Work task"));
+    }
+
+    #[test]
+    fn copying_in_a_tab_copies_only_its_tasks_with_full_text() {
+        let mut app = app_with_texts(&["Work: a", "plain", "Work: b"]);
+
+        for (view, shown) in [
+            (SectionView::Named("work".into()), vec![0, 2]),
+            (SectionView::Unsectioned, vec![1]),
+            (SectionView::All, vec![0, 1, 2]),
+        ] {
+            app.show_section(view);
+            let mut output = Vec::new();
+            app.copy_markdown(&mut output);
+
+            let tasks: Vec<_> = shown
+                .iter()
+                .map(|&index| app.tasks[index].clone())
+                .collect();
+            let mut expected = Vec::new();
+            crate::export::copy(&tasks, &mut expected).unwrap();
+
+            assert_eq!(output, expected);
+        }
     }
 
     #[test]

@@ -128,7 +128,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     );
 
     if app.mode == Mode::ConfirmClear {
-        draw_confirmation(frame, area, &app.styles);
+        let section = app.scope_label().map(|label| format!("{label} "));
+        let question = format!("Clear unmarked {}tasks?", section.unwrap_or_default());
+        draw_confirmation(frame, area, &app.styles, &question);
     }
 
     rows
@@ -661,10 +663,17 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
 }
 
 fn shortcut_available(app: &App, key: &str) -> bool {
+    // Clearing applies to the current tab, so offer it only for tasks shown there.
+    let visible = |index: &usize| app.is_visible(*index);
+
     match key {
-        "D" => app.tasks.iter().any(|task| !task.carried),
+        "D" => (0..app.tasks.len())
+            .filter(visible)
+            .any(|index| !app.tasks[index].carried),
         "u" => app.can_undo(),
-        "x" => app.tasks.iter().any(|task| task.completed),
+        "x" => (0..app.tasks.len())
+            .filter(visible)
+            .any(|index| app.tasks[index].completed),
         _ => true,
     }
 }
@@ -924,7 +933,7 @@ fn draw_input_line(
     }
 }
 
-fn draw_confirmation(frame: &mut Frame, area: Rect, styles: &Styles) {
+fn draw_confirmation(frame: &mut Frame, area: Rect, styles: &Styles, question: &str) {
     let width = area.width.min(40);
     let height = area.height.min(7);
 
@@ -944,17 +953,17 @@ fn draw_confirmation(frame: &mut Frame, area: Rect, styles: &Styles) {
     let lines = if inner.height >= 5 {
         vec![
             Line::raw(""),
-            Line::raw("Clear unmarked tasks?"),
+            Line::raw(question),
             Line::raw(""),
             Line::raw("Enter: Confirm    Esc: Cancel"),
         ]
     } else if inner.height >= 2 {
         vec![
-            Line::raw("Clear unmarked tasks?"),
+            Line::raw(question),
             Line::raw("Enter: Confirm  Esc: Cancel"),
         ]
     } else {
-        vec![Line::raw("Clear unmarked tasks?")]
+        vec![Line::raw(question)]
     };
 
     frame.render_widget(
@@ -1117,6 +1126,33 @@ mod tests {
         for (area, _) in &app.tab_targets {
             assert!(area.right() < 29);
         }
+    }
+
+    #[test]
+    fn clearing_hints_and_the_confirmation_follow_the_current_tab() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.tasks[1].completed = true;
+        let mut terminal = test_terminal(80, 14);
+
+        render(&mut terminal, &mut app);
+        assert!(screen(&terminal).contains("Clear done"));
+
+        app.show_section(crate::app::SectionView::Named("work".into()));
+        render(&mut terminal, &mut app);
+        assert!(!screen(&terminal).contains("Clear done"));
+
+        app.key(
+            ratatui::crossterm::event::KeyEvent::new(
+                ratatui::crossterm::event::KeyCode::Char('D'),
+                ratatui::crossterm::event::KeyModifiers::NONE,
+            ),
+            &fixture.storage,
+        )
+        .unwrap();
+        render(&mut terminal, &mut app);
+
+        assert!(screen(&terminal).contains("Clear unmarked Work tasks?"));
     }
 
     #[test]

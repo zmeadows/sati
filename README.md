@@ -107,6 +107,8 @@ any task has a section, a tab bar appears at the top:
 
 Press `Tab` / `Shift+Tab` or click a tab to switch. A section tab hides the shared prefix
 and keeps navigation, counts, reordering (`J` / `K`), and search within its own tasks.
+`x`, `D`, and `c` clear or copy only the current tab's tasks; `sati export` always
+exports the whole list.
 If a change moves the selected task out of the tab (for example editing its prefix, or
 undo), sati follows the task to its section. Deleting a section's last task returns to
 `[*]`. The current tab is remembered between sessions. `Work:Fix`, URLs such as
@@ -283,9 +285,10 @@ Use `--output PATH` or `-o PATH` for file output. Existing files require `--forc
 sati's own state files are protected. Carried tasks export as ordinary unchecked
 items, with task order and literal text preserved.
 
-Press `c` in the checklist to send the same Markdown to the terminal clipboard
-using OSC 52. The brief “Copy sent to terminal” message clears on subsequent
-activity; clipboard acceptance depends on terminal and multiplexer support.
+Press `c` in the checklist to send the same Markdown, limited to the current section
+tab, to the terminal clipboard using OSC 52. The brief “Copy sent to terminal” message
+clears on subsequent activity; clipboard acceptance depends on terminal and
+multiplexer support.
 `--no-notifications` (or `notifications = false`) hides this and sati's other brief
 messages (undo/redo descriptions, wrap, delete and clear confirmations, and hints such as
 “Nothing to undo”), but a failed copy is still reported.
