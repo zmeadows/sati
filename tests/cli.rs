@@ -32,29 +32,6 @@ fn version_does_not_hide_invalid_arguments() {
 }
 
 #[test]
-fn deprecated_add_flag_is_an_undocumented_no_op() {
-    for argument in ["--help", "--version"] {
-        let run = |legacy: bool| {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_sati"));
-            command.arg(argument).stdin(Stdio::null());
-
-            if legacy {
-                command.arg("--add-to-bottom");
-            }
-
-            command.output().unwrap()
-        };
-
-        let normal = run(false);
-        let legacy = run(true);
-        assert!(normal.status.success() && legacy.status.success());
-        assert_eq!(normal.stdout, legacy.stdout);
-        assert_eq!(normal.stderr, legacy.stderr);
-        assert!(!String::from_utf8_lossy(&normal.stdout).contains("--add-to-bottom"));
-    }
-}
-
-#[test]
 fn ascii_markers_are_documented_and_combine_with_existing_options() {
     let output = Command::new(env!("CARGO_BIN_EXE_sati"))
         .args(["--ascii-markers", "--help"])

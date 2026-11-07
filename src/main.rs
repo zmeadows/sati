@@ -483,8 +483,6 @@ fn parse_arguments(
             }
 
             options.config = Some(path.into());
-        } else if argument == "--add-to-bottom" {
-            // Accepted for compatibility with v0.1.0; insertion is now key-specific.
         } else if argument == "--version" {
             options.print_version = true;
         } else if argument == "--accent" {
@@ -1309,12 +1307,6 @@ mod tests {
 
         assert!(options.rounded);
         assert!(options.wrap);
-        assert_eq!(
-            parse_arguments(["--add-to-bottom".into()])
-                .unwrap()
-                .unwrap(),
-            defaults
-        );
         assert_eq!(parse_arguments(["--help".into()]).unwrap(), None);
         assert!(parse_arguments(["--unknown".into()]).is_err());
     }
