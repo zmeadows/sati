@@ -83,6 +83,11 @@ Then run `sati`.
 | Next / previous color theme | `t` / `T` |
 | Quit | `q` |
 
+As in Vim, type a count before navigating or reordering to repeat it: `5j` moves
+down five tasks and `3K` moves the selected task up three. Counts also work with the
+arrow and `Ctrl+N` / `Ctrl+P` aliases, and counted moves stop at the first or last
+task instead of wrapping. `Esc` cancels a count.
+
 Task copies use one in-memory register, separate from the system clipboard. Pasted
 tasks start incomplete and unmarked; the register remains available for repeated
 pastes until exit. `c` still copies the entire checklist as Markdown to the system

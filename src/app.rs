@@ -102,6 +102,8 @@ pub struct App {
     pub viewport_height: u16,
     pub reveal_selection: bool,
     pub notification: Option<Notification>,
+    // A Vim-style count typed before a motion; transient and never saved.
+    pending_count: Option<usize>,
     task_register: Option<String>,
     last_search_query: Option<String>,
     history: VecDeque<UndoState>,
@@ -131,6 +133,7 @@ impl App {
             viewport_height: 0,
             reveal_selection: true,
             notification: None,
+            pending_count: None,
             task_register: None,
             last_search_query: None,
             history: VecDeque::new(),
@@ -166,7 +169,7 @@ impl App {
         Ok(())
     }
 
-    pub fn navigate(&mut self, forward: bool) {
+    pub fn navigate(&mut self, forward: bool, count: Option<usize>) {
         if self.tasks.is_empty() {
             return;
         }
@@ -174,12 +177,14 @@ impl App {
         let last = self.tasks.len() - 1;
         let current = self.list.selected().unwrap_or(0);
 
-        let next = if forward {
-            if current == last { 0 } else { current + 1 }
-        } else if current == 0 {
-            last
-        } else {
-            current - 1
+        // Like Vim, a counted motion stops at the ends; a plain motion wraps around.
+        let next = match (count, forward) {
+            (Some(count), true) => current.saturating_add(count).min(last),
+            (Some(count), false) => current.saturating_sub(count),
+            (None, true) if current == last => 0,
+            (None, true) => current + 1,
+            (None, false) if current == 0 => last,
+            (None, false) => current - 1,
         };
 
         self.list.select(Some(next));
@@ -514,21 +519,27 @@ impl App {
         self.replace(tasks, selected, storage)
     }
 
-    fn move_selected(&mut self, down: bool, storage: &Storage) -> Result<()> {
+    fn move_selected(&mut self, down: bool, count: usize, storage: &Storage) -> Result<()> {
         let Some(index) = self.list.selected() else {
             return Ok(());
         };
 
-        if (down && index == self.tasks.len() - 1) || (!down && index == 0) {
+        let target = if down {
+            index.saturating_add(count).min(self.tasks.len() - 1)
+        } else {
+            index.saturating_sub(count)
+        };
+
+        if target == index {
             return Ok(());
         }
 
-        let next = if down { index + 1 } else { index - 1 };
-
+        // One remove/insert keeps a counted move to a single save and undo step.
         let mut tasks = self.tasks.clone();
-        tasks.swap(index, next);
+        let task = tasks.remove(index);
+        tasks.insert(target, task);
 
-        self.replace(tasks, Some(next), storage)
+        self.replace(tasks, Some(target), storage)
     }
 
     fn clear_completed(&mut self, storage: &Storage) -> Result<()> {
@@ -600,12 +611,15 @@ impl App {
 
         self.notification = None;
 
+        // Every accepted key consumes a pending count, even shortcuts that ignore it.
+        let count = self.pending_count.take();
+
         if self.consume_modified_key(key, storage)? {
             return Ok(false);
         }
 
         match self.mode {
-            Mode::Normal => self.handle_normal_key(key, storage),
+            Mode::Normal => self.handle_normal_key(key, count, storage),
             Mode::Adding(_, _) | Mode::Editing { .. } | Mode::Searching { .. } => {
                 self.handle_text_input_key(key, storage)?;
                 Ok(false)
@@ -900,8 +914,19 @@ impl App {
         Ok(())
     }
 
-    fn handle_normal_key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
+    fn handle_normal_key(
+        &mut self,
+        key: KeyEvent,
+        count: Option<usize>,
+        storage: &Storage,
+    ) -> Result<bool> {
         match key.code {
+            // Like Vim, 1-9 start a count and 0 only continues one.
+            KeyCode::Char(digit @ '0'..='9') if digit != '0' || count.is_some() => {
+                let value = digit.to_digit(10).unwrap() as usize;
+                let count = count.unwrap_or(0).saturating_mul(10).saturating_add(value);
+                self.pending_count = Some(count);
+            }
             KeyCode::Char('/') => self.start_search(),
             KeyCode::Char('n' | 'N')
                 if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
@@ -939,16 +964,16 @@ impl App {
             }
             KeyCode::Char('m') => self.toggle_carryover(storage)?,
             KeyCode::Char('x') => self.clear_completed(storage)?,
-            KeyCode::Char('J') => self.move_selected(true, storage)?,
-            KeyCode::Char('K') => self.move_selected(false, storage)?,
+            KeyCode::Char('J') => self.move_selected(true, count.unwrap_or(1), storage)?,
+            KeyCode::Char('K') => self.move_selected(false, count.unwrap_or(1), storage)?,
             KeyCode::Char('j') | KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.move_selected(true, storage)?;
+                self.move_selected(true, count.unwrap_or(1), storage)?;
             }
             KeyCode::Char('k') | KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.move_selected(false, storage)?;
+                self.move_selected(false, count.unwrap_or(1), storage)?;
             }
-            KeyCode::Char('j') | KeyCode::Down => self.navigate(true),
-            KeyCode::Char('k') | KeyCode::Up => self.navigate(false),
+            KeyCode::Char('j') | KeyCode::Down => self.navigate(true, count),
+            KeyCode::Char('k') | KeyCode::Up => self.navigate(false, count),
             KeyCode::Tab | KeyCode::BackTab
                 if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
             {
@@ -1016,6 +1041,7 @@ impl App {
 
     pub fn paste(&mut self, text: &str) {
         self.notification = None;
+        self.pending_count = None;
 
         if let Mode::Adding(input, _)
         | Mode::Editing { input, .. }
@@ -1035,6 +1061,7 @@ impl App {
 
     pub fn mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
         self.notification = None;
+        self.pending_count = None;
 
         if self.mode != Mode::Normal || !rows.contains((event.column, event.row).into()) {
             return Ok(());
@@ -3680,6 +3707,262 @@ mod tests {
         assert_eq!(app.list.selected(), Some(1));
     }
 
+    fn type_keys(app: &mut App, fixture: &Fixture, keys: &str) {
+        for character in keys.chars() {
+            press(app, fixture, KeyCode::Char(character));
+        }
+    }
+
+    #[test]
+    fn counts_move_the_selection_by_that_many_tasks_and_are_consumed() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(30);
+
+        for (keys, expected) in [("5j", 5), ("j", 6), ("12j", 18), ("10k", 8), ("k", 7)] {
+            type_keys(&mut app, &fixture, keys);
+            assert_eq!(app.list.selected(), Some(expected), "{keys}");
+        }
+
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn counted_navigation_stops_at_the_ends_while_plain_motions_wrap() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(10);
+        app.list.select(Some(7));
+
+        for (keys, expected) in [
+            ("5j", 9),
+            ("3j", 9),
+            ("j", 0),
+            ("4k", 0),
+            ("k", 9),
+            ("2k", 7),
+            ("99999999999999999999999999j", 9),
+            ("99999999999999999999999999k", 0),
+        ] {
+            type_keys(&mut app, &fixture, keys);
+            assert_eq!(app.list.selected(), Some(expected), "{keys}");
+        }
+    }
+
+    #[test]
+    fn arrow_and_control_aliases_accept_counts() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(10);
+
+        for (count, key, expected) in [
+            ('3', KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 3),
+            ('2', KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), 1),
+            (
+                '4',
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+                5,
+            ),
+            (
+                '2',
+                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+                3,
+            ),
+        ] {
+            press(&mut app, &fixture, KeyCode::Char(count));
+            press(&mut app, &fixture, key);
+
+            assert_eq!(app.list.selected(), Some(expected), "{count} {key:?}");
+        }
+    }
+
+    #[test]
+    fn zero_continues_a_count_but_does_not_start_one() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(20);
+
+        type_keys(&mut app, &fixture, "0j");
+        assert_eq!(app.list.selected(), Some(1));
+
+        type_keys(&mut app, &fixture, "10j");
+        assert_eq!(app.list.selected(), Some(11));
+    }
+
+    #[test]
+    fn any_other_input_discards_a_pending_count() {
+        let fixture = Fixture::new();
+
+        for discard in 0..5 {
+            let mut app = app_with_tasks(10);
+            press(&mut app, &fixture, KeyCode::Char('5'));
+
+            match discard {
+                0 => {
+                    press(&mut app, &fixture, KeyCode::Esc);
+                }
+                1 => {
+                    press(&mut app, &fixture, KeyCode::Char('w'));
+                }
+                2 => {
+                    press(
+                        &mut app,
+                        &fixture,
+                        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+                    );
+                }
+                3 => {
+                    let scroll = MouseEvent {
+                        kind: MouseEventKind::ScrollDown,
+                        column: 0,
+                        row: 0,
+                        modifiers: KeyModifiers::NONE,
+                    };
+                    app.mouse(scroll, Rect::default(), &fixture.storage)
+                        .unwrap();
+                }
+                _ => app.paste("text"),
+            }
+
+            press(&mut app, &fixture, KeyCode::Char('j'));
+
+            assert_eq!(app.list.selected(), Some(1), "discard {discard}");
+        }
+    }
+
+    #[test]
+    fn digit_repeats_and_releases_do_not_change_a_pending_count() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(60);
+        press(&mut app, &fixture, KeyCode::Char('5'));
+
+        for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+            let digit = KeyEvent::new_with_kind(KeyCode::Char('2'), KeyModifiers::NONE, kind);
+            press(&mut app, &fixture, digit);
+        }
+
+        press(&mut app, &fixture, KeyCode::Char('j'));
+
+        assert_eq!(app.list.selected(), Some(5));
+    }
+
+    #[test]
+    fn counted_reordering_moves_a_task_as_one_undoable_change() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(6);
+        app.list.select(Some(1));
+        let original = app.tasks.clone();
+
+        type_keys(&mut app, &fixture, "3J");
+
+        let order: Vec<_> = [0, 2, 3, 4, 1, 5]
+            .map(|index| original[index].clone())
+            .into();
+        assert_eq!(app.tasks, order);
+        assert_eq!(app.list.selected(), Some(4));
+        assert_eq!(app.history.len(), 1);
+        assert_eq!(fixture.storage.load().unwrap(), order);
+
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.tasks, original);
+        assert_eq!(app.list.selected(), Some(1));
+
+        type_keys(&mut app, &fixture, "2K");
+        assert_eq!(app.tasks[0], original[1]);
+        assert_eq!(app.list.selected(), Some(0));
+
+        type_keys(&mut app, &fixture, "9J");
+        assert_eq!(app.tasks[5], original[1]);
+        assert_eq!(app.list.selected(), Some(5));
+
+        press(&mut app, &fixture, KeyCode::Char('2'));
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT),
+        );
+        assert_eq!(app.tasks[3], original[1]);
+        assert_eq!(app.list.selected(), Some(3));
+
+        press(&mut app, &fixture, KeyCode::Char('2'));
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::SHIFT),
+        );
+        assert_eq!(app.tasks[5], original[1]);
+        assert_eq!(app.history.len(), 4);
+    }
+
+    #[test]
+    fn counted_reordering_at_the_ends_is_a_no_op() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(4);
+        let original = app.tasks.clone();
+
+        for (selected, keys) in [(3, "3J"), (0, "2K")] {
+            app.list.select(Some(selected));
+            type_keys(&mut app, &fixture, keys);
+
+            assert_eq!(app.tasks, original);
+            assert_eq!(app.list.selected(), Some(selected));
+        }
+
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn failed_counted_reordering_preserves_state_and_discards_the_count() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(6);
+        type_keys(&mut app, &fixture, "j");
+        fixture.storage.save(&app.tasks).unwrap();
+        let before = task_state(&app);
+        block_saves(&fixture);
+
+        press(&mut app, &fixture, KeyCode::Char('3'));
+        let result = app.key(
+            KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE),
+            &fixture.storage,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(task_state(&app), before);
+
+        restore_saves(&fixture);
+        press(&mut app, &fixture, KeyCode::Char('J'));
+
+        assert_eq!(app.list.selected(), Some(2));
+    }
+
+    #[test]
+    fn digits_remain_text_in_input_modes_and_empty_lists_ignore_counts() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+
+        for start in ['a', 'e', '/'] {
+            press(&mut app, &fixture, KeyCode::Char(start));
+            type_keys(&mut app, &fixture, "5j");
+
+            let text = match &app.mode {
+                Mode::Adding(input, _)
+                | Mode::Editing { input, .. }
+                | Mode::Searching { input, .. } => input.text().to_owned(),
+                _ => panic!("expected an input mode"),
+            };
+            assert!(text.ends_with("5j"), "{start}");
+
+            press(&mut app, &fixture, KeyCode::Esc);
+            assert!(app.pending_count.is_none());
+        }
+
+        let mut empty = app_with_tasks(0);
+        type_keys(&mut empty, &fixture, "5j3J");
+
+        assert!(empty.tasks.is_empty());
+        assert_eq!(empty.list.selected(), None);
+        assert!(empty.pending_count.is_none());
+        assert!(!fixture.task_path().exists());
+    }
+
     #[test]
     fn repeated_navigation_wraps_without_modifying_tasks() {
         let fixture = Fixture::new();
@@ -3932,7 +4215,7 @@ mod tests {
             assert_ne!(app.tasks, original);
 
             let modified = app.tasks.clone();
-            app.navigate(true);
+            app.navigate(true, None);
             let selected_before_undo = app.list.selected();
             press(&mut app, &fixture, Char('u'));
 

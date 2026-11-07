@@ -35,6 +35,7 @@
 - The normal list selection refers to a **task**, not a wrapped display row. Keep indices valid after deletion, reordering, clearing, and undo.
 - `tasks.json` stores `{tasks, selected}`. Temporarily accept legacy arrays and migrate on the next save or clean exit. Save resulting selection with mutations and undo/redo; navigation-only focus is saved on clean exit, without persisting temporary search selection.
 - `a` appends, `o` inserts below selection, and `O` inserts above selection.
+- `j`/`k`/`J`/`K` and their aliases accept a Vim-style count (`5j`); counted moves clamp at the ends while plain `j`/`k` wrap, and a counted reorder is one undo step. A pending count is transient, never saved or shown, and any other key, mouse event, or paste discards it.
 - Undo and redo each hold at most **256 in-memory snapshots** of tasks and selection. Only successful mutations enter ordinary history and clear redo. Undo/redo transfer snapshots between stacks after saving. Navigation, cancellation, and no-ops leave both histories unchanged.
 - Undo/redo history is session-only. Never read, write, or delete legacy `history.json` files. Undo/redo still save their resulting task lists to authoritative `tasks.json` before transferring snapshots.
 
