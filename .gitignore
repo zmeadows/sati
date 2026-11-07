@@ -5,3 +5,8 @@
 .vscode/
 .idea/
 CLAUDE.md
+.DS_Store
+
+# Claude Code: personal settings and internal state. Shared .claude/settings.json stays committable.
+.claude/settings.local.json
+.claude/.cc-writes/
