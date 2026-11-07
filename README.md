@@ -24,7 +24,7 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 - **Sections.** Start a task with `Name: ` to group it; a tab bar then lets you focus on one section at a time.
 - **Carryover.** Mark unfinished tasks with `m` (`[↪]`) to keep them when clearing the list.
 - **Undo and redo.** Up to 256 changes in either direction during the current session.
-- **Display options.** Wrap long tasks and change some style settings with command-line flags.
+- **Display options.** Wrap long tasks and change some style settings with command-line flags. When tasks don't fit, a scrollbar on the right border shows where you are.
 
 ## Suggested usage
 
@@ -99,7 +99,7 @@ clipboard.
 Start a task with one word, a colon, and a space, such as `Work: Fix bug`, to put it in
 the `Work` section. Sections are optional: with none, sati looks exactly as before. Once
 any task has a section, tabs appear on the top border, with the current one shown in
-the accent color:
+the accent color and a blank row separating them from the tasks:
 
 - `[*]` shows every task in your order, with each section prefix in bold.
 - `[-]` comes next and shows tasks without a section, when there are any.

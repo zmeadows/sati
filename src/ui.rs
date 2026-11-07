@@ -90,7 +90,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         }
     }
 
-    let rows = block.inner(list_area);
+    let mut rows = block.inner(list_area);
     frame.render_widget(block, list_area);
 
     if !tabs.is_empty() && list_area.height >= 2 {
@@ -99,6 +99,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         let strip_width = list_area.width.saturating_sub(2 + title_width as u16);
         let strip = Rect::new(list_area.x + 1, list_area.y, strip_width, 1);
         app.tab_targets = draw_section_tabs(frame, app, &tabs, strip);
+
+        // Leave a blank row under the tabs so they don't merge with the first task,
+        // unless that would leave no room for tasks.
+        if rows.height >= 2 {
+            rows.y += 1;
+            rows.height -= 1;
+        }
     }
 
     draw_tasks(frame, app, rows);
@@ -242,6 +249,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
     } = layout;
 
     app.row_tasks = row_tasks;
+    let total_rows = lines.len();
 
     if lines.is_empty() {
         frame.render_widget(
@@ -261,7 +269,29 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         ),
         area,
     );
+    draw_scrollbar(frame, area, total_rows, visible.start, app.styles.muted);
     draw_inline_input(frame, app, area, input_row, visible);
+}
+
+// When the rows don't fit, draw a thumb on the right border showing how much is visible and
+// where. Drawing on the border keeps the list's full width.
+fn draw_scrollbar(frame: &mut Frame, area: Rect, total: usize, scroll: usize, style: Style) {
+    let height = usize::from(area.height);
+    let border = area.right();
+
+    if height == 0 || total <= height || border >= frame.area().right() {
+        return;
+    }
+
+    let thumb = ((height * height + total / 2) / total).clamp(1, height);
+    let hidden = total - height;
+    let top = ((scroll * (height - thumb) + hidden / 2) / hidden).min(height - thumb);
+
+    for row in top..top + thumb {
+        frame
+            .buffer_mut()
+            .set_string(border, area.y + row as u16, "┃", style);
+    }
 }
 
 fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>) -> TaskLayout {
@@ -1056,7 +1086,9 @@ mod tests {
         let mut plain = app_with_texts(&["plain", "https://example.com"]);
         plain.keybinds = false;
         let mut terminal = test_terminal(40, 8);
-        render(&mut terminal, &mut plain);
+        let rows = render(&mut terminal, &mut plain);
+
+        assert_eq!(rows.y, 1);
 
         assert!(plain.tab_targets.is_empty());
         assert!(row_text(&terminal, 0).starts_with("┌──────"));
@@ -1066,12 +1098,13 @@ mod tests {
         app.styles.accent = app.styles.accent.fg(Color::Rgb(20, 40, 60));
         let rows = render(&mut terminal, &mut app);
 
-        assert_eq!(rows.y, 1);
+        assert_eq!(rows.y, 2);
         assert_eq!(
             row_text(&terminal, 0),
             "┌─ [*] ─ [-] ─ home ─ Work ────── sati ┐"
         );
-        assert!(row_text(&terminal, 1).contains("Work: a"));
+        assert_eq!(row_text(&terminal, 1).trim_matches(['│', ' ']), "");
+        assert!(row_text(&terminal, 2).contains("Work: a"));
 
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(3, 0)].fg, Color::Rgb(20, 40, 60));
@@ -1105,8 +1138,9 @@ mod tests {
         assert!(screen.contains("fix bug") && screen.contains("email"));
         assert!(!screen.contains("Work: ") && !screen.contains("laundry"));
         assert_eq!(app.row_tasks, [Some(0), Some(2)]);
+        // Tabs sit on the border and the row under them is left blank, so tasks start on row 2.
         assert!(
-            !terminal.backend().buffer()[(7, 1)]
+            !terminal.backend().buffer()[(7, 2)]
                 .modifier
                 .contains(Modifier::BOLD)
         );
@@ -1114,9 +1148,9 @@ mod tests {
         app.show_section(crate::app::SectionView::All);
         render(&mut terminal, &mut app);
 
-        assert!(row_text(&terminal, 1).contains("Work: fix bug"));
+        assert!(row_text(&terminal, 2).contains("Work: fix bug"));
         assert!(
-            terminal.backend().buffer()[(7, 1)]
+            terminal.backend().buffer()[(7, 2)]
                 .modifier
                 .contains(Modifier::BOLD)
         );
@@ -1186,6 +1220,11 @@ mod tests {
         render(&mut two_rows, &mut app);
         assert!(!app.tab_targets.is_empty());
 
+        // With one inner row, the task keeps it instead of the blank row.
+        let mut three_rows = test_terminal(30, 3);
+        let rows = render(&mut three_rows, &mut app);
+        assert_eq!((rows.y, rows.height), (1, 1));
+
         let mut one_row = test_terminal(30, 1);
         render(&mut one_row, &mut app);
         assert!(app.tab_targets.is_empty());
@@ -1235,7 +1274,8 @@ mod tests {
         let mut terminal = test_terminal(30, 8);
         render(&mut terminal, &mut app);
 
-        let row = row_text(&terminal, 2);
+        // The add row follows the one visible task, below the blank row under the tabs.
+        let row = row_text(&terminal, 3);
         assert!(row.contains("add › Work:"), "{row}");
 
         let cursor = terminal.get_cursor_position().unwrap();
@@ -1251,6 +1291,112 @@ mod tests {
                 .lines()
                 .all(|line| line.chars().count() <= 12)
         );
+    }
+
+    fn thumb_rows(terminal: &Terminal<TestBackend>, x: u16) -> Vec<u16> {
+        let buffer = terminal.backend().buffer();
+
+        (0..buffer.area.height)
+            .filter(|&y| buffer[(x, y)].symbol() == "┃")
+            .collect()
+    }
+
+    #[test]
+    fn scrollbar_appears_on_the_right_border_only_when_tasks_overflow() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut terminal = test_terminal(30, 8);
+        let mut few = App::new(
+            (0..3)
+                .map(|index| Task {
+                    carried: false,
+                    text: format!("task {index}"),
+                    completed: false,
+                })
+                .collect(),
+        );
+        few.keybinds = false;
+        render(&mut terminal, &mut few);
+
+        assert!(thumb_rows(&terminal, 29).is_empty());
+
+        let mut app = App::new(
+            (0..20)
+                .map(|index| Task {
+                    carried: false,
+                    text: format!("task {index}"),
+                    completed: false,
+                })
+                .collect(),
+        );
+        app.keybinds = false;
+        let rows = render(&mut terminal, &mut app);
+        let first = rows.y;
+        let last = rows.bottom() - 1;
+
+        // Six visible rows of twenty: a two-row thumb starting at the top.
+        let thumb = thumb_rows(&terminal, 29);
+        assert_eq!(thumb, [first, first + 1]);
+        assert!(
+            terminal.backend().buffer()[(29, first)]
+                .modifier
+                .contains(Modifier::DIM)
+        );
+        assert_eq!(terminal.backend().buffer()[(0, first)].symbol(), "│");
+        assert!(row_text(&terminal, first).contains("task 0"));
+
+        let key = |app: &mut App, code| {
+            app.key(
+                ratatui::crossterm::event::KeyEvent::new(
+                    code,
+                    ratatui::crossterm::event::KeyModifiers::NONE,
+                ),
+                &fixture.storage,
+            )
+            .unwrap();
+        };
+
+        key(&mut app, ratatui::crossterm::event::KeyCode::Char('G'));
+        render(&mut terminal, &mut app);
+        assert_eq!(thumb_rows(&terminal, 29).last(), Some(&last));
+
+        app.list.select(Some(10));
+        app.reveal_selection = true;
+        render(&mut terminal, &mut app);
+        let middle = thumb_rows(&terminal, 29);
+        assert!(
+            middle[0] > first && *middle.last().unwrap() < last,
+            "{middle:?}"
+        );
+
+        // Rows, not task counts: two long wrapped tasks overflow a six-row list.
+        let mut wrapped = App::new(
+            (0..2)
+                .map(|_| Task {
+                    carried: false,
+                    text: "wrapped words ".repeat(12).trim_end().into(),
+                    completed: false,
+                })
+                .collect(),
+        );
+        wrapped.keybinds = false;
+        render(&mut terminal, &mut wrapped);
+        assert!(!thumb_rows(&terminal, 29).is_empty());
+
+        // With section tabs, the thumb stays beside task rows, below the blank row.
+        let mut sectioned = App::new(
+            (0..20)
+                .map(|index| Task {
+                    carried: false,
+                    text: format!("Work: task {index}"),
+                    completed: false,
+                })
+                .collect(),
+        );
+        sectioned.keybinds = false;
+        let rows = render(&mut terminal, &mut sectioned);
+
+        assert_eq!(rows.y, 2);
+        assert_eq!(thumb_rows(&terminal, 29)[0], 2);
     }
 
     #[test]
@@ -1323,13 +1469,14 @@ mod tests {
             let mut terminal = test_terminal(40, 10);
             render(&mut terminal, &mut app);
             let buffer = terminal.backend().buffer();
-            let marker = &buffer[(4, 1)];
+            // Tabs sit on the border and the row under them is left blank, so tasks start on row 2.
+            let marker = &buffer[(4, 2)];
 
             assert_eq!(marker.fg, accent);
             assert!(!marker.modifier.contains(Modifier::DIM));
 
             for x in 7..11 {
-                let cell = &buffer[(x, 1)];
+                let cell = &buffer[(x, 2)];
                 assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
                 assert!(
                     cell.modifier
@@ -1338,7 +1485,7 @@ mod tests {
                 assert!(!cell.modifier.contains(Modifier::DIM));
             }
 
-            let ordinary = &buffer[(13, 1)];
+            let ordinary = &buffer[(13, 2)];
             assert!(
                 ordinary
                     .modifier
@@ -1457,31 +1604,32 @@ mod tests {
             render(&mut terminal, &mut app);
             let buffer = terminal.backend().buffer();
 
-            assert_eq!(buffer[(1, 1)].fg, Color::Blue);
+            // Tabs sit on the border and the row under them is left blank, so tasks start on row 2.
+            assert_eq!(buffer[(1, 2)].fg, Color::Blue);
             assert!(
-                buffer[(1, 1)]
+                buffer[(1, 2)]
                     .modifier
                     .contains(Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED)
             );
-            assert!(!buffer[(3, 1)].modifier.contains(Modifier::BOLD));
+            assert!(!buffer[(3, 2)].modifier.contains(Modifier::BOLD));
             assert!(
-                buffer[(7, 1)]
+                buffer[(7, 2)]
                     .modifier
                     .contains(Modifier::BOLD | Modifier::CROSSED_OUT)
             );
-            assert_eq!(buffer[(13, 1)].fg, Color::Red);
+            assert_eq!(buffer[(13, 2)].fg, Color::Red);
             assert_eq!(
-                buffer[(13, 1)].modifier.contains(Modifier::DIM),
+                buffer[(13, 2)].modifier.contains(Modifier::DIM),
                 modifiers != "[]"
             );
-            assert!(buffer[(13, 1)].modifier.contains(Modifier::CROSSED_OUT));
+            assert!(buffer[(13, 2)].modifier.contains(Modifier::CROSSED_OUT));
 
             app.mode = Mode::SearchResults {
                 input: "Work".into(),
                 original: Some(0),
             };
             render(&mut terminal, &mut app);
-            let cell = &terminal.backend().buffer()[(7, 1)];
+            let cell = &terminal.backend().buffer()[(7, 2)];
 
             assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
             assert!(
@@ -2587,20 +2735,21 @@ mod tests {
         render(&mut terminal, &mut app);
         let buffer = terminal.backend().buffer();
 
-        assert_eq!(buffer[(1, 1)].symbol(), "›");
-        assert_eq!(buffer[(1, 3)].symbol(), " ");
+        // Tabs sit on the border and the row under them is left blank, so tasks start on row 2.
+        assert_eq!(buffer[(1, 2)].symbol(), "›");
+        assert_eq!(buffer[(1, 4)].symbol(), " ");
 
-        for y in [1, 2] {
+        for y in [2, 3] {
             assert_eq!(buffer[(4, y)].symbol(), "■");
             assert_eq!(buffer[(4, y)].fg, app.styles.accent.fg.unwrap());
         }
 
-        assert_eq!(buffer[(4, 3)].symbol(), "□");
-        assert_eq!(buffer[(4, 3)].fg, Color::Reset);
-        assert_eq!(buffer[(7, 1)].symbol(), "w");
-        assert!(buffer[(7, 1)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(4, 4)].symbol(), "□");
+        assert_eq!(buffer[(4, 4)].fg, Color::Reset);
+        assert_eq!(buffer[(7, 2)].symbol(), "w");
+        assert!(buffer[(7, 2)].modifier.contains(Modifier::BOLD));
 
-        for (y, expected) in [(1, "İfooİFOO"), (2, "İfoo")] {
+        for (y, expected) in [(2, "İfooİFOO"), (3, "İfoo")] {
             let mut highlighted = String::new();
 
             for x in 7..39 {
@@ -2611,7 +2760,7 @@ mod tests {
                     assert_eq!(cell.fg, Color::Reset);
                     assert_eq!(cell.bg, Color::Reset);
                     assert!(!cell.modifier.contains(Modifier::DIM));
-                    assert_eq!(cell.modifier.contains(Modifier::CROSSED_OUT), y == 2);
+                    assert_eq!(cell.modifier.contains(Modifier::CROSSED_OUT), y == 3);
                 }
             }
 
@@ -2628,10 +2777,10 @@ mod tests {
 
         assert_eq!(app.list.selected(), Some(1));
         assert_eq!(app.tasks, original);
-        assert_eq!(terminal.backend().buffer()[(4, 1)].symbol(), " ");
-        assert_eq!(terminal.backend().buffer()[(4, 2)].symbol(), "✓");
+        assert_eq!(terminal.backend().buffer()[(4, 2)].symbol(), " ");
+        assert_eq!(terminal.backend().buffer()[(4, 3)].symbol(), "✓");
 
-        for y in 1..4 {
+        for y in 2..5 {
             for x in 7..39 {
                 assert_eq!(terminal.backend().buffer()[(x, y)].bg, Color::Reset);
             }
@@ -2677,7 +2826,8 @@ mod tests {
 
         assert_eq!(app.row_tasks, mapping);
 
-        for (y, length) in [(1, 4), (2, 4)] {
+        // Tabs sit on the border and the row under them is left blank, so tasks start on row 2.
+        for (y, length) in [(2, 4), (3, 4)] {
             for x in 7..7 + length {
                 assert!(
                     terminal.backend().buffer()[(x, y)]
@@ -3393,7 +3543,10 @@ mod tests {
                     let buffer = terminal.backend().buffer();
                     let mut bold = String::new();
 
-                    for y in 1..19 {
+                    // A section adds tabs and a blank row under them, so the task moves to row 2.
+                    let first_row = if tag.is_empty() { 1 } else { 2 };
+
+                    for y in first_row..19 {
                         for x in 7..width - 1 {
                             let cell = &buffer[(x, y)];
 
@@ -3412,8 +3565,8 @@ mod tests {
                     }
 
                     assert_eq!(bold, tag, "{text:?}, width={width}, wrap={wrap}");
-                    assert!(!buffer[(3, 1)].modifier.contains(Modifier::BOLD));
-                    assert_eq!(buffer[(1, 1)].fg, app.styles.accent.fg.unwrap());
+                    assert!(!buffer[(3, first_row)].modifier.contains(Modifier::BOLD));
+                    assert_eq!(buffer[(1, first_row)].fg, app.styles.accent.fg.unwrap());
                     assert_eq!(app.tasks, original);
                     assert!(!app.can_undo());
                 }
