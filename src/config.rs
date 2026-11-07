@@ -27,6 +27,7 @@ pub struct Display {
     pub keybinds: Option<bool>,
     pub rounded_corners: Option<bool>,
     pub ascii_markers: Option<bool>,
+    pub notifications: Option<bool>,
 }
 
 #[derive(Debug, Default, PartialEq, Deserialize)]

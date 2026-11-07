@@ -89,6 +89,7 @@ pub struct App {
     pub mode: Mode,
     pub wrap: bool,
     pub logo: bool,
+    pub notifications: bool,
     pub keybinds: bool,
     pub rounded: bool,
     pub unicode_markers: bool,
@@ -121,6 +122,7 @@ impl App {
             mode: Mode::Normal,
             wrap: true,
             logo: true,
+            notifications: true,
             keybinds: true,
             rounded: false,
             unicode_markers: true,
@@ -569,17 +571,17 @@ impl App {
         self.theme = self.theme.cycle(forward);
         self.styles =
             crate::styles::Styles::resolve(self.theme, &self.style_overrides, self.cli_accent);
-        self.notification = Some(Notification::new(format!(
+        self.notify(format!(
             "Theme: {} ({})",
             self.theme.display_name(),
             self.theme.id()
-        )));
+        ));
     }
 
     fn yank_task(&mut self) {
         if let Some(task) = self.list.selected().and_then(|index| self.tasks.get(index)) {
             self.task_register = Some(task.text.clone());
-            self.notification = Some(Notification::new("Copied task"));
+            self.notify("Copied task");
         }
     }
 
@@ -592,12 +594,19 @@ impl App {
     }
 
     pub fn copy_markdown(&mut self, output: &mut impl std::io::Write) {
-        self.notification = Some(Notification::new(
-            match crate::export::copy(&self.tasks, output) {
-                Ok(()) => "Copy sent to terminal".into(),
-                Err(error) => format!("Copy failed: {error}"),
-            },
-        ));
+        match crate::export::copy(&self.tasks, output) {
+            Ok(()) => self.notify("Copy sent to terminal"),
+            // Failures are always reported, even when confirmations are disabled.
+            Err(error) => {
+                self.notification = Some(Notification::new(format!("Copy failed: {error}")));
+            }
+        }
+    }
+
+    fn notify(&mut self, message: impl Into<String>) {
+        if self.notifications {
+            self.notification = Some(Notification::new(message));
+        }
     }
 
     pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
@@ -1356,6 +1365,47 @@ mod tests {
                 assert!(!path.exists());
             }
         }
+    }
+
+    #[test]
+    fn disabled_notifications_hide_confirmations_but_still_report_copy_failures() {
+        struct BrokenOutput;
+        impl std::io::Write for BrokenOutput {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("output unavailable"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(2);
+        app.notifications = false;
+        let theme = app.theme;
+
+        press(&mut app, &fixture, KeyCode::Char('y'));
+        assert_eq!(app.task_register.as_deref(), Some("task 0"));
+        assert!(app.notification.is_none());
+
+        press(&mut app, &fixture, KeyCode::Char('t'));
+        assert_ne!(app.theme, theme);
+        assert!(app.notification.is_none());
+
+        let mut output = Vec::new();
+        app.copy_markdown(&mut output);
+        let mut expected = Vec::new();
+        crate::export::copy(&app.tasks, &mut expected).unwrap();
+
+        assert_eq!(output, expected);
+        assert!(app.notification.is_none());
+
+        app.copy_markdown(&mut BrokenOutput);
+
+        assert!(
+            app.notification
+                .as_ref()
+                .is_some_and(|notice| notice.message().starts_with("Copy failed:"))
+        );
     }
 
     #[test]

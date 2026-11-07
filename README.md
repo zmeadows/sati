@@ -123,6 +123,7 @@ The add, edit, and search prompts share these shortcuts:
 | `--keybinds` / `--no-keybinds` | Show / hide shortcut hints. |
 | `--round-corners` / `--square-corners` | Use rounded / sharp borders. |
 | `--ascii-markers` / `--unicode-markers` | Use ASCII / Unicode task markers. |
+| `--notifications` / `--no-notifications` | Show / hide brief confirmation messages. |
 | `--accent COLOR` | Override the theme/TOML accent foreground: ANSI name, hex RGB, or palette index 0–255. |
 
 Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--ascii-markers` changes only task markers; other UI symbols remain Unicode.
@@ -161,6 +162,7 @@ logo = true
 keybinds = true
 rounded_corners = false
 ascii_markers = false
+notifications = true
 
 [styles.normal]
 fg = "reset"
@@ -265,6 +267,8 @@ items, with task order and literal text preserved.
 Press `c` in the checklist to send the same Markdown to the terminal clipboard
 using OSC 52. The brief “Copy sent to terminal” message clears on subsequent
 activity; clipboard acceptance depends on terminal and multiplexer support.
+`--no-notifications` (or `notifications = false`) hides this and the other brief
+confirmations, but a failed copy is still reported.
 
 ## Data
 
