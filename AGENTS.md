@@ -33,8 +33,8 @@
 - A task has `text`, `completed`, and optional `carried` (default false); list order is meaningful. Completed tasks cannot be carried. `m` toggles carryover on unfinished tasks; `D` preserves carried tasks.
 - Task text is a nonempty, trimmed, single-line description. Preserve arbitrary valid Unicode; reject corrupt persisted data rather than silently repairing or overwriting it.
 - The normal list selection refers to a **task**, not a wrapped display row. Keep indices valid after deletion, reordering, clearing, and undo.
-- `tasks.json` stores `{tasks, selected}`. Temporarily accept legacy arrays and migrate on the next save or clean exit. Save resulting selection with mutations and undo/redo; navigation-only focus is saved on clean exit, without persisting temporary search selection. Remap focus by original index during startup grouping.
-- `a` appends, `o` inserts below selection, and `O` inserts above selection. With `--completed-at-bottom`, new tasks stay in the incomplete section. Keep insertion, navigation, and undo coherent with this grouping.
+- `tasks.json` stores `{tasks, selected}`. Temporarily accept legacy arrays and migrate on the next save or clean exit. Save resulting selection with mutations and undo/redo; navigation-only focus is saved on clean exit, without persisting temporary search selection.
+- `a` appends, `o` inserts below selection, and `O` inserts above selection.
 - Undo and redo each hold at most **256 in-memory snapshots** of tasks and selection. Only successful mutations enter ordinary history and clear redo. Undo/redo transfer snapshots between stacks after saving. Navigation, cancellation, and no-ops leave both histories unchanged.
 - Undo/redo history is session-only. Never read, write, or delete legacy `history.json` files. Undo/redo still save their resulting task lists to authoritative `tasks.json` before transferring snapshots.
 
@@ -70,27 +70,22 @@ Write code a human can read top to bottom without decoding it. Readability matte
 - Keep tightly related lines together. Do not insert a blank line between every statement; that is as unreadable as none.
 - Always separate top-level items (`fn`, `impl`, `struct`, `enum`, `const`) with exactly one blank line.
 
-Shape to aim for (this is `App::toggle` with its steps separated):
+Shape to aim for (this is `App::toggle_carryover` with its steps separated):
 
 ```rust
-fn toggle(&mut self, index: usize, storage: &Storage) -> Result<()> {
-    let mut tasks = self.tasks.clone();
-    tasks[index].completed = !tasks[index].completed;
-    tasks[index].carried = false;
-
-    let selected = if self.completed_at_bottom {
-        let task = tasks.remove(index);
-        let boundary = completion_boundary(&tasks);
-        tasks.insert(boundary, task);
-        boundary
-    } else {
-        index
+fn toggle_carryover(&mut self, storage: &Storage) -> Result<()> {
+    let Some(index) = self.list.selected() else {
+        return Ok(());
     };
 
-    self.replace(tasks, Some(selected), storage)?;
-    self.reveal_selection = selected != index;
+    if self.tasks[index].completed {
+        return Ok(());
+    }
 
-    Ok(())
+    let mut tasks = self.tasks.clone();
+    tasks[index].carried = !tasks[index].carried;
+
+    self.replace(tasks, Some(index), storage)
 }
 ```
 

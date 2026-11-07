@@ -23,7 +23,7 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 - **Search in place.** Find tasks as you type, see matching text highlighted, and jump to a result without filtering or rearranging the list.
 - **Carryover.** Mark unfinished tasks with `m` (`[↪]`) to keep them when clearing the list.
 - **Undo and redo.** Up to 256 changes in either direction during the current session.
-- **Display options.** Wrap long tasks, group completed items, and change some style settings with command-line flags.
+- **Display options.** Wrap long tasks and change some style settings with command-line flags.
 
 ## Suggested usage
 
@@ -84,14 +84,12 @@ Then run `sati`.
 | Next / previous color theme | `t` / `T` |
 | Quit | `q` |
 
-With `--completed-at-bottom`, new tasks stay in the incomplete section.
-
 Task copies use one in-memory register, separate from the system clipboard. Pasted
 tasks start incomplete and unmarked; the register remains available for repeated
 pastes until exit. `c` still copies the entire checklist as Markdown to the system
 clipboard.
 
-Press `s` to group tasks manually by their leading prefix (such as `Work:`). Unprefixed tasks come first, followed by case-insensitive alphabetical prefix groups; order within each group is preserved. With `--completed-at-bottom`, unfinished and completed tasks are grouped separately.
+Press `s` to group tasks manually by their leading prefix (such as `Work:`). Unprefixed tasks come first, followed by case-insensitive alphabetical prefix groups; order within each group is preserved.
 
 ### While typing
 
@@ -123,7 +121,6 @@ The add, edit, and search prompts share these shortcuts:
 | `--keybinds` / `--no-keybinds` | Show / hide shortcut hints. |
 | `--round-corners` / `--square-corners` | Use rounded / sharp borders. |
 | `--ascii-markers` / `--unicode-markers` | Use ASCII / Unicode task markers. |
-| `--completed-at-bottom` / `--no-completed-at-bottom` | Enable / disable completion grouping. |
 | `--accent COLOR` | Override the theme/TOML accent foreground: ANSI name, hex RGB, or palette index 0–255. |
 
 Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--ascii-markers` changes only task markers; other UI symbols remain Unicode.
@@ -162,7 +159,6 @@ logo = true
 keybinds = true
 rounded_corners = false
 ascii_markers = false
-completed_at_bottom = false
 
 [styles.normal]
 fg = "reset"

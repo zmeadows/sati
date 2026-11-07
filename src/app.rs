@@ -51,13 +51,6 @@ pub(crate) fn task_prefix(text: &str) -> Option<&str> {
         .map(|end| &text[..end])
 }
 
-fn completion_boundary(tasks: &[Task]) -> usize {
-    tasks
-        .iter()
-        .position(|task| task.completed)
-        .unwrap_or(tasks.len())
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AddPlacement {
     End,
@@ -99,7 +92,6 @@ pub struct App {
     pub keybinds: bool,
     pub rounded: bool,
     pub unicode_markers: bool,
-    pub completed_at_bottom: bool,
     pub styles: crate::styles::Styles,
     pub theme: crate::themes::BuiltinTheme,
     pub style_overrides: crate::config::StyleOverrides,
@@ -130,7 +122,6 @@ impl App {
             keybinds: true,
             rounded: false,
             unicode_markers: true,
-            completed_at_bottom: false,
             styles: crate::styles::Styles::default(),
             theme: crate::themes::BuiltinTheme::default(),
             style_overrides: crate::config::StyleOverrides::default(),
@@ -214,19 +205,13 @@ impl App {
     }
 
     pub fn insertion_index(&self, placement: AddPlacement) -> usize {
-        let index = match placement {
+        match placement {
             AddPlacement::End => self.tasks.len(),
             AddPlacement::Below => self
                 .list
                 .selected()
                 .map_or(self.tasks.len(), |index| index + 1),
             AddPlacement::Above => self.list.selected().unwrap_or(self.tasks.len()),
-        };
-
-        if self.completed_at_bottom {
-            index.min(completion_boundary(&self.tasks))
-        } else {
-            index
         }
     }
 
@@ -480,17 +465,9 @@ impl App {
         tasks[index].completed = !tasks[index].completed;
         tasks[index].carried = false;
 
-        let selected = if self.completed_at_bottom {
-            let task = tasks.remove(index);
-            let boundary = completion_boundary(&tasks);
-            tasks.insert(boundary, task);
-            boundary
-        } else {
-            index
-        };
-
-        self.replace(tasks, Some(selected), storage)?;
-        self.reveal_selection = selected != index;
+        // The task stays in place, so do not force the viewport to scroll to it.
+        self.replace(tasks, Some(index), storage)?;
+        self.reveal_selection = false;
 
         Ok(())
     }
@@ -544,11 +521,7 @@ impl App {
 
         let mut order: Vec<_> = (0..self.tasks.len()).collect();
         order.sort_by_cached_key(|&index| {
-            let task = &self.tasks[index];
-            (
-                self.completed_at_bottom && task.completed,
-                task_prefix(&task.text).map(str::to_lowercase),
-            )
+            task_prefix(&self.tasks[index].text).map(str::to_lowercase)
         });
 
         if order.iter().copied().eq(0..self.tasks.len()) {
@@ -577,10 +550,6 @@ impl App {
         }
 
         let next = if down { index + 1 } else { index - 1 };
-
-        if self.completed_at_bottom && self.tasks[index].completed != self.tasks[next].completed {
-            return Ok(());
-        }
 
         let mut tasks = self.tasks.clone();
         tasks.swap(index, next);
@@ -1511,73 +1480,70 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT),
                 KeyEvent::new(KeyCode::Char('W'), KeyModifiers::ALT),
             ] {
-                for grouped in [false, true] {
-                    for (paste, placement) in [
-                        (
-                            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
-                            AddPlacement::Below,
-                        ),
-                        (
-                            KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT),
-                            AddPlacement::Above,
-                        ),
-                        (
-                            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
-                            AddPlacement::Below,
-                        ),
-                    ] {
-                        let mut app = app_with_tasks(3);
-                        app.tasks[2] = Task {
+                for (paste, placement) in [
+                    (
+                        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+                        AddPlacement::Below,
+                    ),
+                    (
+                        KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT),
+                        AddPlacement::Above,
+                    ),
+                    (
+                        KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
+                        AddPlacement::Below,
+                    ),
+                ] {
+                    let mut app = app_with_tasks(3);
+                    app.tasks[2] = Task {
+                        text: text.into(),
+                        completed,
+                        carried,
+                    };
+                    app.list.select(Some(2));
+                    fixture.storage.save(&app.tasks).unwrap();
+                    let before = app.tasks.clone();
+                    press(&mut app, &fixture, copy);
+
+                    assert_eq!(
+                        app.notification.as_ref().map(Notification::message),
+                        Some("Copied task")
+                    );
+                    assert_eq!(app.tasks, before);
+                    assert_eq!(fixture.storage.load().unwrap(), before);
+                    assert!(!app.can_undo() && !app.can_redo());
+
+                    let index = app.insertion_index(placement);
+                    press(&mut app, &fixture, paste);
+                    assert!(app.notification.is_none());
+                    assert_eq!(
+                        app.tasks[index],
+                        Task {
                             text: text.into(),
-                            completed,
-                            carried,
-                        };
-                        app.completed_at_bottom = grouped;
-                        app.list.select(Some(2));
-                        fixture.storage.save(&app.tasks).unwrap();
-                        let before = app.tasks.clone();
-                        press(&mut app, &fixture, copy);
+                            completed: false,
+                            carried: false
+                        }
+                    );
+                    assert_eq!(app.list.selected(), Some(index));
+                    assert!(app.reveal_selection);
+                    assert_eq!(app.history.len(), 1);
 
-                        assert_eq!(
-                            app.notification.as_ref().map(Notification::message),
-                            Some("Copied task")
-                        );
-                        assert_eq!(app.tasks, before);
-                        assert_eq!(fixture.storage.load().unwrap(), before);
-                        assert!(!app.can_undo() && !app.can_redo());
+                    let pasted = app.tasks.clone();
+                    app.undo(&fixture.storage).unwrap();
+                    assert_eq!(app.tasks, before);
 
-                        let index = app.insertion_index(placement);
-                        press(&mut app, &fixture, paste);
-                        assert!(app.notification.is_none());
-                        assert_eq!(
-                            app.tasks[index],
-                            Task {
-                                text: text.into(),
-                                completed: false,
-                                carried: false
-                            }
-                        );
-                        assert_eq!(app.list.selected(), Some(index));
-                        assert!(app.reveal_selection);
-                        assert_eq!(app.history.len(), 1);
+                    press(
+                        &mut app,
+                        &fixture,
+                        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+                    );
 
-                        let pasted = app.tasks.clone();
-                        app.undo(&fixture.storage).unwrap();
-                        assert_eq!(app.tasks, before);
+                    assert_eq!(app.tasks, pasted);
+                    assert_eq!(app.task_register.as_deref(), Some(text));
 
-                        press(
-                            &mut app,
-                            &fixture,
-                            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
-                        );
-
-                        assert_eq!(app.tasks, pasted);
-                        assert_eq!(app.task_register.as_deref(), Some(text));
-
-                        app.undo(&fixture.storage).unwrap();
-                        press(&mut app, &fixture, paste);
-                        assert!(!app.can_redo());
-                    }
+                    app.undo(&fixture.storage).unwrap();
+                    press(&mut app, &fixture, paste);
+                    assert!(!app.can_redo());
                 }
             }
         }
@@ -1815,61 +1781,50 @@ mod tests {
         })
         .collect();
 
-        for (grouped, input, output) in [
-            (
-                false,
-                [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-                [3, 5, 8, 9, 1, 4, 7, 0, 2, 6],
-            ),
-            (
-                true,
-                [0, 1, 3, 4, 6, 7, 8, 9, 2, 5],
-                [3, 8, 9, 1, 4, 7, 0, 6, 5, 2],
-            ),
-        ] {
-            for selected in std::iter::once(None).chain((0..source.len()).map(Some)) {
-                let fixture = Fixture::new();
-                let original: Vec<_> = input.iter().map(|&i| source[i].clone()).collect();
-                let expected: Vec<_> = output.iter().map(|&i| source[i].clone()).collect();
-                let mut app = App::new(original.clone());
-                app.completed_at_bottom = grouped;
-                app.list.select(selected);
-                app.keybinds = false;
-                press(&mut app, &fixture, KeyCode::Char('s'));
-                let next =
-                    selected.map(|before| output.iter().position(|&i| i == input[before]).unwrap());
+        let input = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let output = [3, 5, 8, 9, 1, 4, 7, 0, 2, 6];
 
-                assert_eq!(app.tasks, expected);
-                assert_eq!(app.list.selected(), next);
-                assert_eq!(app.history.len(), 1);
-                assert_eq!(fixture.storage.load().unwrap(), expected);
+        for selected in std::iter::once(None).chain((0..source.len()).map(Some)) {
+            let fixture = Fixture::new();
+            let original: Vec<_> = input.iter().map(|&i| source[i].clone()).collect();
+            let expected: Vec<_> = output.iter().map(|&i| source[i].clone()).collect();
+            let mut app = App::new(original.clone());
+            app.list.select(selected);
+            app.keybinds = false;
+            press(&mut app, &fixture, KeyCode::Char('s'));
+            let next =
+                selected.map(|before| output.iter().position(|&i| i == input[before]).unwrap());
 
-                let mut terminal =
-                    ratatui::Terminal::new(ratatui::backend::TestBackend::new(24, 6)).unwrap();
-                let mut rows = Rect::default();
-                terminal
-                    .draw(|frame| rows = crate::ui::draw(frame, &mut app))
-                    .unwrap();
+            assert_eq!(app.tasks, expected);
+            assert_eq!(app.list.selected(), next);
+            assert_eq!(app.history.len(), 1);
+            assert_eq!(fixture.storage.load().unwrap(), expected);
 
-                if let Some(index) = next {
-                    assert!(
-                        app.row_tasks[app.scroll
-                            ..(app.scroll + usize::from(rows.height)).min(app.row_tasks.len())]
-                            .contains(&Some(index))
-                    );
-                }
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(24, 6)).unwrap();
+            let mut rows = Rect::default();
+            terminal
+                .draw(|frame| rows = crate::ui::draw(frame, &mut app))
+                .unwrap();
 
-                app.undo(&fixture.storage).unwrap();
-                assert_eq!(app.tasks, original);
-                assert_eq!(app.list.selected(), selected);
-
-                app.redo(&fixture.storage).unwrap();
-                assert_eq!(app.tasks, expected);
-                assert_eq!(app.list.selected(), next);
-
-                press(&mut app, &fixture, KeyCode::Char('s'));
-                assert_eq!(app.history.len(), 1);
+            if let Some(index) = next {
+                assert!(
+                    app.row_tasks[app.scroll
+                        ..(app.scroll + usize::from(rows.height)).min(app.row_tasks.len())]
+                        .contains(&Some(index))
+                );
             }
+
+            app.undo(&fixture.storage).unwrap();
+            assert_eq!(app.tasks, original);
+            assert_eq!(app.list.selected(), selected);
+
+            app.redo(&fixture.storage).unwrap();
+            assert_eq!(app.tasks, expected);
+            assert_eq!(app.list.selected(), next);
+
+            press(&mut app, &fixture, KeyCode::Char('s'));
+            assert_eq!(app.history.len(), 1);
         }
     }
 
@@ -2376,89 +2331,86 @@ mod tests {
     fn resumed_search_keeps_matching_selection_and_cycles_from_a_new_checkpoint() {
         let fixture = Fixture::new();
 
-        for grouped in [false, true] {
-            let mut app = app_with_tasks(5);
+        let mut app = app_with_tasks(5);
 
-            for index in [0, 2, 4] {
-                app.tasks[index].text = format!("HiT {index}");
-            }
-
-            app.tasks[2].carried = true;
-            app.tasks[4].completed = true;
-            app.completed_at_bottom = grouped;
-            let original = app.tasks.clone();
-            press(&mut app, &fixture, KeyCode::Char('/'));
-            app.paste("hit");
-            press(&mut app, &fixture, KeyCode::Esc);
-
-            for (selected, forward, backward) in [
-                (None, 0, 4),
-                (Some(0), 0, 0),
-                (Some(1), 2, 0),
-                (Some(2), 2, 2),
-                (Some(3), 4, 2),
-                (Some(4), 4, 4),
-            ] {
-                for (code, modifiers, first, next) in [
-                    (
-                        KeyCode::Char('n'),
-                        KeyModifiers::NONE,
-                        forward,
-                        if forward == 4 { 0 } else { forward + 2 },
-                    ),
-                    (
-                        KeyCode::Char('N'),
-                        KeyModifiers::SHIFT,
-                        backward,
-                        if backward == 0 { 4 } else { backward - 2 },
-                    ),
-                    (
-                        KeyCode::Char('n'),
-                        KeyModifiers::SHIFT,
-                        backward,
-                        if backward == 0 { 4 } else { backward - 2 },
-                    ),
-                ] {
-                    app.list.select(selected);
-                    press(
-                        &mut app,
-                        &fixture,
-                        KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Release),
-                    );
-
-                    assert_eq!(app.mode, Mode::Normal);
-
-                    press(
-                        &mut app,
-                        &fixture,
-                        KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Repeat),
-                    );
-
-                    assert!(matches!(app.mode, Mode::SearchResults { .. }));
-                    assert_eq!(app.list.selected(), Some(first));
-
-                    press(
-                        &mut app,
-                        &fixture,
-                        KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Repeat),
-                    );
-
-                    assert_eq!(app.list.selected(), Some(next));
-
-                    press(&mut app, &fixture, KeyCode::Esc);
-                    assert_eq!(app.list.selected(), selected);
-                    assert_eq!(app.mode, Mode::Normal);
-
-                    press(&mut app, &fixture, KeyEvent::new(code, modifiers));
-                    press(&mut app, &fixture, KeyCode::Enter);
-                    assert_eq!(app.list.selected(), Some(first));
-                    assert_eq!(app.search_query(), None);
-                }
-            }
-
-            assert_eq!(app.tasks, original);
-            assert!(!app.can_undo() && !app.can_redo());
+        for index in [0, 2, 4] {
+            app.tasks[index].text = format!("HiT {index}");
         }
+
+        app.tasks[2].carried = true;
+        app.tasks[4].completed = true;
+        let original = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char('/'));
+        app.paste("hit");
+        press(&mut app, &fixture, KeyCode::Esc);
+
+        for (selected, forward, backward) in [
+            (None, 0, 4),
+            (Some(0), 0, 0),
+            (Some(1), 2, 0),
+            (Some(2), 2, 2),
+            (Some(3), 4, 2),
+            (Some(4), 4, 4),
+        ] {
+            for (code, modifiers, first, next) in [
+                (
+                    KeyCode::Char('n'),
+                    KeyModifiers::NONE,
+                    forward,
+                    if forward == 4 { 0 } else { forward + 2 },
+                ),
+                (
+                    KeyCode::Char('N'),
+                    KeyModifiers::SHIFT,
+                    backward,
+                    if backward == 0 { 4 } else { backward - 2 },
+                ),
+                (
+                    KeyCode::Char('n'),
+                    KeyModifiers::SHIFT,
+                    backward,
+                    if backward == 0 { 4 } else { backward - 2 },
+                ),
+            ] {
+                app.list.select(selected);
+                press(
+                    &mut app,
+                    &fixture,
+                    KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Release),
+                );
+
+                assert_eq!(app.mode, Mode::Normal);
+
+                press(
+                    &mut app,
+                    &fixture,
+                    KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Repeat),
+                );
+
+                assert!(matches!(app.mode, Mode::SearchResults { .. }));
+                assert_eq!(app.list.selected(), Some(first));
+
+                press(
+                    &mut app,
+                    &fixture,
+                    KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Repeat),
+                );
+
+                assert_eq!(app.list.selected(), Some(next));
+
+                press(&mut app, &fixture, KeyCode::Esc);
+                assert_eq!(app.list.selected(), selected);
+                assert_eq!(app.mode, Mode::Normal);
+
+                press(&mut app, &fixture, KeyEvent::new(code, modifiers));
+                press(&mut app, &fixture, KeyCode::Enter);
+                assert_eq!(app.list.selected(), Some(first));
+                assert_eq!(app.search_query(), None);
+            }
+        }
+
+        assert_eq!(app.tasks, original);
+        assert!(!app.can_undo() && !app.can_redo());
 
         assert!(!fixture.task_path().exists());
     }
@@ -2520,85 +2472,67 @@ mod tests {
     fn tab_navigation_skips_completed_wraps_and_handles_missing_selection() {
         let fixture = Fixture::new();
 
-        for grouped in [false, true] {
-            let mut app = app_with_tasks(5);
-            app.tasks[1].completed = true;
-            app.tasks[3].completed = true;
-            app.tasks[2].carried = true;
-            app.completed_at_bottom = grouped;
+        let mut app = app_with_tasks(5);
+        app.tasks[1].completed = true;
+        app.tasks[3].completed = true;
+        app.tasks[2].carried = true;
 
-            if grouped {
-                app.tasks.sort_by_key(|task| task.completed);
-            }
+        let cases = [
+            (None, 0, 4),
+            (Some(0), 2, 4),
+            (Some(1), 2, 0),
+            (Some(2), 4, 0),
+            (Some(3), 4, 2),
+            (Some(4), 0, 2),
+        ];
 
-            let cases = if grouped {
-                [
-                    (None, 0, 2),
-                    (Some(0), 1, 2),
-                    (Some(1), 2, 0),
-                    (Some(2), 0, 1),
-                    (Some(3), 0, 2),
-                    (Some(4), 0, 2),
-                ]
-            } else {
-                [
-                    (None, 0, 4),
-                    (Some(0), 2, 4),
-                    (Some(1), 2, 0),
-                    (Some(2), 4, 0),
-                    (Some(3), 4, 2),
-                    (Some(4), 0, 2),
-                ]
-            };
+        let original = app.tasks.clone();
 
-            let original = app.tasks.clone();
-
-            for (selected, forward, backward) in cases {
-                for (code, modifiers, expected) in [
-                    (KeyCode::Tab, KeyModifiers::NONE, forward),
-                    (KeyCode::BackTab, KeyModifiers::SHIFT, backward),
-                    (KeyCode::Tab, KeyModifiers::SHIFT, backward),
-                ] {
-                    for kind in [KeyEventKind::Press, KeyEventKind::Repeat] {
-                        app.list.select(selected);
-                        app.reveal_selection = false;
-                        press(
-                            &mut app,
-                            &fixture,
-                            KeyEvent::new_with_kind(code, modifiers, kind),
-                        );
-
-                        assert_eq!(app.list.selected(), Some(expected));
-                        assert!(app.reveal_selection);
-                    }
-
+        for (selected, forward, backward) in cases {
+            for (code, modifiers, expected) in [
+                (KeyCode::Tab, KeyModifiers::NONE, forward),
+                (KeyCode::BackTab, KeyModifiers::SHIFT, backward),
+                (KeyCode::Tab, KeyModifiers::SHIFT, backward),
+            ] {
+                for kind in [KeyEventKind::Press, KeyEventKind::Repeat] {
                     app.list.select(selected);
+                    app.reveal_selection = false;
                     press(
                         &mut app,
                         &fixture,
-                        KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Release),
+                        KeyEvent::new_with_kind(code, modifiers, kind),
                     );
 
-                    assert_eq!(app.list.selected(), selected);
+                    assert_eq!(app.list.selected(), Some(expected));
+                    assert!(app.reveal_selection);
                 }
+
+                app.list.select(selected);
+                press(
+                    &mut app,
+                    &fixture,
+                    KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Release),
+                );
+
+                assert_eq!(app.list.selected(), selected);
             }
-
-            app.list.select(Some(0));
-
-            for _ in 0..20 {
-                press(&mut app, &fixture, KeyCode::Tab);
-                assert!(!app.tasks[app.list.selected().unwrap()].completed);
-            }
-
-            for _ in 0..20 {
-                press(&mut app, &fixture, KeyCode::BackTab);
-                assert!(!app.tasks[app.list.selected().unwrap()].completed);
-            }
-
-            assert_eq!(app.list.selected(), Some(0));
-            assert_eq!(app.tasks, original);
-            assert!(!app.can_undo() && !app.can_redo());
         }
+
+        app.list.select(Some(0));
+
+        for _ in 0..20 {
+            press(&mut app, &fixture, KeyCode::Tab);
+            assert!(!app.tasks[app.list.selected().unwrap()].completed);
+        }
+
+        for _ in 0..20 {
+            press(&mut app, &fixture, KeyCode::BackTab);
+            assert!(!app.tasks[app.list.selected().unwrap()].completed);
+        }
+
+        assert_eq!(app.list.selected(), Some(0));
+        assert_eq!(app.tasks, original);
+        assert!(!app.can_undo() && !app.can_redo());
 
         for count in [0, 1, 3] {
             let mut app = app_with_tasks(count);
@@ -2752,62 +2686,59 @@ mod tests {
 
     #[test]
     fn carryover_completion_and_runtime_history_are_coherent() {
-        for grouped in [false, true] {
-            for action in [KeyCode::Enter, KeyCode::Char(' '), KeyCode::Null] {
-                let fixture = Fixture::new();
-                let mut app = app_with_tasks(2);
-                app.completed_at_bottom = grouped;
-                press(&mut app, &fixture, KeyCode::Char('m'));
+        for action in [KeyCode::Enter, KeyCode::Char(' '), KeyCode::Null] {
+            let fixture = Fixture::new();
+            let mut app = app_with_tasks(2);
+            press(&mut app, &fixture, KeyCode::Char('m'));
 
-                assert!(app.tasks[0].carried);
-                assert_eq!(app.history.len(), 1);
+            assert!(app.tasks[0].carried);
+            assert_eq!(app.history.len(), 1);
 
-                press(&mut app, &fixture, KeyCode::Char('m'));
-                assert!(!app.tasks[0].carried);
+            press(&mut app, &fixture, KeyCode::Char('m'));
+            assert!(!app.tasks[0].carried);
 
-                app.undo(&fixture.storage).unwrap();
-                assert!(app.tasks[0].carried);
-                assert!(app.tasks[0].carried && app.can_redo());
+            app.undo(&fixture.storage).unwrap();
+            assert!(app.tasks[0].carried);
+            assert!(app.tasks[0].carried && app.can_redo());
 
-                if action == KeyCode::Null {
-                    app.row_tasks = vec![Some(0), Some(1)];
-                    app.mouse(
-                        MouseEvent {
-                            kind: MouseEventKind::Down(MouseButton::Left),
-                            column: 1,
-                            row: 1,
-                            modifiers: KeyModifiers::NONE,
-                        },
-                        Rect::new(1, 1, 20, 2),
-                        &fixture.storage,
-                    )
-                    .unwrap();
-                } else {
-                    press(&mut app, &fixture, action);
-                }
-
-                let index = app.list.selected().unwrap();
-                assert!(app.tasks[index].completed && !app.tasks[index].carried);
-
-                let history = app.history.len();
-                press(&mut app, &fixture, KeyCode::Char('m'));
-                assert_eq!(app.history.len(), history);
-
-                app.undo(&fixture.storage).unwrap();
-                assert!(app.tasks[0].carried && !app.tasks[0].completed);
-
-                app.redo(&fixture.storage).unwrap();
-                let index = app.list.selected().unwrap();
-                assert!(app.tasks[index].completed && !app.tasks[index].carried);
-
-                press(&mut app, &fixture, KeyCode::Enter);
-                assert!(
-                    app.tasks
-                        .iter()
-                        .all(|task| !task.completed && !task.carried)
-                );
-                assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+            if action == KeyCode::Null {
+                app.row_tasks = vec![Some(0), Some(1)];
+                app.mouse(
+                    MouseEvent {
+                        kind: MouseEventKind::Down(MouseButton::Left),
+                        column: 1,
+                        row: 1,
+                        modifiers: KeyModifiers::NONE,
+                    },
+                    Rect::new(1, 1, 20, 2),
+                    &fixture.storage,
+                )
+                .unwrap();
+            } else {
+                press(&mut app, &fixture, action);
             }
+
+            let index = app.list.selected().unwrap();
+            assert!(app.tasks[index].completed && !app.tasks[index].carried);
+
+            let history = app.history.len();
+            press(&mut app, &fixture, KeyCode::Char('m'));
+            assert_eq!(app.history.len(), history);
+
+            app.undo(&fixture.storage).unwrap();
+            assert!(app.tasks[0].carried && !app.tasks[0].completed);
+
+            app.redo(&fixture.storage).unwrap();
+            let index = app.list.selected().unwrap();
+            assert!(app.tasks[index].completed && !app.tasks[index].carried);
+
+            press(&mut app, &fixture, KeyCode::Enter);
+            assert!(
+                app.tasks
+                    .iter()
+                    .all(|task| !task.completed && !task.carried)
+            );
+            assert_eq!(fixture.storage.load().unwrap(), app.tasks);
         }
     }
 
@@ -3291,7 +3222,6 @@ mod tests {
             })
             .into(),
         );
-        app.completed_at_bottom = true;
         app.list.select(Some(2));
         let original = app.tasks.clone();
         fixture.storage.save(&original).unwrap();
@@ -3514,121 +3444,6 @@ mod tests {
                 assert!(!app.tasks[0].completed);
             }
         }
-    }
-
-    #[test]
-    fn completed_group_is_a_stack_and_each_toggle_undoes_as_one_change() {
-        let fixture = Fixture::new();
-
-        let original: Vec<_> = [("a", false), ("b", false), ("c", true), ("d", true)]
-            .map(|(text, completed)| Task {
-                carried: false,
-                text: text.into(),
-                completed,
-            })
-            .into();
-
-        let mut app = App::new(original.clone());
-        app.completed_at_bottom = true;
-
-        for (index, order, selected) in [
-            (0, vec!["b", "a", "c", "d"], 1),
-            (0, vec!["b", "a", "c", "d"], 0),
-            (2, vec!["c", "b", "a", "d"], 0),
-        ] {
-            app.toggle(index, &fixture.storage).unwrap();
-            assert_eq!(
-                app.tasks
-                    .iter()
-                    .map(|task| task.text.as_str())
-                    .collect::<Vec<_>>(),
-                order
-            );
-            assert_eq!(app.list.selected(), Some(selected));
-            assert_eq!(fixture.storage.load().unwrap(), app.tasks);
-        }
-
-        assert_eq!(app.history.len(), 3);
-
-        for selected in [0, 1, 0] {
-            press(&mut app, &fixture, KeyCode::Char('u'));
-            assert_eq!(app.list.selected(), Some(selected));
-            assert_eq!(fixture.storage.load().unwrap(), app.tasks);
-        }
-
-        assert_eq!(app.tasks, original);
-        assert!(!app.can_undo());
-
-        // A failed toggle or undo must not change the ordering, selection, or history.
-        app.toggle(0, &fixture.storage).unwrap();
-        let before = app.tasks.clone();
-        let selected = app.list.selected();
-        block_saves(&fixture);
-
-        assert!(app.toggle(0, &fixture.storage).is_err());
-        assert!(app.undo(&fixture.storage).is_err());
-        assert_eq!(app.tasks, before);
-        assert_eq!(app.list.selected(), selected);
-        assert_eq!(app.history.len(), 1);
-
-        restore_saves(&fixture);
-        app.undo(&fixture.storage).unwrap();
-        assert_eq!(app.tasks, original);
-    }
-
-    #[test]
-    fn additions_and_reordering_stay_within_completion_groups() {
-        let fixture = Fixture::new();
-
-        for key in ['a', 'o', 'O'] {
-            let mut app = app_with_tasks(4);
-            app.tasks[2].completed = true;
-            app.tasks[3].completed = true;
-            app.completed_at_bottom = true;
-            let original = app.tasks.clone();
-            app.list.select(Some(1));
-            press(&mut app, &fixture, KeyCode::Char('J'));
-            app.list.select(Some(2));
-            press(&mut app, &fixture, KeyCode::Char('K'));
-
-            assert_eq!(app.tasks, original);
-            assert!(!app.can_undo());
-
-            press(&mut app, &fixture, KeyCode::Char('J'));
-            assert_eq!(app.tasks[3], original[2]);
-
-            press(&mut app, &fixture, KeyCode::Char('u'));
-            assert_eq!(app.tasks, original);
-
-            press(&mut app, &fixture, KeyCode::Char(key));
-            press(&mut app, &fixture, KeyCode::Char('n'));
-            press(&mut app, &fixture, KeyCode::Enter);
-
-            assert_eq!(app.list.selected(), Some(2));
-            assert_eq!(app.tasks[2].text, "n");
-            assert!(!app.tasks[2].completed);
-            assert!(app.tasks[3..].iter().all(|task| task.completed));
-            assert_eq!(fixture.storage.load().unwrap(), app.tasks);
-
-            press(&mut app, &fixture, KeyCode::Char('u'));
-            assert_eq!(app.tasks, original);
-        }
-
-        let mut app = app_with_tasks(1);
-        app.completed_at_bottom = true;
-
-        for _ in 0..2 {
-            press(&mut app, &fixture, KeyCode::Enter);
-        }
-
-        assert!(!app.tasks[0].completed);
-        assert_eq!(app.list.selected(), Some(0));
-
-        app.tasks.clear();
-        app.list.select(None);
-        press(&mut app, &fixture, KeyCode::Enter);
-
-        assert!(app.tasks.is_empty());
     }
 
     #[test]
@@ -5004,65 +4819,61 @@ mod tests {
             (3, Some(2), [3, 3, 2]),
             (3, None, [3, 3, 3]),
         ] {
-            for boundary in [None, Some(0), Some(1.min(count)), Some(count)] {
-                for (key, position) in ['a', 'o', 'O'].into_iter().zip(positions) {
-                    let fixture = Fixture::new();
-                    let mut app = app_with_tasks(count);
-                    app.completed_at_bottom = boundary.is_some();
+            for (key, expected_index) in ['a', 'o', 'O'].into_iter().zip(positions) {
+                let fixture = Fixture::new();
+                let mut app = app_with_tasks(count);
 
-                    for (index, task) in app.tasks.iter_mut().enumerate() {
-                        task.completed = boundary.map_or(index == 0, |start| index >= start);
-                    }
-
-                    app.list.select(selected);
-                    let original = app.tasks.clone();
-                    let expected_index = position.min(boundary.unwrap_or(count));
-                    let mut expected = original.clone();
-                    expected.insert(
-                        expected_index,
-                        Task {
-                            carried: false,
-                            text: "New task".into(),
-                            completed: false,
-                        },
-                    );
-                    press(&mut app, &fixture, KeyCode::Char(key));
-                    app.paste("New task");
-                    press(&mut app, &fixture, KeyCode::Enter);
-
-                    assert_eq!(app.tasks, expected);
-                    assert_eq!(app.list.selected(), Some(expected_index));
-                    assert_eq!(fixture.storage.load().unwrap(), expected);
-                    assert_eq!(app.history.len(), 1);
-                    assert!(app.reveal_selection);
-
-                    app.keybinds = false;
-                    let mut terminal =
-                        ratatui::Terminal::new(ratatui::backend::TestBackend::new(18, 3)).unwrap();
-                    terminal
-                        .draw(|frame| {
-                            crate::ui::draw(frame, &mut app);
-                        })
-                        .unwrap();
-
-                    assert_eq!(app.row_tasks[app.scroll], Some(expected_index));
-
-                    app.undo(&fixture.storage).unwrap();
-                    assert_eq!(app.tasks, original);
-                    assert_eq!(app.list.selected(), selected);
-
-                    app.redo(&fixture.storage).unwrap();
-                    assert_eq!(app.tasks, expected);
-                    assert_eq!(app.list.selected(), Some(expected_index));
-
-                    app.undo(&fixture.storage).unwrap();
-                    press(&mut app, &fixture, KeyCode::Char(key));
-                    app.paste("New branch");
-                    press(&mut app, &fixture, KeyCode::Enter);
-
-                    assert!(!app.can_redo());
-                    assert_eq!(app.history.len(), 1);
+                for (index, task) in app.tasks.iter_mut().enumerate() {
+                    task.completed = index == 0;
                 }
+
+                app.list.select(selected);
+                let original = app.tasks.clone();
+                let mut expected = original.clone();
+                expected.insert(
+                    expected_index,
+                    Task {
+                        carried: false,
+                        text: "New task".into(),
+                        completed: false,
+                    },
+                );
+                press(&mut app, &fixture, KeyCode::Char(key));
+                app.paste("New task");
+                press(&mut app, &fixture, KeyCode::Enter);
+
+                assert_eq!(app.tasks, expected);
+                assert_eq!(app.list.selected(), Some(expected_index));
+                assert_eq!(fixture.storage.load().unwrap(), expected);
+                assert_eq!(app.history.len(), 1);
+                assert!(app.reveal_selection);
+
+                app.keybinds = false;
+                let mut terminal =
+                    ratatui::Terminal::new(ratatui::backend::TestBackend::new(18, 3)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        crate::ui::draw(frame, &mut app);
+                    })
+                    .unwrap();
+
+                assert_eq!(app.row_tasks[app.scroll], Some(expected_index));
+
+                app.undo(&fixture.storage).unwrap();
+                assert_eq!(app.tasks, original);
+                assert_eq!(app.list.selected(), selected);
+
+                app.redo(&fixture.storage).unwrap();
+                assert_eq!(app.tasks, expected);
+                assert_eq!(app.list.selected(), Some(expected_index));
+
+                app.undo(&fixture.storage).unwrap();
+                press(&mut app, &fixture, KeyCode::Char(key));
+                app.paste("New branch");
+                press(&mut app, &fixture, KeyCode::Enter);
+
+                assert!(!app.can_redo());
+                assert_eq!(app.history.len(), 1);
             }
         }
     }

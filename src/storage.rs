@@ -415,6 +415,26 @@ pub mod tests {
             assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
         }
 
+        // Completion state never reorders tasks or rewrites the file while loading.
+        let interleaved: Vec<_> = [
+            ("done 1", true),
+            ("active 1", false),
+            ("done 2", true),
+            ("active 2", false),
+        ]
+        .map(|(text, completed)| Task {
+            carried: false,
+            text: text.into(),
+            completed,
+        })
+        .into();
+
+        fixture.storage.save(&interleaved).unwrap();
+        let contents = fs::read(fixture.task_path()).unwrap();
+
+        assert_eq!(fixture.storage.load_document().unwrap().tasks, interleaved);
+        assert_eq!(fs::read(fixture.task_path()).unwrap(), contents);
+
         fixture.storage.save_selected(&[], Some(99)).unwrap();
         let json: serde_json::Value =
             serde_json::from_slice(&fs::read(fixture.task_path()).unwrap()).unwrap();

@@ -35,7 +35,7 @@ use ratatui::crossterm::event::EnableBracketedPaste;
 use app::App;
 use storage::{Result, Storage};
 
-const USAGE: &str = "Usage: sati [--theme NAME] [--config PATH] [--wrap | --no-wrap] [--logo | --no-logo] [--keybinds | --no-keybinds] [--round-corners | --square-corners] [--ascii-markers | --unicode-markers] [--completed-at-bottom | --no-completed-at-bottom] [--accent COLOR] [--version]\n       sati export [--output PATH | -o PATH] [--force]";
+const USAGE: &str = "Usage: sati [--theme NAME] [--config PATH] [--wrap | --no-wrap] [--logo | --no-logo] [--keybinds | --no-keybinds] [--round-corners | --square-corners] [--ascii-markers | --unicode-markers] [--accent COLOR] [--version]\n       sati export [--output PATH | -o PATH] [--force]";
 
 // Report repeats for plain characters and Enter too; alternate keys preserve shifted text.
 const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
@@ -51,7 +51,6 @@ struct Options {
     keybinds: bool,
     rounded: bool,
     ascii_markers: bool,
-    completed_at_bottom: bool,
     styles: styles::Styles,
     theme: themes::BuiltinTheme,
     style_overrides: config::StyleOverrides,
@@ -87,11 +86,6 @@ impl CliOptions {
                 .display
                 .ascii_markers
                 .or(config.display.ascii_markers)
-                .unwrap_or(false),
-            completed_at_bottom: self
-                .display
-                .completed_at_bottom
-                .or(config.display.completed_at_bottom)
                 .unwrap_or(false),
             styles: styles::Styles::resolve(
                 self.theme.unwrap_or(config.theme),
@@ -129,7 +123,7 @@ fn run() -> Result<()> {
 
     let Some(options) = parse_arguments(arguments)? else {
         println!(
-            "{USAGE}\n\n--theme NAME      Select a built-in theme (available: {available_themes}; default: default).\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--logo / --no-logo  Show / hide the sati border title.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--completed-at-bottom / --no-completed-at-bottom  Enable / disable grouping.\n--accent COLOR    Override theme/TOML accent foreground: ANSI name, #RRGGBB, or index 0-255.\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, logo, keybinds, rounded_corners, ascii_markers, completed_at_bottom.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg, bg (#RRGGBB or reset), and modifiers. --accent overrides only the accent foreground.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file.",
+            "{USAGE}\n\n--theme NAME      Select a built-in theme (available: {available_themes}; default: default).\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--logo / --no-logo  Show / hide the sati border title.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--accent COLOR    Override theme/TOML accent foreground: ANSI name, #RRGGBB, or index 0-255.\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, logo, keybinds, rounded_corners, ascii_markers.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg, bg (#RRGGBB or reset), and modifiers. --accent overrides only the accent foreground.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file.",
             available_themes = themes::BuiltinTheme::names(),
         );
         return Ok(());
@@ -145,13 +139,12 @@ fn run() -> Result<()> {
     let storage = Storage::discover()?;
     let _instance_lock = storage.lock()?;
 
-    let mut app = App::from_document(load_tasks(&storage, options.completed_at_bottom)?);
+    let mut app = App::from_document(storage.load_document()?);
     app.wrap = options.wrap;
     app.logo = options.logo;
     app.keybinds = options.keybinds;
     app.rounded = options.rounded;
     app.unicode_markers = !options.ascii_markers;
-    app.completed_at_bottom = options.completed_at_bottom;
     app.styles = options.styles;
     app.theme = options.theme;
     app.style_overrides = options.style_overrides;
@@ -407,32 +400,6 @@ fn keyboard_support(result: io::Result<bool>) -> io::Result<bool> {
     }
 }
 
-fn load_tasks(storage: &Storage, completed_at_bottom: bool) -> Result<storage::TaskDocument> {
-    let mut document = storage.load_document()?;
-
-    if completed_at_bottom
-        && document
-            .tasks
-            .windows(2)
-            .any(|pair| pair[0].completed && !pair[1].completed)
-    {
-        let mut order: Vec<_> = (0..document.tasks.len()).collect();
-        order.sort_by_key(|&index| document.tasks[index].completed);
-        document.selected = document
-            .selected
-            .and_then(|selected| order.iter().position(|&index| index == selected));
-        document.tasks = order
-            .into_iter()
-            .map(|index| document.tasks[index].clone())
-            .collect();
-
-        storage.save_selected(&document.tasks, document.selected)?;
-        document.needs_migration = false;
-    }
-
-    Ok(document)
-}
-
 fn parse_arguments(
     arguments: impl IntoIterator<Item = std::ffi::OsString>,
 ) -> Result<Option<CliOptions>> {
@@ -463,10 +430,6 @@ fn parse_arguments(
             "--ascii-markers" | "--unicode-markers" => Some((
                 &mut options.display.ascii_markers,
                 flag == "--ascii-markers",
-            )),
-            "--completed-at-bottom" | "--no-completed-at-bottom" => Some((
-                &mut options.display.completed_at_bottom,
-                flag == "--completed-at-bottom",
             )),
             _ => None,
         };
@@ -935,7 +898,6 @@ mod tests {
             "keybinds",
             "rounded_corners",
             "ascii_markers",
-            "completed_at_bottom",
         ];
 
         let flags = [
@@ -944,7 +906,6 @@ mod tests {
             ("--keybinds", "--no-keybinds"),
             ("--round-corners", "--square-corners"),
             ("--ascii-markers", "--unicode-markers"),
-            ("--completed-at-bottom", "--no-completed-at-bottom"),
         ];
 
         let values = |options: Options| {
@@ -954,7 +915,6 @@ mod tests {
                 options.keybinds,
                 options.rounded,
                 options.ascii_markers,
-                options.completed_at_bottom,
             ]
         };
 
@@ -991,83 +951,6 @@ mod tests {
             super::parse_arguments(["--config", "one", "--config", "two"].map(Into::into)).is_err()
         );
         assert!(super::parse_arguments(["--config"].map(Into::into)).is_err());
-    }
-
-    #[test]
-    fn startup_grouping_remaps_selected_original_indices_including_duplicates() {
-        let fixture = storage::tests::Fixture::new();
-
-        let tasks: Vec<_> = [true, false, true, false]
-            .map(|completed| app::Task {
-                text: "duplicate".into(),
-                completed,
-                carried: false,
-            })
-            .into();
-
-        for (selected, remapped) in [(0, 2), (1, 0), (2, 3), (3, 1)] {
-            fixture
-                .storage
-                .save_selected(&tasks, Some(selected))
-                .unwrap();
-            let document = load_tasks(&fixture.storage, true).unwrap();
-
-            assert_eq!(document.selected, Some(remapped));
-            assert_eq!(
-                fixture.storage.load_document().unwrap().selected,
-                Some(remapped)
-            );
-
-            let bytes = std::fs::read(fixture.task_path()).unwrap();
-            load_tasks(&fixture.storage, true).unwrap();
-            assert_eq!(std::fs::read(fixture.task_path()).unwrap(), bytes);
-        }
-    }
-
-    #[test]
-    fn completed_at_bottom_groups_existing_tasks_stably_and_is_opt_in() {
-        let fixture = crate::storage::tests::Fixture::new();
-
-        let original: Vec<_> = [
-            ("done 1", true),
-            ("active 1", false),
-            ("done 2", true),
-            ("active 2", false),
-        ]
-        .map(|(text, completed)| app::Task {
-            carried: false,
-            text: text.into(),
-            completed,
-        })
-        .into();
-
-        fixture.storage.save(&original).unwrap();
-        let contents = std::fs::read(fixture.task_path()).unwrap();
-        assert_eq!(load_tasks(&fixture.storage, false).unwrap().tasks, original);
-        assert_eq!(std::fs::read(fixture.task_path()).unwrap(), contents);
-
-        let grouped = load_tasks(&fixture.storage, true).unwrap().tasks;
-        assert_eq!(
-            grouped,
-            [
-                original[1].clone(),
-                original[3].clone(),
-                original[0].clone(),
-                original[2].clone()
-            ]
-        );
-        assert_eq!(fixture.storage.load().unwrap(), grouped);
-        assert_eq!(load_tasks(&fixture.storage, true).unwrap().tasks, grouped);
-        assert!(!parse_arguments([]).unwrap().unwrap().completed_at_bottom);
-
-        let options = parse_arguments(
-            ["--completed-at-bottom", "--add-to-bottom", "--no-wrap"].map(Into::into),
-        )
-        .unwrap()
-        .unwrap();
-
-        assert!(options.completed_at_bottom);
-        assert!(!options.wrap);
     }
 
     #[test]
