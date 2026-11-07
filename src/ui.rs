@@ -117,6 +117,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
                 label,
                 &app.styles,
                 matches!(app.mode, Mode::Searching { .. }),
+                None,
             );
         }
         _ => {}
@@ -480,7 +481,7 @@ fn draw_inline_input(
         && row < visible.end
     {
         let indent = area.width.saturating_sub(1).min(2);
-        draw_input(
+        draw_input_line(
             frame,
             Rect::new(
                 area.x + indent,
@@ -491,6 +492,8 @@ fn draw_inline_input(
             input,
             label,
             &app.styles,
+            true,
+            app.completion_ghost().as_deref(),
         );
     }
 }
@@ -858,10 +861,6 @@ fn wrap_shortcuts(rows: &[Vec<(&str, &str)>], width: u16, styles: &Styles) -> Ve
     lines
 }
 
-fn draw_input(frame: &mut Frame, area: Rect, input: &TextInput, label: &str, styles: &Styles) {
-    draw_input_line(frame, area, input, label, styles, true);
-}
-
 fn draw_input_line(
     frame: &mut Frame,
     area: Rect,
@@ -869,6 +868,7 @@ fn draw_input_line(
     label: &str,
     styles: &Styles,
     show_cursor: bool,
+    ghost: Option<&str>,
 ) {
     if area.is_empty() {
         return;
@@ -925,6 +925,24 @@ fn draw_input_line(
 
     let visible = &text[start..end];
     line.push_span(Span::styled(visible, styles.normal));
+
+    // A suggested section follows the cursor in dim text, cut to the remaining cells.
+    if let Some(ghost) = ghost {
+        let mut room = usize::from(area.width).saturating_sub(prefix_width + visible_width);
+        let mut shown = String::new();
+
+        for grapheme in ghost.graphemes(true) {
+            if grapheme.width() > room {
+                break;
+            }
+
+            room -= grapheme.width();
+            shown.push_str(grapheme);
+        }
+
+        line.push_span(Span::styled(shown, styles.muted));
+    }
+
     frame.render_widget(Paragraph::new(line), area);
     let cursor = (prefix_width + width).min(usize::from(area.width - 1));
 
@@ -1156,6 +1174,41 @@ mod tests {
     }
 
     #[test]
+    fn a_suggested_section_is_drawn_dim_after_the_cursor() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.keybinds = false;
+        app.show_section(crate::app::SectionView::Named("work".into()));
+        app.key(
+            ratatui::crossterm::event::KeyEvent::new(
+                ratatui::crossterm::event::KeyCode::Char('a'),
+                ratatui::crossterm::event::KeyModifiers::NONE,
+            ),
+            &fixture.storage,
+        )
+        .unwrap();
+        let mut terminal = test_terminal(30, 8);
+        render(&mut terminal, &mut app);
+
+        let row = row_text(&terminal, 3);
+        assert!(row.contains("add › Work:"), "{row}");
+
+        let cursor = terminal.get_cursor_position().unwrap();
+        let ghost = &terminal.backend().buffer()[(cursor.x, cursor.y)];
+
+        assert_eq!(ghost.symbol(), "W");
+        assert!(ghost.modifier.contains(Modifier::DIM));
+
+        let mut narrow = test_terminal(12, 8);
+        render(&mut narrow, &mut app);
+        assert!(
+            screen(&narrow)
+                .lines()
+                .all(|line| line.chars().count() <= 12)
+        );
+    }
+
+    #[test]
     fn clicking_a_tab_shows_that_section_and_the_legend_mentions_tab() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b"]);
@@ -1327,12 +1380,14 @@ mod tests {
         let mut input_terminal = test_terminal(40, 1);
         input_terminal
             .draw(|frame| {
-                draw_input(
+                draw_input_line(
                     frame,
                     frame.area(),
                     &TextInput::from("draft"),
                     "add",
                     &app.styles,
+                    true,
+                    None,
                 )
             })
             .unwrap();
@@ -3462,7 +3517,15 @@ mod tests {
                 let mut terminal = test_terminal(width, 1);
                 terminal
                     .draw(|frame| {
-                        draw_input(frame, frame.area(), &input, label, &Styles::default())
+                        draw_input_line(
+                            frame,
+                            frame.area(),
+                            &input,
+                            label,
+                            &Styles::default(),
+                            true,
+                            None,
+                        )
                     })
                     .unwrap();
 
@@ -3487,7 +3550,17 @@ mod tests {
             input.set_cursor(0);
             let mut terminal = test_terminal(40, 1);
             terminal
-                .draw(|frame| draw_input(frame, frame.area(), &input, label, &Styles::default()))
+                .draw(|frame| {
+                    draw_input_line(
+                        frame,
+                        frame.area(),
+                        &input,
+                        label,
+                        &Styles::default(),
+                        true,
+                        None,
+                    )
+                })
                 .unwrap();
 
             assert_eq!(
@@ -3510,7 +3583,7 @@ mod tests {
                 let accent = Color::Rgb(169, 182, 101);
                 terminal
                     .draw(|frame| {
-                        draw_input(
+                        draw_input_line(
                             frame,
                             frame.area(),
                             &input,
@@ -3519,6 +3592,8 @@ mod tests {
                                 accent: Styles::default().accent.fg(accent),
                                 ..Styles::default()
                             },
+                            true,
+                            None,
                         )
                     })
                     .unwrap();
@@ -3578,12 +3653,14 @@ mod tests {
                     let mut terminal = test_terminal(width, height);
                     terminal
                         .draw(|frame| {
-                            draw_input(
+                            draw_input_line(
                                 frame,
                                 frame.area(),
                                 &TextInput::from("hidden 👩‍💻"),
                                 label,
                                 &Styles::default(),
+                                true,
+                                None,
                             )
                         })
                         .unwrap();

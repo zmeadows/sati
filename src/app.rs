@@ -122,6 +122,13 @@ pub enum Mode {
     ConfirmClear,
 }
 
+// A pending section suggestion while adding or editing, shown as dim text after the
+// cursor. It only exists while the input is a single partial word with the cursor at its end.
+struct Completion {
+    labels: Vec<String>,
+    current: usize,
+}
+
 #[cfg_attr(test, derive(Clone, Debug, PartialEq))]
 struct UndoState {
     tasks: Vec<Task>,
@@ -155,6 +162,7 @@ pub struct App {
     pub tab_targets: Vec<(Rect, SectionView)>,
     // A Vim-style count typed before a motion; transient and never saved.
     pending_count: Option<usize>,
+    completion: Option<Completion>,
     task_register: Option<String>,
     last_search_query: Option<String>,
     history: VecDeque<UndoState>,
@@ -189,6 +197,7 @@ impl App {
             view: SectionView::All,
             tab_targets: Vec::new(),
             pending_count: None,
+            completion: None,
             task_register: None,
             last_search_query: None,
             history: VecDeque::new(),
@@ -206,6 +215,11 @@ impl App {
         app.view = SectionView::from_saved_key(document.section);
         app.persisted_view = app.view.clone();
         app.needs_migration = document.needs_migration;
+
+        if !app.section_tabs().iter().any(|(view, _)| *view == app.view) {
+            app.view = SectionView::All;
+        }
+
         app.settle_view();
 
         app
@@ -308,20 +322,22 @@ impl App {
         }
     }
 
-    // Keep the view valid after tasks change: a vanished tab falls back to [*], and a
-    // selection that left the current tab pulls the view along to the task's own tab.
+    // Keep the view valid after tasks change. A selection that left the current tab pulls
+    // the view along to the task's own tab (an edit or undo moved it); a tab that is gone
+    // otherwise falls back to [*]. Removals that empty a tab switch to [*] themselves.
     fn settle_view(&mut self) {
         let tabs = self.section_tabs();
 
-        if tabs.is_empty() || !tabs.iter().any(|(view, _)| *view == self.view) {
-            self.view = SectionView::All;
-        }
-
-        if let Some(index) = self.list.selected()
+        if !tabs.is_empty()
+            && let Some(index) = self.list.selected()
             && index < self.tasks.len()
             && !self.is_visible(index)
         {
             self.view = self.home_view(index);
+        }
+
+        if !tabs.iter().any(|(view, _)| *view == self.view) {
+            self.view = SectionView::All;
         }
     }
 
@@ -361,6 +377,94 @@ impl App {
         };
 
         self.show_section(tabs[next].0.clone());
+    }
+
+    fn section_labels(&self) -> Vec<String> {
+        self.section_tabs()
+            .into_iter()
+            .filter(|(view, _)| matches!(view, SectionView::Named(_)))
+            .map(|(_, label)| label)
+            .collect()
+    }
+
+    // The input typed so far when it can still become a section: one word, cursor at the end.
+    fn completion_partial(&self) -> Option<&str> {
+        let (Mode::Adding(input, _) | Mode::Editing { input, .. }) = &self.mode else {
+            return None;
+        };
+
+        let text = input.text();
+        let one_word = !text.contains(char::is_whitespace) && !text.contains(':');
+
+        (one_word && input.cursor() == text.len()).then_some(text)
+    }
+
+    fn cycle_completion(&mut self, forward: bool) {
+        if let Some(completion) = &mut self.completion {
+            let count = completion.labels.len();
+
+            completion.current = if forward {
+                (completion.current + 1) % count
+            } else {
+                (completion.current + count - 1) % count
+            };
+
+            return;
+        }
+
+        let Some(partial) = self.completion_partial() else {
+            return;
+        };
+
+        let partial = partial.to_lowercase();
+        let all = self.section_labels();
+
+        let labels: Vec<String> = all
+            .iter()
+            .filter(|label| label.to_lowercase().starts_with(&partial))
+            .cloned()
+            .collect();
+
+        if labels.is_empty() {
+            if all.is_empty() {
+                self.notify("No sections yet (start a task with \"Name: \")");
+            } else {
+                self.notify("No matching sections");
+            }
+
+            return;
+        }
+
+        let current = if forward { 0 } else { labels.len() - 1 };
+        self.completion = Some(Completion { labels, current });
+    }
+
+    // Replace the partial word with the chosen section, ready for the task text.
+    fn accept_completion(&mut self) {
+        let Some(completion) = self.completion.take() else {
+            return;
+        };
+
+        if let Mode::Adding(input, _) | Mode::Editing { input, .. } = &mut self.mode {
+            let label = &completion.labels[completion.current];
+            *input = format!("{label}: ").into();
+        }
+    }
+
+    // The dim text drawn after the cursor: the rest of the suggested "Section: ".
+    pub fn completion_ghost(&self) -> Option<String> {
+        let completion = self.completion.as_ref()?;
+        let label = &completion.labels[completion.current];
+        let typed = self.completion_partial().unwrap_or("").to_lowercase();
+
+        let start = label
+            .char_indices()
+            .map(|(index, _)| index)
+            .chain([label.len()])
+            .find(|&index| label[..index].to_lowercase() == typed)
+            .unwrap_or(0);
+
+        Some(format!("{}: ", &label[start..]))
     }
 
     pub fn navigate(&mut self, forward: bool, count: Option<usize>) {
@@ -759,6 +863,11 @@ impl App {
             .collect();
         let cleared = self.tasks_phrase(removed, "");
 
+        // Emptying the current tab returns to [*].
+        if visible_survivors.is_empty() {
+            self.view = SectionView::All;
+        }
+
         self.replace(tasks, selected, format!("clear {cleared}"), storage)?;
 
         if kept == 0 {
@@ -839,6 +948,11 @@ impl App {
             .map(|&index| self.tasks[index].clone())
             .collect();
         let cleared = self.tasks_phrase(removed, "completed ");
+
+        // Emptying the current tab returns to [*].
+        if visible_survivors.is_empty() {
+            self.view = SectionView::All;
+        }
 
         self.replace(tasks, selected, format!("clear {cleared}"), storage)?;
         self.notify(format!("Cleared {cleared}"));
@@ -934,6 +1048,14 @@ impl App {
 
         // Every accepted key consumes a pending count, even shortcuts that ignore it.
         let count = self.pending_count.take();
+
+        // Modifier shortcuts edit the input directly, so a pending suggestion is dropped.
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            self.completion = None;
+        }
 
         if self.consume_modified_key(key, storage)? {
             return Ok(false);
@@ -1156,6 +1278,29 @@ impl App {
             }
         }
 
+        if matches!(self.mode, Mode::Adding(..) | Mode::Editing { .. }) {
+            let forward = key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT);
+
+            match key.code {
+                KeyCode::Tab | KeyCode::BackTab => {
+                    self.cycle_completion(forward);
+                    return Ok(());
+                }
+                _ if self.completion.is_none() => {}
+                KeyCode::Char(' ') | KeyCode::Enter => {
+                    self.accept_completion();
+                    return Ok(());
+                }
+                // Typing continues after the suggested section.
+                KeyCode::Char(character) if !character.is_control() => self.accept_completion(),
+                KeyCode::Backspace | KeyCode::Esc => {
+                    self.completion = None;
+                    return Ok(());
+                }
+                _ => self.completion = None,
+            }
+        }
+
         let placement = match self.mode {
             Mode::Adding(_, placement) => placement,
             _ => AddPlacement::End,
@@ -1188,8 +1333,11 @@ impl App {
             }
             KeyCode::Enter => {
                 let text = input.text().trim().to_owned();
+                // A chosen section with nothing after it is not a task.
+                let bare_section =
+                    task_prefix(input.text()).is_some() && section_body(input.text()).is_empty();
 
-                if !text.is_empty() {
+                if !text.is_empty() && !bare_section {
                     if let Some(index) = edited_task {
                         if self.tasks[index].text != text {
                             let mut tasks = self.tasks.clone();
@@ -1333,6 +1481,16 @@ impl App {
                 };
 
                 self.mode = Mode::Adding(TextInput::default(), placement);
+
+                // A section tab starts new tasks with its own section suggested.
+                if let Some(current) = self.scope_label()
+                    && matches!(self.view, SectionView::Named(_))
+                {
+                    let labels = self.section_labels();
+                    let current = labels.iter().position(|label| *label == current);
+
+                    self.completion = current.map(|current| Completion { labels, current });
+                }
             }
             KeyCode::Char('e') => {
                 if let Some(index) = self.list.selected() {
@@ -1356,9 +1514,14 @@ impl App {
                         .and_then(|position| position.checked_sub(1))
                         .map(|position| visible[position]);
 
-                    let selected = next
-                        .map(|&next| next - 1)
-                        .or(previous)
+                    let visible_neighbor = next.map(|&next| next - 1).or(previous);
+
+                    // Deleting a tab's last task returns to [*].
+                    if visible_neighbor.is_none() {
+                        self.view = SectionView::All;
+                    }
+
+                    let selected = visible_neighbor
                         .or_else(|| (!tasks.is_empty()).then(|| index.min(tasks.len() - 1)));
 
                     self.replace(tasks, selected, "delete task", storage)?;
@@ -1382,6 +1545,7 @@ impl App {
     pub fn paste(&mut self, text: &str) {
         self.notification = None;
         self.pending_count = None;
+        self.accept_completion();
 
         if let Mode::Adding(input, _)
         | Mode::Editing { input, .. }
@@ -2445,6 +2609,164 @@ mod tests {
 
             assert_eq!(output, expected);
         }
+    }
+
+    fn input_text(app: &App) -> &str {
+        match &app.mode {
+            Mode::Adding(input, _) | Mode::Editing { input, .. } => input.text(),
+            mode => panic!("expected an input mode, got {mode:?}"),
+        }
+    }
+
+    #[test]
+    fn adding_on_a_section_tab_suggests_that_section_and_typing_accepts_it() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["work: a", "Home: b"]);
+        app.show_section(SectionView::Named("work".into()));
+
+        press(&mut app, &fixture, KeyCode::Char('a'));
+        assert_eq!(input_text(&app), "");
+        assert_eq!(app.completion_ghost().as_deref(), Some("work: "));
+
+        type_keys(&mut app, &fixture, "x");
+        assert_eq!(input_text(&app), "work: x");
+        assert_eq!(app.completion_ghost(), None);
+
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(texts(&app), ["work: a", "Home: b", "work: x"]);
+        assert_eq!(app.view, SectionView::Named("work".into()));
+        assert_eq!(app.list.selected(), Some(2));
+
+        app.show_section(SectionView::All);
+        press(&mut app, &fixture, KeyCode::Char('a'));
+        assert_eq!(app.completion_ghost(), None);
+    }
+
+    #[test]
+    fn space_or_enter_accept_a_suggestion_and_backspace_or_esc_dismiss_it() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.show_section(SectionView::Named("work".into()));
+
+        for accept in [KeyCode::Char(' '), KeyCode::Enter] {
+            press(&mut app, &fixture, KeyCode::Char('o'));
+            press(&mut app, &fixture, accept);
+
+            assert_eq!(input_text(&app), "Work: ");
+            assert_eq!(app.completion_ghost(), None);
+
+            // A section with no task text adds nothing.
+            press(&mut app, &fixture, KeyCode::Enter);
+            assert_eq!(app.mode, Mode::Normal);
+            assert_eq!(app.tasks.len(), 2);
+        }
+
+        for dismiss in [KeyCode::Backspace, KeyCode::Esc] {
+            press(&mut app, &fixture, KeyCode::Char('a'));
+            press(&mut app, &fixture, dismiss);
+
+            assert_eq!(input_text(&app), "");
+            assert_eq!(app.completion_ghost(), None);
+
+            press(&mut app, &fixture, KeyCode::Esc);
+            assert_eq!(app.mode, Mode::Normal);
+        }
+
+        press(&mut app, &fixture, KeyCode::Char('a'));
+        press(&mut app, &fixture, KeyCode::Backspace);
+        type_keys(&mut app, &fixture, "plain");
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(texts(&app), ["Work: a", "Home: b", "plain"]);
+        assert_eq!(app.view, SectionView::Unsectioned);
+        assert!(!app.can_redo());
+        assert_eq!(app.history.len(), 1);
+    }
+
+    #[test]
+    fn tab_cycles_matching_sections_on_empty_or_partial_input() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "Errands: c", "Workout: d"]);
+        press(&mut app, &fixture, KeyCode::Char('a'));
+
+        for (key, ghost) in [
+            (KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), "Errands: "),
+            (KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), "Home: "),
+            (
+                KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+                "Errands: ",
+            ),
+            (
+                KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT),
+                "Workout: ",
+            ),
+        ] {
+            press(&mut app, &fixture, key);
+            assert_eq!(app.completion_ghost().as_deref(), Some(ghost), "{key:?}");
+        }
+
+        press(&mut app, &fixture, KeyCode::Esc);
+        type_keys(&mut app, &fixture, "wO");
+        press(&mut app, &fixture, KeyCode::Tab);
+        assert_eq!(app.completion_ghost().as_deref(), Some("rk: "));
+
+        press(&mut app, &fixture, KeyCode::Tab);
+        assert_eq!(app.completion_ghost().as_deref(), Some("rkout: "));
+
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert_eq!(input_text(&app), "Workout: ");
+
+        press(&mut app, &fixture, KeyCode::Esc);
+        press(&mut app, &fixture, KeyCode::Char('a'));
+        type_keys(&mut app, &fixture, "zz");
+        press(&mut app, &fixture, KeyCode::Tab);
+
+        assert_eq!(app.completion_ghost(), None);
+        assert_eq!(notice(&app), Some("No matching sections"));
+
+        // Text with a space can no longer become a section.
+        type_keys(&mut app, &fixture, " x");
+        press(&mut app, &fixture, KeyCode::Tab);
+        assert_eq!(app.completion_ghost(), None);
+        assert_eq!(input_text(&app), "zz x");
+    }
+
+    #[test]
+    fn editing_an_erased_task_can_move_it_to_another_section() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.show_section(SectionView::Named("work".into()));
+
+        press(&mut app, &fixture, KeyCode::Char('e'));
+        assert_eq!(input_text(&app), "Work: a");
+        assert_eq!(app.completion_ghost(), None);
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        press(&mut app, &fixture, KeyCode::Tab);
+        assert_eq!(app.completion_ghost().as_deref(), Some("Home: "));
+
+        // Modifier shortcuts edit the input directly and drop the suggestion.
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.completion_ghost(), None);
+
+        press(&mut app, &fixture, KeyCode::Tab);
+        app.paste("moved task");
+        assert_eq!(input_text(&app), "Home: moved task");
+
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(texts(&app), ["Home: moved task", "Home: b"]);
+        assert_eq!(app.view, SectionView::Named("home".into()));
+        assert_eq!(app.list.selected(), Some(0));
     }
 
     #[test]
