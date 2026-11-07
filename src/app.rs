@@ -6,15 +6,21 @@ use ratatui::crossterm::event::{
 use ratatui::{layout::Rect, widgets::ListState};
 use serde::{Deserialize, Serialize};
 
+use uuid::Uuid;
+
 use crate::input::TextInput;
 use crate::notification::Notification;
 use crate::storage::{Result, Storage};
+use crate::timestamp::Timestamp;
 
 const HISTORY_LIMIT: usize = 256;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Task {
+    // Unique and stable for the task's lifetime, for cross-referencing tasks.
+    pub id: Uuid,
+    pub created_at: Timestamp,
     pub text: String,
     pub completed: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -22,6 +28,16 @@ pub struct Task {
 }
 
 impl Task {
+    pub fn new(text: String) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            created_at: Timestamp::now(),
+            text,
+            completed: false,
+            carried: false,
+        }
+    }
+
     pub(crate) fn validation_error(&self) -> Option<&'static str> {
         if self.completed && self.carried {
             Some("cannot be both completed and carried")
@@ -518,14 +534,7 @@ impl App {
     ) -> Result<()> {
         let index = self.insertion_index(placement);
         let mut tasks = self.tasks.clone();
-        tasks.insert(
-            index,
-            Task {
-                text,
-                completed: false,
-                carried: false,
-            },
-        );
+        tasks.insert(index, Task::new(text));
 
         self.replace(tasks, Some(index), label, storage)
     }
@@ -1641,6 +1650,7 @@ mod tests {
                     carried: false,
                     text: format!("task {index}"),
                     completed: false,
+                    ..Task::new(String::new())
                 })
                 .collect(),
         )
@@ -1656,6 +1666,7 @@ mod tests {
                     carried: false,
                     text: (*text).into(),
                     completed: false,
+                    ..Task::new(String::new())
                 })
                 .collect(),
         )
@@ -1746,7 +1757,7 @@ mod tests {
 
         // A clean quit writes the migrated, versioned document.
         let saved = std::fs::read_to_string(fixture.task_path()).unwrap();
-        assert!(saved.contains("\"schema_version\": 1"), "{saved}");
+        assert!(saved.contains("\"schema_version\": 2"), "{saved}");
 
         app.list.select(Some(2));
         assert_eq!(fixture.storage.load_document().unwrap().selected, Some(0));
@@ -2088,6 +2099,7 @@ mod tests {
                         text: text.into(),
                         completed,
                         carried,
+                        ..Task::new(String::new())
                     };
                     app.list.select(Some(2));
                     fixture.storage.save(&app.tasks).unwrap();
@@ -2105,12 +2117,18 @@ mod tests {
                     let index = app.insertion_index(placement);
                     press(&mut app, &fixture, paste);
                     assert!(app.notification.is_none());
+
+                    // A paste creates a new task with its own identity.
+                    let pasted = &app.tasks[index];
+                    assert!(before.iter().all(|task| task.id != pasted.id));
                     assert_eq!(
-                        app.tasks[index],
+                        *pasted,
                         Task {
                             text: text.into(),
                             completed: false,
-                            carried: false
+                            carried: false,
+                            id: pasted.id,
+                            created_at: pasted.created_at,
                         }
                     );
                     assert_eq!(app.list.selected(), Some(index));
@@ -3627,9 +3645,10 @@ mod tests {
             for count in [0, 3] {
                 let fixture = Fixture::new();
                 let mut outcomes = Vec::new();
+                let tasks = app_with_tasks(count).tasks;
 
                 for event in [primary, alias] {
-                    let mut app = app_with_tasks(count);
+                    let mut app = App::new(tasks.clone());
 
                     if count > 0 {
                         app.toggle(0, &fixture.storage).unwrap();
@@ -3946,6 +3965,7 @@ mod tests {
                 carried: false,
                 text: text.into(),
                 completed,
+                ..Task::new(String::new())
             })
             .into(),
         );
@@ -4640,6 +4660,59 @@ mod tests {
         for character in keys.chars() {
             press(app, fixture, KeyCode::Char(character));
         }
+    }
+
+    #[test]
+    fn task_identity_survives_changes_and_new_tasks_get_their_own() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        let identity = |task: &Task| (task.id, task.created_at);
+        let original: Vec<_> = app.tasks.iter().map(identity).collect();
+
+        for keys in ["e", "x", " ", "m", "J", "K"] {
+            type_keys(&mut app, &fixture, keys);
+
+            if keys == "e" {
+                type_keys(&mut app, &fixture, " edited");
+                press(&mut app, &fixture, KeyCode::Enter);
+            }
+        }
+
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        );
+
+        let mut kept: Vec<_> = app.tasks.iter().map(identity).collect();
+        kept.sort();
+        let mut expected = original.clone();
+        expected.sort();
+        assert_eq!(kept, expected);
+        assert_eq!(
+            saved_ids(&fixture),
+            app.tasks.iter().map(|task| task.id).collect::<Vec<_>>()
+        );
+
+        let before = Timestamp::now();
+        type_keys(&mut app, &fixture, "a");
+        type_keys(&mut app, &fixture, "new");
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        let added = app.tasks.last().unwrap();
+        assert!(original.iter().all(|(id, _)| *id != added.id));
+        assert!(added.created_at >= before && added.created_at <= Timestamp::now());
+    }
+
+    fn saved_ids(fixture: &Fixture) -> Vec<Uuid> {
+        fixture
+            .storage
+            .load()
+            .unwrap()
+            .iter()
+            .map(|task| task.id)
+            .collect()
     }
 
     #[test]
@@ -5941,11 +6014,18 @@ mod tests {
                         carried: false,
                         text: "New task".into(),
                         completed: false,
+                        ..Task::new(String::new())
                     },
                 );
                 press(&mut app, &fixture, KeyCode::Char(key));
                 app.paste("New task");
                 press(&mut app, &fixture, KeyCode::Enter);
+
+                // The new task gets its own identity; everything else must match exactly.
+                let created = &app.tasks[expected_index];
+                assert!(original.iter().all(|task| task.id != created.id));
+                expected[expected_index].id = created.id;
+                expected[expected_index].created_at = created.created_at;
 
                 assert_eq!(app.tasks, expected);
                 assert_eq!(app.list.selected(), Some(expected_index));

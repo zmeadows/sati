@@ -1068,6 +1068,7 @@ mod tests {
                     carried: false,
                     text: (*text).into(),
                     completed: false,
+                    ..Task::new(String::new())
                 })
                 .collect(),
         )
@@ -1306,6 +1307,7 @@ mod tests {
                     carried: false,
                     text: format!("task {index}"),
                     completed: false,
+                    ..Task::new(String::new())
                 })
                 .collect(),
         );
@@ -1320,6 +1322,7 @@ mod tests {
                     carried: false,
                     text: format!("task {index}"),
                     completed: false,
+                    ..Task::new(String::new())
                 })
                 .collect(),
         );
@@ -1370,6 +1373,7 @@ mod tests {
                     carried: false,
                     text: "wrapped words ".repeat(12).trim_end().into(),
                     completed: false,
+                    ..Task::new(String::new())
                 })
                 .collect(),
         );
@@ -1384,6 +1388,7 @@ mod tests {
                     carried: false,
                     text: format!("Work: task {index}"),
                     completed: false,
+                    ..Task::new(String::new())
                 })
                 .collect(),
         );
@@ -1455,6 +1460,7 @@ mod tests {
                 text: "Work: text".into(),
                 completed: true,
                 carried: false,
+                ..Task::new(String::new())
             }]);
             app.styles.accent = app.styles.accent.fg(accent);
             app.mode = Mode::SearchResults {
@@ -1514,6 +1520,7 @@ mod tests {
                     text: "ordinary text".into(),
                     completed: false,
                     carried: false,
+                    ..Task::new(String::new())
                 }]);
                 app.unicode_markers = unicode;
                 app.styles.accent = app.styles.accent.fg(accent);
@@ -1540,11 +1547,13 @@ mod tests {
                 text: "ordinary".into(),
                 completed: false,
                 carried: false,
+                ..Task::new(String::new())
             },
             Task {
                 text: "completed".into(),
                 completed: true,
                 carried: false,
+                ..Task::new(String::new())
             },
         ]);
         app.styles.normal = app.styles.normal.fg(Color::Red);
@@ -1593,6 +1602,7 @@ mod tests {
                 text: "Work: task".into(),
                 completed: true,
                 carried: false,
+                ..Task::new(String::new())
             }]);
             app.styles = Styles::resolve(config.theme, &config.styles, None);
             let mut terminal = test_terminal(40, 12);
@@ -1643,6 +1653,7 @@ mod tests {
                     text: "Work: long wrapped task words".into(),
                     completed: true,
                     carried: false,
+                    ..Task::new(String::new())
                 }]);
 
                 let config: crate::config::Config =
@@ -1796,6 +1807,7 @@ mod tests {
                                         text: format!("task {index}"),
                                         completed: index < completed,
                                         carried: carried && index == total - 1,
+                                        ..Task::new(String::new())
                                     })
                                     .collect(),
                             );
@@ -1878,16 +1890,19 @@ mod tests {
                 text: "ordinary".into(),
                 completed: false,
                 carried: false,
+                ..Task::new(String::new())
             },
             Task {
                 text: "done".into(),
                 completed: true,
                 carried: false,
+                ..Task::new(String::new())
             },
             Task {
                 text: "carried".into(),
                 completed: false,
                 carried: true,
+                ..Task::new(String::new())
             },
         ]);
         app.keybinds = false;
@@ -1963,6 +1978,7 @@ mod tests {
                         },
                         completed: index >= 10,
                         carried: false,
+                        ..Task::new(String::new())
                     })
                     .collect(),
             );
@@ -2058,6 +2074,7 @@ mod tests {
                         text: format!("{}end", format!("task {index} ").repeat(12)),
                         completed: index >= 10,
                         carried: false,
+                        ..Task::new(String::new())
                     })
                     .collect(),
             );
@@ -2155,16 +2172,19 @@ mod tests {
                 text: "ordinary task wraps here".into(),
                 completed: false,
                 carried: false,
+                ..Task::new(String::new())
             },
             Task {
                 text: "done task wraps here".into(),
                 completed: true,
                 carried: false,
+                ..Task::new(String::new())
             },
             Task {
                 text: "carried task wraps here".into(),
                 completed: false,
                 carried: true,
+                ..Task::new(String::new())
             },
         ];
 
@@ -2248,6 +2268,7 @@ mod tests {
             text: "carry words across wrapped lines".into(),
             completed: false,
             carried: true,
+            ..Task::new(String::new())
         }]);
         app.keybinds = false;
         app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
@@ -2321,6 +2342,7 @@ mod tests {
                                 carried: false,
                                 text: format!("task {index}"),
                                 completed: index % 2 == 0,
+                                ..Task::new(String::new())
                             })
                             .collect(),
                     );
@@ -2423,16 +2445,19 @@ mod tests {
                     carried: false,
                     text: "before".into(),
                     completed: false,
+                    ..Task::new(String::new())
                 },
                 Task {
                     carried: false,
                     text: format!("{} end", "original e\u{301}界👩‍💻 ".repeat(30)),
                     completed: true,
+                    ..Task::new(String::new())
                 },
                 Task {
                     carried: false,
                     text: "after".into(),
                     completed: true,
+                    ..Task::new(String::new())
                 },
             ]);
             app.keybinds = false;
@@ -2541,6 +2566,7 @@ mod tests {
                         carried: false,
                         text: format!("task {index} {}end", "e\u{301}界👩‍💻 ".repeat(12)),
                         completed: index >= 10,
+                        ..Task::new(String::new())
                     })
                     .collect(),
             );
@@ -2646,11 +2672,13 @@ mod tests {
                 carried: false,
                 text: "needle".into(),
                 completed: true,
+                ..Task::new(String::new())
             },
             Task {
                 text: "another needle".into(),
                 carried: false,
                 completed: true,
+                ..Task::new(String::new())
             },
         ]);
         app.keybinds = false;
@@ -2709,6 +2737,7 @@ mod tests {
                 carried: false,
                 text: text.into(),
                 completed,
+                ..Task::new(String::new())
             })
             .into(),
         );
@@ -2791,16 +2820,19 @@ mod tests {
                 carried: false,
                 text: "tag: abCDef abcdef".into(),
                 completed: false,
+                ..Task::new(String::new())
             },
             Task {
                 carried: false,
                 text: "nonmatching".into(),
                 completed: false,
+                ..Task::new(String::new())
             },
             Task {
                 carried: false,
                 text: format!("{}tag: abcdef", "long ".repeat(50)),
                 completed: true,
+                ..Task::new(String::new())
             },
         ]);
         app.keybinds = false;
@@ -2886,6 +2918,7 @@ mod tests {
             carried: false,
             text: "ordinary".into(),
             completed: true,
+            ..Task::new(String::new())
         }]);
         app.mode = Mode::Searching {
             input: "missing".into(),
@@ -2947,16 +2980,19 @@ mod tests {
                 carried: false,
                 text: "wrapped task ".repeat(40).trim_end().into(),
                 completed: false,
+                ..Task::new(String::new())
             },
             Task {
                 carried: false,
                 text: "other active task".into(),
                 completed: false,
+                ..Task::new(String::new())
             },
             Task {
                 carried: false,
                 text: "done".into(),
                 completed: true,
+                ..Task::new(String::new())
             },
         ]);
         let key = |app: &mut App, code, modifiers| {
@@ -3016,6 +3052,7 @@ mod tests {
             carried: false,
             text: "task".into(),
             completed: false,
+            ..Task::new(String::new())
         }]);
 
         let text = |app: &App, width| {
@@ -3114,6 +3151,7 @@ mod tests {
                     text: text.into(),
                     completed: false,
                     carried: false,
+                    ..Task::new(String::new())
                 })
                 .into(),
         );
@@ -3189,6 +3227,7 @@ mod tests {
                     carried: false,
                     text: format!("task {index} {}", "wrapped words ".repeat(4)),
                     completed: false,
+                    ..Task::new(String::new())
                 })
                 .collect(),
         );
@@ -3256,6 +3295,7 @@ mod tests {
             carried: false,
             text: "日本語 🪷 ".repeat(8).trim_end().into(),
             completed: false,
+            ..Task::new(String::new())
         }]);
         app.styles = Styles::resolve(
             crate::themes::BuiltinTheme::Nord,
@@ -3328,6 +3368,7 @@ mod tests {
                 carried: false,
                 text: text.into(),
                 completed: false,
+                ..Task::new(String::new())
             })
             .into(),
         );
@@ -3368,6 +3409,7 @@ mod tests {
                     carried: false,
                     text: format!("task {index}"),
                     completed: false,
+                    ..Task::new(String::new())
                 })
                 .collect(),
         );
@@ -3490,6 +3532,7 @@ mod tests {
                     carried: false,
                     text: format!("task {index}"),
                     completed: false,
+                    ..Task::new(String::new())
                 })
                 .collect(),
         );
@@ -3525,6 +3568,7 @@ mod tests {
                         carried: false,
                         text: text.into(),
                         completed,
+                        ..Task::new(String::new())
                     }]);
 
                     let original = app.tasks.clone();
@@ -3574,6 +3618,7 @@ mod tests {
             carried: false,
             text: "Completed".into(),
             completed: true,
+            ..Task::new(String::new())
         }]);
         app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
         render(&mut terminal, &mut app);
@@ -3603,11 +3648,13 @@ mod tests {
                 carried: false,
                 text: "日本語".repeat(100),
                 completed: false,
+                ..Task::new(String::new())
             },
             Task {
                 carried: false,
                 text: "next".into(),
                 completed: false,
+                ..Task::new(String::new())
             },
         ]);
 
@@ -3644,6 +3691,7 @@ mod tests {
                     carried: false,
                     text: text.clone(),
                     completed: false,
+                    ..Task::new(String::new())
                 }]);
                 app.mode = if edit {
                     Mode::Editing {
@@ -3909,6 +3957,7 @@ mod tests {
                     carried: false,
                     text: text.into(),
                     completed: false,
+                    ..Task::new(String::new())
                 })
                 .into(),
         );
@@ -3962,11 +4011,13 @@ mod tests {
                 carried: false,
                 text: "alpha beta gamma delta".into(),
                 completed: false,
+                ..Task::new(String::new())
             },
             Task {
                 carried: false,
                 text: "next".into(),
                 completed: false,
+                ..Task::new(String::new())
             },
         ]);
 
@@ -4011,11 +4062,13 @@ mod tests {
                 carried: false,
                 text: format!("{}THE END", "word ".repeat(30)),
                 completed: false,
+                ..Task::new(String::new())
             },
             Task {
                 carried: false,
                 text: "next".into(),
                 completed: false,
+                ..Task::new(String::new())
             },
         ]);
 

@@ -318,12 +318,17 @@ The task file stores the checklist, the selected task, and the current section t
 Navigation is saved on normal quit; a crash may lose selection changes since the last
 task save.
 
-The file starts with a `schema_version` (currently `1`). Older files without one,
-including the original bare task lists, are upgraded in memory when sati starts and
-written in the current format on the next save or normal quit; starting sati never
-rewrites the file by itself. A file written by a newer version of sati is refused and
-left untouched, as is any file that cannot be read or upgraded. Older versions of sati
-cannot open version 1 files.
+Each task has a unique `id` (a UUID) that stays the same as the task is edited, completed,
+or moved, and a `created_at` time in UTC (RFC 3339, such as `2026-11-07T19:24:05Z`).
+Pasting a copied task creates a new task with its own `id`.
+
+The file starts with a `schema_version` (currently `2`). Older files, including the
+original bare task lists, are upgraded in memory when sati starts and written in the
+current format on the next save or normal quit; starting sati never rewrites the file by
+itself. Upgraded tasks receive new ids and share the upgrade time as their `created_at`,
+since their real creation times are unknown. A file written by a newer version of sati is
+refused and left untouched, as is any file that cannot be read or upgraded, or that gives
+two tasks the same `id`. Older versions of sati cannot open version 2 files.
 
 ## Credits
 

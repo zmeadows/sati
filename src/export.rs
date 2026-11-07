@@ -163,21 +163,25 @@ mod tests {
                 text: "Buy groceries".into(),
                 completed: false,
                 carried: false,
+                ..Task::new(String::new())
             },
             Task {
                 text: "Walk the dog".into(),
                 completed: true,
                 carried: false,
+                ..Task::new(String::new())
             },
             Task {
                 text: "Work: Review *PR* & <notes> [x] \\ `code`".into(),
                 completed: false,
                 carried: true,
+                ..Task::new(String::new())
             },
             Task {
                 text: "1. nested 日本語 👩‍💻 e\u{301}".into(),
                 completed: false,
                 carried: false,
+                ..Task::new(String::new())
             },
         ];
 
@@ -216,6 +220,7 @@ mod tests {
             text: "日本語".into(),
             completed: false,
             carried: true,
+            ..Task::new(String::new())
         }];
 
         let mut output = Output::default();
@@ -238,6 +243,7 @@ mod tests {
                     text: text.into(),
                     completed: false,
                     carried: false,
+                    ..Task::new(String::new())
                 }],
                 &mut output,
             )

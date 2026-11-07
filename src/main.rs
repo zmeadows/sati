@@ -7,6 +7,7 @@ mod search;
 mod storage;
 mod styles;
 mod themes;
+mod timestamp;
 mod ui;
 
 use std::{

@@ -12,18 +12,21 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use uuid::Uuid;
+
 use crate::app::Task;
+use crate::timestamp::Timestamp;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 // The `tasks.json` format written by this build. Files without `schema_version` are version 0.
-const SCHEMA_VERSION: u64 = 1;
+const SCHEMA_VERSION: u64 = 2;
 
 // `MIGRATIONS[n]` upgrades a version `n` document to version `n + 1`. To change the format,
 // bump `SCHEMA_VERSION` and append one migration; the array length enforces the pairing.
 // Migrations run in memory on load; the upgraded document is written by the next save.
 const MIGRATIONS: [fn(Value) -> std::result::Result<Value, String>; SCHEMA_VERSION as usize] =
-    [v0_to_v1];
+    [v0_to_v1, v1_to_v2];
 
 // Version 0 is either a bare task array or an unversioned `{tasks, selected, section}` object.
 fn v0_to_v1(value: Value) -> std::result::Result<Value, String> {
@@ -34,6 +37,33 @@ fn v0_to_v1(value: Value) -> std::result::Result<Value, String> {
     };
 
     document.insert("schema_version".to_owned(), 1.into());
+
+    Ok(Value::Object(document))
+}
+
+// Version 2 gives every task a unique `id` and a `created_at` time. Their true creation times
+// are unknown, so all existing tasks share the moment of migration.
+fn v1_to_v2(value: Value) -> std::result::Result<Value, String> {
+    let Value::Object(mut document) = value else {
+        return Err("expected an object".to_owned());
+    };
+
+    let Some(Value::Array(tasks)) = document.get_mut("tasks") else {
+        return Err("expected a task list".to_owned());
+    };
+
+    let created_at = Value::String(Timestamp::now().to_string());
+
+    for (index, task) in tasks.iter_mut().enumerate() {
+        let Value::Object(task) = task else {
+            return Err(format!("task {} is not an object", index + 1));
+        };
+
+        task.insert("id".to_owned(), Uuid::new_v4().to_string().into());
+        task.insert("created_at".to_owned(), created_at.clone());
+    }
+
+    document.insert("schema_version".to_owned(), 2.into());
 
     Ok(Value::Object(document))
 }
@@ -242,9 +272,21 @@ impl Storage {
             .map_err(|error| invalid_file(error.to_string()))?;
         document.needs_migration = version < SCHEMA_VERSION;
 
+        let mut first_with_id = std::collections::HashMap::new();
+
         for (index, task) in document.tasks.iter().enumerate() {
             if let Some(problem) = task.validation_error() {
                 return Err(invalid_file(format!("task {} {problem}", index + 1)).into());
+            }
+
+            if let Some(first) = first_with_id.insert(task.id, index) {
+                return Err(invalid_file(format!(
+                    "tasks {} and {} have the same id {}; each task needs a unique id",
+                    first + 1,
+                    index + 1,
+                    task.id
+                ))
+                .into());
             }
         }
 
@@ -466,6 +508,11 @@ pub mod tests {
             (
                 format!(r#"{{"schema_version":1,"tasks":{tasks},"selected":1}}"#),
                 Some(1),
+                true,
+            ),
+            (
+                format!(r#"{{"schema_version":2,"tasks":{CURRENT_TASKS},"selected":1}}"#),
+                Some(1),
                 false,
             ),
         ] {
@@ -501,6 +548,7 @@ pub mod tests {
             carried: false,
             text: text.into(),
             completed,
+            ..Task::new(String::new())
         })
         .into();
 
@@ -516,12 +564,12 @@ pub mod tests {
 
         assert_eq!(
             json,
-            serde_json::json!({"schema_version": 1, "tasks":[], "selected":null})
+            serde_json::json!({"schema_version": 2, "tasks":[], "selected":null})
         );
 
         // The version comes first so it is the first thing a reader sees.
         let saved = fs::read_to_string(fixture.task_path()).unwrap();
-        assert!(saved.starts_with("{\n  \"schema_version\": 1,"), "{saved}");
+        assert!(saved.starts_with("{\n  \"schema_version\": 2,"), "{saved}");
         assert!(!fixture.storage.load_document().unwrap().needs_migration);
     }
 
@@ -532,32 +580,123 @@ pub mod tests {
         serde_json::from_value(saved["tasks"].clone()).unwrap()
     }
 
+    // Two version 2 tasks with valid ids and creation times.
+    const CURRENT_TASKS: &str = r#"[
+        {"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"first","completed":false},
+        {"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:06Z","text":"second","completed":false}
+    ]"#;
+
     #[test]
-    fn unversioned_files_keep_their_data_through_migration() {
+    fn older_files_keep_their_data_and_gain_unique_ids_and_one_creation_time() {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-        let task = r#"{"text":"Work: keep","completed":false,"carried":true}"#;
-
-        let expected = Task {
-            text: "Work: keep".into(),
-            completed: false,
-            carried: true,
-        };
+        let tasks = r#"[{"text":"Work: keep","completed":false,"carried":true},{"text":"other","completed":true}]"#;
 
         for json in [
-            format!("[{task}]"),
-            format!(r#"{{"tasks":[{task}],"selected":0,"section":"work"}}"#),
+            tasks.to_owned(),
+            format!(r#"{{"tasks":{tasks},"selected":0,"section":"work"}}"#),
+            format!(r#"{{"schema_version":1,"tasks":{tasks},"selected":0,"section":"work"}}"#),
         ] {
             fs::write(fixture.task_path(), &json).unwrap();
+            let before = Timestamp::now();
             let document = fixture.storage.load_document().unwrap();
 
-            assert_eq!(document.tasks, std::slice::from_ref(&expected));
+            let content: Vec<_> = document
+                .tasks
+                .iter()
+                .map(|task| (task.text.as_str(), task.completed, task.carried))
+                .collect();
+            assert_eq!(
+                content,
+                [("Work: keep", false, true), ("other", true, false)]
+            );
             assert_eq!(document.selected, Some(0));
             assert_eq!(
                 document.section.as_deref(),
                 json.contains("section").then_some("work")
             );
             assert!(document.needs_migration);
+
+            // Unknown creation times are all set to the moment of migration.
+            let [first, second] = &document.tasks[..] else {
+                panic!("expected two tasks");
+            };
+            assert_ne!(first.id, second.id);
+            assert_eq!(first.created_at, second.created_at);
+            assert!(first.created_at >= before && first.created_at <= Timestamp::now());
+            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
+        }
+
+        // Saving writes the generated identities, and reloading keeps them.
+        let document = fixture.storage.load_document().unwrap();
+        fixture.storage.save(&document.tasks).unwrap();
+        let reloaded = fixture.storage.load_document().unwrap();
+
+        assert_eq!(reloaded.tasks, document.tasks);
+        assert!(!reloaded.needs_migration);
+        assert_eq!(saved_tasks(fixture.task_path()), document.tasks);
+    }
+
+    #[test]
+    fn duplicate_ids_and_malformed_identities_are_rejected_without_writing() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+        let id = "00000000-0000-4000-8000-000000000001";
+        let task = |id: &str, created_at: &str| {
+            format!(
+                r#"{{"id":"{id}","created_at":"{created_at}","text":"task","completed":false}}"#
+            )
+        };
+        let time = "2026-11-07T19:24:05Z";
+
+        let duplicate = format!(
+            r#"{{"schema_version":2,"tasks":[{},{},{}]}}"#,
+            task(id, time),
+            task("00000000-0000-4000-8000-000000000002", time),
+            task(id, time),
+        );
+        fs::write(fixture.task_path(), &duplicate).unwrap();
+        let error = fixture
+            .storage
+            .load_document()
+            .err()
+            .expect("rejected")
+            .to_string();
+
+        assert!(error.contains("tasks 1 and 3 have the same id"), "{error}");
+        assert!(
+            error.contains(id) && error.contains("left untouched"),
+            "{error}"
+        );
+        assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), duplicate);
+
+        for json in [
+            format!(
+                r#"{{"schema_version":2,"tasks":[{}]}}"#,
+                task("not-a-uuid", time)
+            ),
+            format!(
+                r#"{{"schema_version":2,"tasks":[{}]}}"#,
+                task(id, "2026-11-07")
+            ),
+            format!(
+                r#"{{"schema_version":2,"tasks":[{}]}}"#,
+                task(id, "2026-02-30T00:00:00Z")
+            ),
+            r#"{"schema_version":2,"tasks":[{"text":"no id","completed":false}]}"#.to_owned(),
+            r#"{"schema_version":1,"tasks":["not an object"]}"#.to_owned(),
+            r#"{"schema_version":1}"#.to_owned(),
+        ] {
+            fs::write(fixture.task_path(), &json).unwrap();
+            let error = fixture
+                .storage
+                .load_document()
+                .err()
+                .expect("rejected")
+                .to_string();
+
+            assert!(error.contains("invalid task file"), "{json}: {error}");
+            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
         }
     }
 
@@ -566,7 +705,7 @@ pub mod tests {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
 
-        let future = r#"{"schema_version":2,"tasks":[],"future":"field"}"#;
+        let future = r#"{"schema_version":3,"tasks":[],"future":"field"}"#;
         fs::write(fixture.task_path(), future).unwrap();
         let error = fixture
             .storage
@@ -575,8 +714,8 @@ pub mod tests {
             .expect("rejected")
             .to_string();
 
-        assert!(error.contains("schema version 2"), "{error}");
-        assert!(error.contains("supports version 1"), "{error}");
+        assert!(error.contains("schema version 3"), "{error}");
+        assert!(error.contains("supports version 2"), "{error}");
         assert!(error.contains("left untouched"), "{error}");
         assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), future);
 
@@ -658,6 +797,7 @@ pub mod tests {
                     carried: false,
                     text: "Private task".into(),
                     completed: false,
+                    ..Task::new(String::new())
                 }])
                 .unwrap();
             let directory = fixture.task_path().parent().unwrap();
@@ -778,6 +918,7 @@ pub mod tests {
             carried: false,
             text: "Keep me".into(),
             completed: false,
+            ..Task::new(String::new())
         }];
 
         fixture.storage.save(&tasks).unwrap();
@@ -868,11 +1009,13 @@ pub mod tests {
                 carried: false,
                 text: "Read 日本語 🪷".into(),
                 completed: false,
+                ..Task::new(String::new())
             },
             Task {
                 carried: false,
                 text: "Keep this position".into(),
                 completed: true,
+                ..Task::new(String::new())
             },
         ];
 
@@ -911,6 +1054,7 @@ pub mod tests {
             carried: false,
             text: "Keep the original".into(),
             completed: true,
+            ..Task::new(String::new())
         }];
 
         fixture.storage.save(&tasks).unwrap();
@@ -990,11 +1134,13 @@ pub mod tests {
                     carried: false,
                     text: "valid".into(),
                     completed: false,
+                    ..Task::new(String::new())
                 },
                 Task {
                     carried: false,
                     text,
                     completed: true,
+                    ..Task::new(String::new())
                 },
             ];
 
@@ -1027,9 +1173,9 @@ pub mod tests {
         let tasks = vec![
             Task { carried: false,
                 text: "日本語 e\u{301} 👩‍💻 👍🏽 — [punctuation!]  spaces\u{a0}inside\u{2003}text\u{2009}and\u{202f}text".into(),
-                completed: true,
+                completed: true, ..Task::new(String::new())
             },
-            Task { carried: false, text: "long🪷".repeat(100_000), completed: false },
+            Task { carried: false, text: "long🪷".repeat(100_000), completed: false, ..Task::new(String::new()) },
         ];
 
         fixture.storage.save(&tasks).unwrap();
@@ -1047,6 +1193,7 @@ pub mod tests {
             carried: false,
             text: "Recover me".into(),
             completed: false,
+            ..Task::new(String::new())
         }];
 
         let error = fixture.storage.save(&tasks).unwrap_err().to_string();
@@ -1079,6 +1226,7 @@ pub mod tests {
                 carried: false,
                 text: "Original tasks".into(),
                 completed: true,
+                ..Task::new(String::new())
             }])
             .unwrap();
         let original = fs::read(fixture.task_path()).unwrap();
@@ -1094,6 +1242,7 @@ pub mod tests {
             carried: false,
             text: "Recover me".into(),
             completed: false,
+            ..Task::new(String::new())
         }];
 
         let error = fixture.storage.save(&replacement).unwrap_err().to_string();
@@ -1125,6 +1274,7 @@ pub mod tests {
                 carried: false,
                 text: "Old list".into(),
                 completed: false,
+                ..Task::new(String::new())
             }])
             .unwrap();
         let directory = fixture.task_path().parent().unwrap();
@@ -1141,6 +1291,7 @@ pub mod tests {
             carried: false,
             text: "New list".into(),
             completed: true,
+            ..Task::new(String::new())
         }];
 
         let result = fixture.storage.save(&replacement);
