@@ -12,14 +12,19 @@
 ## Stack and source layout
 
 - Rust 2024 edition; minimum supported Rust version (MSRV) **1.88** (`Cargo.toml`).
-- Ratatui **0.30.2** with its Crossterm backend. Import Crossterm via **`ratatui::crossterm`**, not an independently versioned direct dependency.
-- Serde/JSON for persisted tasks; `fs4` for advisory file locks; `unicode-segmentation` and `unicode-width` for text handling.
-- `src/main.rs`: CLI arguments, startup, terminal lifecycle, event loop, and platform-specific terminal capabilities.
+- Ratatui **0.30.2** with its Crossterm backend (default features off; see `Cargo.toml` for the enabled set). Import Crossterm via **`ratatui::crossterm`**, not an independently versioned direct dependency.
+- Serde/JSON for persisted tasks; `toml` for optional configuration; `fs4` for advisory file locks; `unicode-segmentation` and `unicode-width` for text handling.
+- `src/main.rs`: CLI arguments (hand-parsed, no CLI framework), `export` subcommand dispatch, startup, terminal lifecycle, event loop, and platform-specific terminal capabilities.
 - `src/app.rs`: `Task`, application modes, key/mouse dispatch, task mutations, selection, scrolling, and bounded undo history.
 - `src/input.rs`: single-line, grapheme-aware `TextInput`; cursor is a UTF-8 byte offset kept at a grapheme boundary.
 - `src/ui.rs`: layout, wrapping, drawing, context-sensitive shortcut legends, mouse row mapping, and input cursor placement.
 - `src/storage.rs`: platform data paths, exclusive instance lock, JSON loading/validation, and atomic replacement saves.
-- `tests/`: existing CLI, data-directory, and cross-process locking checks.
+- `src/config.rs`: TOML config discovery (`$XDG_CONFIG_HOME`/`~/.config`, macOS Application Support, `%APPDATA%`) and parsing. Unknown keys and invalid files are errors; sati never writes config files. Precedence is CLI > TOML > defaults; contradictory CLI flag pairs are rejected.
+- `src/themes.rs` / `src/styles.rs`: built-in theme palettes and the resolved `Styles` (theme + TOML overrides + `--accent`).
+- `src/search.rs`: search matching and highlight ranges for `Searching` / `SearchResults`.
+- `src/export.rs`: Markdown rendering shared by `sati export [-o PATH] [--force]` and the `c` OSC 52 clipboard copy. Export runs without taking the instance lock (it works while the TUI is open) and refuses to overwrite sati's own state files or existing files without `--force`.
+- `src/notification.rs`: timed footer notifications (e.g. theme name after `t` / `T`).
+- Unit tests live in `#[cfg(test)] mod tests` inside each module; `tests/` holds integration tests that run the binary (`cli`, `config`, `directories`, `export`, `locking`). Integration tests isolate data/config by overriding `HOME`, `XDG_DATA_HOME`, and `APPDATA`; never point tests at the real user data directory.
 
 ## Behavioral invariants
 
@@ -51,18 +56,82 @@
 - Respect the existing CLI flags and subdued styling. The `default` theme inherits terminal foreground/background colors; the 15 named themes supply RGB foregrounds and backgrounds. TOML can override foregrounds, backgrounds, and modifiers for `normal`, `muted`, `completed`, `border`, and `accent`; `--accent` overrides only the resolved accent foreground.
 - Apply the resolved normal background through Ratatui cells and, for RGB colors, OSC 11 (including terminal padding). Use OSC 111 to restore the terminal's configured default when Sati changed it. Runtime `t` / `T` theme cycling is session-only and preserves TOML style and CLI accent overrides.
 
+## Code style and readability
+
+Write code a human can read top to bottom without decoding it. Readability matters more than saving lines. These rules apply to code you write or change; do not reformat or restructure untouched code just to apply them.
+
+`rustfmt` keeps your line breaks and indentation consistent, but it never adds blank lines. Spacing between ideas is your job.
+
+### Separate ideas with blank lines
+
+- Put a blank line between conceptually different chunks inside a function. A typical mutation has distinct steps: check preconditions, build the new state, persist it, commit it, update view state (selection, scroll, notifications), then return. Each step is a paragraph.
+- Never leave a long function as one unbroken block. As a rule of thumb, if roughly 10 to 15 consecutive lines have no blank line, look for the seam where one step ends and the next begins.
+- Put a blank line before the final `Ok(...)` or return value, and around multi-line `if`, `match`, `for`, and `while` blocks, unless the block is the only thing in its parent.
+- Keep tightly related lines together. Do not insert a blank line between every statement; that is as unreadable as none.
+- Always separate top-level items (`fn`, `impl`, `struct`, `enum`, `const`) with exactly one blank line.
+
+Shape to aim for (this is `App::toggle` with its steps separated):
+
+```rust
+fn toggle(&mut self, index: usize, storage: &Storage) -> Result<()> {
+    let mut tasks = self.tasks.clone();
+    tasks[index].completed = !tasks[index].completed;
+    tasks[index].carried = false;
+
+    let selected = if self.completed_at_bottom {
+        let task = tasks.remove(index);
+        let boundary = completion_boundary(&tasks);
+        tasks.insert(boundary, task);
+        boundary
+    } else {
+        index
+    };
+
+    self.replace(tasks, Some(selected), storage)?;
+    self.reveal_selection = selected != index;
+
+    Ok(())
+}
+```
+
+### Keep functions and expressions easy to follow
+
+- Prefer short functions that do one thing. If a function needs section comments to explain its parts, or runs past roughly 50 lines excluding tests, extract a small private helper with a descriptive name. A named private helper is not a new abstraction. Do not add traits, generics, builders, or modules for this.
+- Some existing functions are long (for example `handle_normal_key` and `run`). Do not treat them as precedent, and do not refactor them unless asked. When you add a `match` arm, keep it short by calling a named method, as the neighboring arms do.
+- Give intermediate results a name with `let` instead of nesting calls or writing long one-line chains. Break iterator chains one adapter per line.
+- Use early returns, guard clauses, and `let ... else` to keep nesting shallow, ideally no more than three levels. Avoid deeply nested closures and `if`/`else` expressions embedded in arguments.
+- Use descriptive names (`selected_index`, not `si`). Single-letter names are fine only for tiny, obvious scopes such as a closure parameter or `r, g, b`.
+- Replace unexplained numbers and strings with named constants, as `HISTORY_LIMIT` does.
+- Prefer straightforward, idiomatic Rust over clever one-liners. Do not use `#[rustfmt::skip]` or shrink code to fit fewer lines.
+
+### Comments
+
+- Comment why, not what. Explain invariants, platform quirks, and ordering constraints that the code cannot say itself, in the style of the existing comments in `src/storage.rs` ("Never truncate the live file...").
+- Put a short comment above a non-obvious block rather than at the end of a line. Do not narrate obvious code, and do not leave commented-out code.
+
+### Tests
+
+- Name tests as full sentences describing the behavior (for example `lock_stays_exclusive_across_saves_and_is_released_without_removing_file`).
+- Separate arrange, act, and assert with blank lines. Reuse the existing test helpers (such as `Fixture` in `src/storage.rs` tests and `press` in `src/app.rs` tests) instead of repeating setup.
+- Keep one behavior per test, and keep test code as readable as production code.
+
+### Before you finish
+
+Reread your diff as a reviewer would. If any hunk looks like a wall of text, add blank lines, extract a helper, or rename for clarity. Run `cargo fmt --all` last so the result is rustfmt-clean.
+
 ## Development conventions
 
 - Follow `.editorconfig` and `rustfmt.toml`: UTF-8, LF, four-space Rust indentation, Rust 2024 formatting, 100-column width.
-- Prefer idiomatic, straightforward Rust. Reuse existing helpers and types instead of introducing frameworks or additional dependencies for small changes.
+- Reuse existing helpers and types instead of introducing frameworks or additional dependencies for small changes.
+- Clippy runs with `-D warnings` and `Cargo.toml` warns on `dbg!`, `todo!`, and `unimplemented!`. Do not leave any of them in code.
 - Keep error reporting actionable, especially for failures involving saved user data.
 - When behavior or options change, update the relevant README documentation and on-screen hints, subject to the deliberate Page Up/Down omission above.
 - Keep `Cargo.lock` checked in; review dependency changes for MSRV and Linux/macOS/Windows compatibility.
 - Do not automatically commit or push. If asked to commit, use a short Conventional Commit subject (for example, `fix: ...`, `feat: ...`, or `docs: ...`).
 
-## Existing verification commands
+## Verification commands
 
-Run the applicable repository checks after code changes:
+Run the applicable repository checks after code changes. Use `cargo fmt --all` to apply formatting; CI runs the `--check` form.
 
 ```sh
 cargo fmt --all -- --check
@@ -70,6 +139,14 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo check --locked --all-targets
 cargo test --locked
 cargo build --release --locked
+```
+
+Run a subset of tests while iterating:
+
+```sh
+cargo test --locked --bin sati app::tests::name_substring  # unit tests in src/ (no lib target)
+cargo test --locked --test locking                         # one integration test file
+cargo test --locked -- --exact path::to::test_name         # one exact test
 ```
 
 When possible, also check the declared MSRV:
