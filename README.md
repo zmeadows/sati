@@ -63,7 +63,6 @@ Then run `sati`.
 | First / last task | `g` / `G`, `Home` / `End` |
 | Move one page | `PageDown` / `PageUp` |
 | Reorder task | `J` / `K`, `Shift+↓` / `Shift+↑` |
-| Group tasks by prefix | `s` |
 | Copy checklist as Markdown | `c` |
 | Copy selected task internally | `y`, `Alt+W` |
 | Paste task below / above | `p` / `P` (`Ctrl+Y` also pastes below) |
@@ -88,8 +87,6 @@ Task copies use one in-memory register, separate from the system clipboard. Past
 tasks start incomplete and unmarked; the register remains available for repeated
 pastes until exit. `c` still copies the entire checklist as Markdown to the system
 clipboard.
-
-Press `s` to group tasks manually by their leading prefix (such as `Work:`). Unprefixed tasks come first, followed by case-insensitive alphabetical prefix groups; order within each group is preserved.
 
 ### While typing
 
