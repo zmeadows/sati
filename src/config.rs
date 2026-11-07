@@ -23,7 +23,6 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct Display {
     pub wrap: Option<bool>,
-    pub logo: Option<bool>,
     pub keybinds: Option<bool>,
     pub rounded_corners: Option<bool>,
     pub ascii_markers: Option<bool>,
@@ -227,7 +226,7 @@ mod tests {
     fn partial_and_strict_schema() {
         let config: Config = toml::from_str("[display]\nwrap = false").unwrap();
         assert_eq!(config.display.wrap, Some(false));
-        assert_eq!(config.display.logo, None);
+        assert_eq!(config.display.keybinds, None);
         assert_eq!(
             toml::from_str::<Config>("").unwrap().display,
             Display::default()

@@ -54,13 +54,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         })
         .border_style(app.styles.border);
 
-    // Hide the title when it cannot fit intact between the corners.
-    let title_shown = app.logo && list_area.width >= 8;
-
-    if title_shown {
-        block = block.title(Line::styled(" sati ", app.styles.muted).right_aligned());
-    }
-
     let completed = app.tasks.iter().filter(|task| task.completed).count();
     let counter = format!("[{completed}/{}]", app.tasks.len());
 
@@ -94,9 +87,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     frame.render_widget(block, list_area);
 
     if !tabs.is_empty() && list_area.height >= 2 {
-        // Tabs sit on the top border between the left corner and the title.
-        let title_width = if title_shown { " sati ".len() + 1 } else { 0 };
-        let strip_width = list_area.width.saturating_sub(2 + title_width as u16);
+        // Tabs sit on the top border between the corners.
+        let strip_width = list_area.width.saturating_sub(2);
         let strip = Rect::new(list_area.x + 1, list_area.y, strip_width, 1);
         app.tab_targets = draw_section_tabs(frame, app, &tabs, strip);
 
@@ -1101,7 +1093,7 @@ mod tests {
         assert_eq!(rows.y, 2);
         assert_eq!(
             row_text(&terminal, 0),
-            "┌─ [*] ─ [-] ─ home ─ Work ────── sati ┐"
+            "┌─ [*] ─ [-] ─ home ─ Work ────────────┐"
         );
         assert_eq!(row_text(&terminal, 1).trim_matches(['│', ' ']), "");
         assert!(row_text(&terminal, 2).contains("Work: a"));
@@ -1169,17 +1161,20 @@ mod tests {
         render(&mut terminal, &mut app);
         let first = row_text(&terminal, 0);
         assert!(first.starts_with("┌─ [*] ─ Section00 ›"), "{first}");
-        assert!(first.ends_with(" sati ┐"), "{first}");
+        assert!(first.ends_with("─┐"), "{first}");
 
         app.show_section(crate::app::SectionView::Named("section11".into()));
         render(&mut terminal, &mut app);
         let last = row_text(&terminal, 0);
 
-        assert!(last.starts_with("┌‹ Section11 ─"), "{last}");
-        assert!(!last.contains('›') && last.ends_with(" sati ┐"), "{last}");
+        assert!(
+            last.starts_with("┌‹ ") && last.contains(" Section11 "),
+            "{last}"
+        );
+        assert!(!last.contains('›') && last.ends_with("─┐"), "{last}");
 
         for (area, _) in &app.tab_targets {
-            assert!(area.right() <= 22);
+            assert!(area.right() < 29);
         }
 
         // Within the visible window, moving back and forth never slides the tabs.
@@ -1200,7 +1195,7 @@ mod tests {
             .unwrap();
         };
 
-        for _ in 0..3 {
+        for _ in 0..4 {
             tab(&mut app, ratatui::crossterm::event::KeyCode::Tab);
             render(&mut wide, &mut app);
             assert_eq!(row_text(&wide, 0), initial);
@@ -1788,76 +1783,73 @@ mod tests {
             (9, 12, true, "[9/12]"),
         ] {
             for rounded in [false, true] {
-                for logo in [false, true] {
-                    for keybinds in [false, true] {
-                        for mode in 0..6 {
-                            if mode == 2 && total == 0 {
+                for keybinds in [false, true] {
+                    for mode in 0..6 {
+                        if mode == 2 && total == 0 {
+                            continue;
+                        }
+
+                        for width in [0, 1, 2, 6, 7, 8, 24] {
+                            let mut app = App::new(
+                                (0..total)
+                                    .map(|index| Task {
+                                        text: format!("task {index}"),
+                                        completed: index < completed,
+                                        carried: carried && index == total - 1,
+                                    })
+                                    .collect(),
+                            );
+                            app.rounded = rounded;
+                            app.keybinds = keybinds;
+                            app.mode = match mode {
+                                0 => Mode::Normal,
+                                1 => Mode::Adding("draft".into(), AddPlacement::End),
+                                2 => Mode::Editing {
+                                    index: 0,
+                                    input: "edited".into(),
+                                },
+                                3 => Mode::Searching {
+                                    input: "task".into(),
+                                    original: Some(0),
+                                },
+                                4 => Mode::SearchResults {
+                                    input: "task".into(),
+                                    original: Some(0),
+                                },
+                                _ => Mode::ConfirmClear,
+                            };
+                            let mut terminal = test_terminal(width, 12);
+                            let rows = render(&mut terminal, &mut app);
+
+                            if mode == 5 {
                                 continue;
-                            }
+                            } // The existing dialog may cover the border.
 
-                            for width in [0, 1, 2, 6, 7, 8, 24] {
-                                let mut app = App::new(
-                                    (0..total)
-                                        .map(|index| Task {
-                                            text: format!("task {index}"),
-                                            completed: index < completed,
-                                            carried: carried && index == total - 1,
-                                        })
-                                        .collect(),
+                            if width >= 2 {
+                                let y = rows.bottom();
+                                let buffer = terminal.backend().buffer();
+                                assert_eq!(
+                                    buffer[(0, y)].symbol(),
+                                    if rounded { "╰" } else { "└" }
                                 );
-                                app.rounded = rounded;
-                                app.logo = logo;
-                                app.keybinds = keybinds;
-                                app.mode = match mode {
-                                    0 => Mode::Normal,
-                                    1 => Mode::Adding("draft".into(), AddPlacement::End),
-                                    2 => Mode::Editing {
-                                        index: 0,
-                                        input: "edited".into(),
-                                    },
-                                    3 => Mode::Searching {
-                                        input: "task".into(),
-                                        original: Some(0),
-                                    },
-                                    4 => Mode::SearchResults {
-                                        input: "task".into(),
-                                        original: Some(0),
-                                    },
-                                    _ => Mode::ConfirmClear,
-                                };
-                                let mut terminal = test_terminal(width, 12);
-                                let rows = render(&mut terminal, &mut app);
+                                assert_eq!(
+                                    buffer[(width - 1, y)].symbol(),
+                                    if rounded { "╯" } else { "┘" }
+                                );
 
-                                if mode == 5 {
-                                    continue;
-                                } // The existing dialog may cover the border.
+                                let fits = expected.width() + 2 <= usize::from(width);
 
-                                if width >= 2 {
-                                    let y = rows.bottom();
-                                    let buffer = terminal.backend().buffer();
-                                    assert_eq!(
-                                        buffer[(0, y)].symbol(),
-                                        if rounded { "╰" } else { "└" }
-                                    );
-                                    assert_eq!(
-                                        buffer[(width - 1, y)].symbol(),
-                                        if rounded { "╯" } else { "┘" }
-                                    );
+                                if fits {
+                                    let start = width - 1 - expected.len() as u16;
 
-                                    let fits = expected.width() + 2 <= usize::from(width);
-
-                                    if fits {
-                                        let start = width - 1 - expected.len() as u16;
-
-                                        for (offset, character) in expected.chars().enumerate() {
-                                            let cell = &buffer[(start + offset as u16, y)];
-                                            assert_eq!(cell.symbol(), character.to_string());
-                                            assert_eq!(cell.fg, Color::Reset);
-                                        }
-                                    } else {
-                                        for x in 1..width - 1 {
-                                            assert_eq!(buffer[(x, y)].symbol(), "─");
-                                        }
+                                    for (offset, character) in expected.chars().enumerate() {
+                                        let cell = &buffer[(start + offset as u16, y)];
+                                        assert_eq!(cell.symbol(), character.to_string());
+                                        assert_eq!(cell.fg, Color::Reset);
+                                    }
+                                } else {
+                                    for x in 1..width - 1 {
+                                        assert_eq!(buffer[(x, y)].symbol(), "─");
                                     }
                                 }
                             }
