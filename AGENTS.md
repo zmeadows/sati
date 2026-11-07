@@ -96,8 +96,11 @@ fn toggle(&mut self, index: usize, storage: &Storage) -> Result<()> {
 
 ### Keep functions and expressions easy to follow
 
-- Prefer short functions that do one thing. If a function needs section comments to explain its parts, or runs past roughly 50 lines excluding tests, extract a small private helper with a descriptive name. A named private helper is not a new abstraction. Do not add traits, generics, builders, or modules for this.
-- Some existing functions are long (for example `handle_normal_key` and `run`). Do not treat them as precedent, and do not refactor them unless asked. When you add a `match` arm, keep it short by calling a named method, as the neighboring arms do.
+- Long functions are fine. Do not split a function to make it shorter, to stay under a line count, or because it has several steps. Keep sequential steps together in one function, separated by blank lines and, where useful, short "why" comments, so the reader can follow the whole flow in one place without jumping around the file.
+- Extract a helper only to remove notable duplication. Weigh the size of the repeated chunk against how many times it repeats. Two copies of a three-line snippet are fine as they are. A ten-line chunk repeated a dozen times should almost certainly be a helper. Use judgment between those extremes, and when unsure, leave the code inline.
+- Do not extract a helper for code that appears only once, to give a step a name, or to reduce nesting or length.
+- When you do extract a helper to remove duplication, name it so the call sites read clearly without opening it, keep its parameters few, and place it near its first caller. Use a plain private function, not new traits, generics, builders, macros, or modules.
+- Existing long functions (for example `handle_normal_key` and `run`) are not a problem. Do not refactor or split them unless asked. Match the surrounding structure when extending them; for example, a new `match` arm should delegate to a named method if its neighbors do.
 - Give intermediate results a name with `let` instead of nesting calls or writing long one-line chains. Break iterator chains one adapter per line.
 - Use early returns, guard clauses, and `let ... else` to keep nesting shallow, ideally no more than three levels. Avoid deeply nested closures and `if`/`else` expressions embedded in arguments.
 - Use descriptive names (`selected_index`, not `si`). Single-letter names are fine only for tiny, obvious scopes such as a closure parameter or `r, g, b`.
@@ -117,7 +120,7 @@ fn toggle(&mut self, index: usize, storage: &Storage) -> Result<()> {
 
 ### Before you finish
 
-Reread your diff as a reviewer would. If any hunk looks like a wall of text, add blank lines, extract a helper, or rename for clarity. Run `cargo fmt --all` last so the result is rustfmt-clean.
+Reread your diff as a reviewer would. If any hunk looks like a wall of text, add blank lines or a short comment, or rename for clarity. Run `cargo fmt --all` last so the result is rustfmt-clean.
 
 ## Development conventions
 
