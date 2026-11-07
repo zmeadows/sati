@@ -5,7 +5,7 @@
 `sati` is a small, persistent terminal checklist written in Rust. It aims to feel like a paper checklist: add tasks, cross them off, reorder them, and clear the list when the context changes. Simplicity is a product requirement, not an unfinished feature set.
 
 - Favor clear, small changes over new abstractions, dependencies, settings, or features.
-- Keep the interface quiet and keyboard-friendly. Do not add calendars, tags, priorities, reminders, projects, synchronization, or configurable keybindings unless explicitly requested.
+- Keep the interface quiet and keyboard-friendly. Do not add calendars, tags, priorities, reminders, projects, synchronization, or configurable keybindings unless explicitly requested. Sections (tabs derived from a leading `Word: ` in the task text) were explicitly requested; keep them derived from the text rather than a separate field.
 - Preserve existing behavior and cross-platform support. Avoid unrelated cleanup while implementing a focused change.
 - Read the current code before editing; this file is orientation, not a replacement for the implementation.
 
@@ -33,6 +33,7 @@
 - A task has `text`, `completed`, and optional `carried` (default false); list order is meaningful. Completed tasks cannot be carried. `m` toggles carryover on unfinished tasks; `D` preserves carried tasks.
 - Task text is a nonempty, trimmed, single-line description. Preserve arbitrary valid Unicode; reject corrupt persisted data rather than silently repairing or overwriting it.
 - The normal list selection refers to a **task**, not a wrapped display row. Keep indices valid after deletion, reordering, clearing, and undo.
+- A section is a leading word followed by `": "` (`task_prefix`), compared case-insensitively. `App::view` (`SectionView`) filters what is shown; the selection is always a full-list index of a **visible** task. Navigation, counts, `J`/`K`, and search work over visible tasks; in `[*]` they must behave exactly as without sections. After every saved change, undo/redo, or load, `settle_view` falls back to `[*]` when the tab vanished and follows a selection that left the tab to its own section. The active tab is persisted as an optional `section` key in `tasks.json` (absent for `[*]`, `""` for `[-]`).
 - `tasks.json` stores `{tasks, selected}`. Temporarily accept legacy arrays and migrate on the next save or clean exit. Save resulting selection with mutations and undo/redo; navigation-only focus is saved on clean exit, without persisting temporary search selection.
 - `a` appends, `o` inserts below selection, and `O` inserts above selection.
 - `j`/`k`/`J`/`K` and their aliases accept a Vim-style count (`5j`); counted moves clamp at the ends while plain `j`/`k` wrap, and a counted reorder is one undo step. A pending count is transient, never saved or shown, and any other key, mouse event, or paste discards it.

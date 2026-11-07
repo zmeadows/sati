@@ -21,6 +21,7 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 - **One local list.** Changes are saved automatically, without accounts or synchronization. The border shows `[completed/total]`.
 - **Keyboard-first, with mouse support.** Navigate, reorder, and complete tasks from the keyboard. Click a task to toggle it, or scroll with the mouse wheel.
 - **Search in place.** Find tasks as you type, see matching text highlighted, and jump to a result without filtering or rearranging the list.
+- **Sections.** Start a task with `Name: ` to group it; a tab bar then lets you focus on one section at a time.
 - **Carryover.** Mark unfinished tasks with `m` (`[↪]`) to keep them when clearing the list.
 - **Undo and redo.** Up to 256 changes in either direction during the current session.
 - **Display options.** Wrap long tasks and change some style settings with command-line flags.
@@ -59,7 +60,7 @@ Then run `sati`.
 | Action | Keys |
 | --- | --- |
 | Navigate | `j` / `k`, `↓` / `↑`, `Ctrl+N` / `Ctrl+P` |
-| Next / previous unfinished task (wraps) | `Tab` / `Shift+Tab` |
+| Next / previous section tab (wraps) | `Tab` / `Shift+Tab` |
 | First / last task | `g` / `G`, `Home` / `End` |
 | Move one page | `PageDown` / `PageUp` |
 | Reorder task | `J` / `K`, `Shift+↓` / `Shift+↑` |
@@ -92,6 +93,24 @@ Task copies use one in-memory register, separate from the system clipboard. Past
 tasks start incomplete and unmarked; the register remains available for repeated
 pastes until exit. `c` still copies the entire checklist as Markdown to the system
 clipboard.
+
+### Sections
+
+Start a task with one word, a colon, and a space, such as `Work: Fix bug`, to put it in
+the `Work` section. Sections are optional: with none, sati looks exactly as before. Once
+any task has a section, a tab bar appears at the top:
+
+- `[*]` shows every task in your order, with each section prefix in bold.
+- Each section has its own tab, in alphabetical order. `Work:` and `work:` are the same
+  section, labelled with the first spelling in the list.
+- `[-]` shows tasks without a section, when there are any.
+
+Press `Tab` / `Shift+Tab` or click a tab to switch. A section tab hides the shared prefix
+and keeps navigation, counts, reordering (`J` / `K`), and search within its own tasks.
+If a change moves the selected task out of the tab (for example editing its prefix, or
+undo), sati follows the task to its section. Deleting a section's last task returns to
+`[*]`. The current tab is remembered between sessions. `Work:Fix`, URLs such as
+`https://…`, and times such as `10:30` don't create sections.
 
 ### While typing
 

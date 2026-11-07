@@ -49,10 +49,51 @@ fn task_noun(count: usize) -> &'static str {
     if count == 1 { "task" } else { "tasks" }
 }
 
+// A section is a leading word followed by ": ", as in "Work: Fix bug". Requiring the
+// space keeps URLs ("https://...") and times ("10:30 call") from becoming sections.
 pub(crate) fn task_prefix(text: &str) -> Option<&str> {
-    text.find(':')
-        .filter(|&end| end > 0 && !text[..end].chars().any(char::is_whitespace))
-        .map(|end| &text[..end])
+    let end = text.find(':')?;
+    let prefix = &text[..end];
+
+    let is_word = end > 0 && !prefix.chars().any(char::is_whitespace);
+    (is_word && text[end + 1..].starts_with(' ')).then_some(prefix)
+}
+
+// The task text shown inside its own section tab, without the "Work: " prefix.
+pub(crate) fn section_body(text: &str) -> &str {
+    task_prefix(text).map_or(text, |prefix| text[prefix.len() + 1..].trim_start())
+}
+
+fn section_key(text: &str) -> Option<String> {
+    task_prefix(text).map(str::to_lowercase)
+}
+
+// Which tasks are shown: all of them, one section (by lowercase key), or unsectioned ones.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum SectionView {
+    #[default]
+    All,
+    Named(String),
+    Unsectioned,
+}
+
+impl SectionView {
+    // Saved in tasks.json: absent for all tasks, "" for unsectioned, else the key.
+    fn saved_key(&self) -> Option<&str> {
+        match self {
+            SectionView::All => None,
+            SectionView::Named(key) => Some(key),
+            SectionView::Unsectioned => Some(""),
+        }
+    }
+
+    fn from_saved_key(key: Option<String>) -> Self {
+        match key {
+            None => SectionView::All,
+            Some(key) if key.is_empty() => SectionView::Unsectioned,
+            Some(key) => SectionView::Named(key),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -109,6 +150,9 @@ pub struct App {
     pub viewport_height: u16,
     pub reveal_selection: bool,
     pub notification: Option<Notification>,
+    pub view: SectionView,
+    // Clickable tab regions from the last draw.
+    pub tab_targets: Vec<(Rect, SectionView)>,
     // A Vim-style count typed before a motion; transient and never saved.
     pending_count: Option<usize>,
     task_register: Option<String>,
@@ -116,6 +160,7 @@ pub struct App {
     history: VecDeque<UndoState>,
     redo_history: VecDeque<UndoState>,
     persisted_selection: Option<usize>,
+    persisted_view: SectionView,
     needs_migration: bool,
 }
 
@@ -141,12 +186,15 @@ impl App {
             viewport_height: 0,
             reveal_selection: true,
             notification: None,
+            view: SectionView::All,
+            tab_targets: Vec::new(),
             pending_count: None,
             task_register: None,
             last_search_query: None,
             history: VecDeque::new(),
             redo_history: VecDeque::new(),
             persisted_selection: selected,
+            persisted_view: SectionView::All,
             needs_migration: false,
         }
     }
@@ -155,7 +203,10 @@ impl App {
         let mut app = Self::new(document.tasks);
         app.list.select(document.selected);
         app.persisted_selection = document.selected;
+        app.view = SectionView::from_saved_key(document.section);
+        app.persisted_view = app.view.clone();
         app.needs_migration = document.needs_migration;
+        app.settle_view();
 
         app
     }
@@ -168,22 +219,164 @@ impl App {
 
         let selected = crate::storage::valid_selection(&self.tasks, selected);
 
-        if self.needs_migration || selected != self.persisted_selection {
-            storage.save_selected(&self.tasks, selected)?;
+        if self.needs_migration
+            || selected != self.persisted_selection
+            || self.view != self.persisted_view
+        {
+            storage.save_view(&self.tasks, selected, self.view.saved_key())?;
             self.persisted_selection = selected;
+            self.persisted_view = self.view.clone();
             self.needs_migration = false;
         }
 
         Ok(())
     }
 
-    pub fn navigate(&mut self, forward: bool, count: Option<usize>) {
-        if self.tasks.is_empty() {
+    // Tabs in display order: [*], sections alphabetically, then [-] for unsectioned tasks.
+    // Empty when no task has a section, which hides the tab bar.
+    pub fn section_tabs(&self) -> Vec<(SectionView, String)> {
+        let mut named: Vec<(String, &str)> = Vec::new();
+        let mut unsectioned = false;
+
+        for task in &self.tasks {
+            match task_prefix(&task.text) {
+                Some(prefix) => {
+                    let key = prefix.to_lowercase();
+
+                    // The first spelling in list order labels the tab.
+                    if !named.iter().any(|(existing, _)| *existing == key) {
+                        named.push((key, prefix));
+                    }
+                }
+                None => unsectioned = true,
+            }
+        }
+
+        if named.is_empty() {
+            return Vec::new();
+        }
+
+        named.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut tabs = vec![(SectionView::All, "[*]".to_owned())];
+        tabs.extend(
+            named
+                .into_iter()
+                .map(|(key, label)| (SectionView::Named(key), label.to_owned())),
+        );
+
+        if unsectioned {
+            tabs.push((SectionView::Unsectioned, "[-]".to_owned()));
+        }
+
+        tabs
+    }
+
+    pub fn is_visible(&self, index: usize) -> bool {
+        let text = &self.tasks[index].text;
+
+        match &self.view {
+            SectionView::All => true,
+            SectionView::Named(key) => {
+                task_prefix(text).is_some_and(|prefix| prefix.to_lowercase() == *key)
+            }
+            SectionView::Unsectioned => task_prefix(text).is_none(),
+        }
+    }
+
+    fn visible_indices(&self) -> Vec<usize> {
+        (0..self.tasks.len())
+            .filter(|&index| self.is_visible(index))
+            .collect()
+    }
+
+    // Search matches what a tab shows, so a section tab ignores its own prefix.
+    fn search_text(&self, index: usize) -> &str {
+        let text = &self.tasks[index].text;
+
+        match self.view {
+            SectionView::Named(_) => section_body(text),
+            _ => text,
+        }
+    }
+
+    // The tab a task belongs to, given that sections exist.
+    fn home_view(&self, index: usize) -> SectionView {
+        match section_key(&self.tasks[index].text) {
+            Some(key) => SectionView::Named(key),
+            None => SectionView::Unsectioned,
+        }
+    }
+
+    // Keep the view valid after tasks change: a vanished tab falls back to [*], and a
+    // selection that left the current tab pulls the view along to the task's own tab.
+    fn settle_view(&mut self) {
+        let tabs = self.section_tabs();
+
+        if tabs.is_empty() || !tabs.iter().any(|(view, _)| *view == self.view) {
+            self.view = SectionView::All;
+        }
+
+        if let Some(index) = self.list.selected()
+            && index < self.tasks.len()
+            && !self.is_visible(index)
+        {
+            self.view = self.home_view(index);
+        }
+    }
+
+    pub fn show_section(&mut self, view: SectionView) {
+        self.view = view;
+
+        let selection_visible = self
+            .list
+            .selected()
+            .is_some_and(|index| index < self.tasks.len() && self.is_visible(index));
+
+        if !selection_visible {
+            self.list.select(self.visible_indices().first().copied());
+        }
+
+        self.reveal_selection = true;
+    }
+
+    fn cycle_section(&mut self, forward: bool) {
+        let tabs = self.section_tabs();
+
+        if tabs.is_empty() {
+            self.notify("No sections yet (start a task with \"Name: \")");
+
             return;
         }
 
-        let last = self.tasks.len() - 1;
-        let current = self.list.selected().unwrap_or(0);
+        let current = tabs
+            .iter()
+            .position(|(view, _)| *view == self.view)
+            .unwrap_or(0);
+
+        let next = if forward {
+            (current + 1) % tabs.len()
+        } else {
+            (current + tabs.len() - 1) % tabs.len()
+        };
+
+        self.show_section(tabs[next].0.clone());
+    }
+
+    pub fn navigate(&mut self, forward: bool, count: Option<usize>) {
+        let visible = self.visible_indices();
+
+        if visible.is_empty() {
+            return;
+        }
+
+        // Positions within the visible tasks; in [*] they equal task indices.
+        let last = visible.len() - 1;
+        let current = self
+            .list
+            .selected()
+            .and_then(|selected| visible.iter().position(|&index| index == selected))
+            .unwrap_or(0);
 
         // Like Vim, a counted motion stops at the ends; a plain motion wraps around.
         let next = match (count, forward) {
@@ -195,30 +388,8 @@ impl App {
             (None, false) => current - 1,
         };
 
-        self.list.select(Some(next));
+        self.list.select(Some(visible[next]));
         self.reveal_selection = true;
-    }
-
-    fn navigate_unfinished(&mut self, forward: bool) {
-        let len = self.tasks.len();
-        let unfinished = |&index: &usize| !self.tasks[index].completed;
-
-        let next = if forward {
-            let start = self.list.selected().map_or(0, |index| index + 1);
-            (start..len).chain(0..start).find(unfinished)
-        } else {
-            let end = self.list.selected().unwrap_or(len);
-            (0..end).rev().chain((end..len).rev()).find(unfinished)
-        };
-
-        match next {
-            Some(index) => {
-                self.list.select(Some(index));
-                self.reveal_selection = true;
-            }
-            None if len > 0 => self.notify("No unfinished tasks"),
-            None => {}
-        }
     }
 
     pub fn insertion_index(&self, placement: AddPlacement) -> usize {
@@ -254,12 +425,16 @@ impl App {
     }
 
     fn page(&mut self, forward: bool) {
-        if self.tasks.is_empty() {
+        let visible = self.visible_indices();
+
+        if visible.is_empty() {
             return;
         }
 
-        let last = self.tasks.len() - 1;
-        let current = self.list.selected().unwrap_or(0);
+        let position = |task: usize| visible.iter().position(|&index| index == task);
+        let last = visible.len() - 1;
+        let current = self.list.selected().unwrap_or(visible[0]);
+        let current_position = position(current).unwrap_or(0);
 
         let start = self
             .row_tasks
@@ -287,18 +462,19 @@ impl App {
             .get(target.min(self.row_tasks.len().saturating_sub(1)))
             .copied()
             .flatten()
-            .unwrap_or(current)
+            .and_then(position)
+            .unwrap_or(current_position)
             .min(last);
 
         // A page landing in the same wrapped task must still make task-level progress.
         let next = if forward {
-            candidate.max((current + 1).min(last))
+            candidate.max((current_position + 1).min(last))
         } else {
-            candidate.min(current.saturating_sub(1))
+            candidate.min(current_position.saturating_sub(1))
         };
 
-        if next != current {
-            self.list.select(Some(next));
+        if next != current_position {
+            self.list.select(Some(visible[next]));
             self.scroll = if forward {
                 self.scroll.saturating_add(height)
             } else {
@@ -317,8 +493,9 @@ impl App {
         label: impl Into<String>,
         storage: &Storage,
     ) -> Result<()> {
-        storage.save_selected(&tasks, selected)?;
+        storage.save_view(&tasks, selected, self.view.saved_key())?;
         self.persisted_selection = crate::storage::valid_selection(&tasks, selected);
+        self.persisted_view = self.view.clone();
         self.needs_migration = false;
 
         if self.history.len() == HISTORY_LIMIT {
@@ -333,6 +510,7 @@ impl App {
         self.redo_history.clear();
         self.list.select(selected);
         self.reveal_selection = true;
+        self.settle_view();
 
         Ok(())
     }
@@ -371,16 +549,18 @@ impl App {
         }
 
         let anchor = original.unwrap_or(0).min(self.tasks.len());
-        let selected = (anchor..self.tasks.len())
-            .chain(0..anchor)
-            .find(|&index| crate::search::matches(&self.tasks[index].text, input.text()));
+        let selected = (anchor..self.tasks.len()).chain(0..anchor).find(|&index| {
+            self.is_visible(index) && crate::search::matches(self.search_text(index), input.text())
+        });
         self.list.select(selected);
         self.reveal_selection = true;
     }
 
     fn find_search_result(&self, query: &str, forward: bool) -> Option<usize> {
         let len = self.tasks.len();
-        let matches = |&index: &usize| crate::search::matches(&self.tasks[index].text, query);
+        let matches = |&index: &usize| {
+            self.is_visible(index) && crate::search::matches(self.search_text(index), query)
+        };
 
         if forward {
             let start = self.list.selected().map_or(0, |index| index + 1);
@@ -414,7 +594,9 @@ impl App {
 
         let original = self.list.selected();
         let selected = original
-            .filter(|&index| crate::search::matches(&self.tasks[index].text, query))
+            .filter(|&index| {
+                self.is_visible(index) && crate::search::matches(self.search_text(index), query)
+            })
             .or_else(|| self.find_search_result(query, forward));
 
         let Some(index) = selected else {
@@ -473,9 +655,10 @@ impl App {
             return Ok(());
         };
 
-        storage.save_selected(&previous.tasks, previous.selected)?;
+        storage.save_view(&previous.tasks, previous.selected, self.view.saved_key())?;
         self.persisted_selection =
             crate::storage::valid_selection(&previous.tasks, previous.selected);
+        self.persisted_view = self.view.clone();
         self.needs_migration = false;
         let previous = source.pop_back().unwrap();
 
@@ -495,6 +678,7 @@ impl App {
         self.list
             .select(previous.selected.filter(|&index| index < self.tasks.len()));
         self.reveal_selection = true;
+        self.settle_view();
         self.notify(message);
 
         Ok(())
@@ -585,15 +769,24 @@ impl App {
             return Ok(());
         };
 
-        let target = if down {
-            index.saturating_add(count).min(self.tasks.len() - 1)
-        } else {
-            index.saturating_sub(count)
+        // Count positions among the visible tasks, then move to the passed task's slot.
+        let visible = self.visible_indices();
+
+        let Some(position) = visible.iter().position(|&visible| visible == index) else {
+            return Ok(());
         };
 
-        if target == index {
+        let target_position = if down {
+            position.saturating_add(count).min(visible.len() - 1)
+        } else {
+            position.saturating_sub(count)
+        };
+
+        if target_position == position {
             return Ok(());
         }
+
+        let target = visible[target_position];
 
         // One remove/insert keeps a counted move to a single save and undo step.
         let mut tasks = self.tasks.clone();
@@ -892,10 +1085,11 @@ impl App {
                     && let Mode::Searching { input, original } =
                         std::mem::replace(&mut self.mode, Mode::Normal)
                 {
-                    let single_match = self
-                        .tasks
-                        .iter()
-                        .filter(|task| crate::search::matches(&task.text, input.text()))
+                    let single_match = (0..self.tasks.len())
+                        .filter(|&index| {
+                            self.is_visible(index)
+                                && crate::search::matches(self.search_text(index), input.text())
+                        })
                         .take(2)
                         .count()
                         == 1;
@@ -1055,7 +1249,7 @@ impl App {
             KeyCode::Tab | KeyCode::BackTab
                 if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
             {
-                self.navigate_unfinished(
+                self.cycle_section(
                     key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT),
                 );
             }
@@ -1065,8 +1259,13 @@ impl App {
                 let first = key.code == KeyCode::Home
                     || (key.code == KeyCode::Char('g')
                         && !key.modifiers.contains(KeyModifiers::SHIFT));
-                let index = if first { 0 } else { self.tasks.len() - 1 };
-                self.list.select(Some(index));
+                let visible = self.visible_indices();
+                let index = if first {
+                    visible.first()
+                } else {
+                    visible.last()
+                };
+                self.list.select(index.copied());
                 self.reveal_selection = true;
             }
             KeyCode::Char(' ') | KeyCode::Enter => {
@@ -1094,14 +1293,22 @@ impl App {
             }
             KeyCode::Char('d') | KeyCode::Delete => {
                 if let Some(index) = self.list.selected() {
+                    let visible = self.visible_indices();
+                    let position = visible.iter().position(|&visible| visible == index);
                     let mut tasks = self.tasks.clone();
                     tasks.remove(index);
 
-                    let selected = if tasks.is_empty() {
-                        None
-                    } else {
-                        Some(index.min(tasks.len() - 1))
-                    };
+                    // Prefer the next visible task, then the previous one. Later indices
+                    // shift down by one after the removal.
+                    let next = position.and_then(|position| visible.get(position + 1));
+                    let previous = position
+                        .and_then(|position| position.checked_sub(1))
+                        .map(|position| visible[position]);
+
+                    let selected = next
+                        .map(|&next| next - 1)
+                        .or(previous)
+                        .or_else(|| (!tasks.is_empty()).then(|| index.min(tasks.len() - 1)));
 
                     self.replace(tasks, selected, "delete task", storage)?;
                     self.notify("Deleted task");
@@ -1141,6 +1348,18 @@ impl App {
     pub fn mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
         self.notification = None;
         self.pending_count = None;
+
+        if self.mode == Mode::Normal
+            && event.kind == MouseEventKind::Down(MouseButton::Left)
+            && let Some((_, view)) = self
+                .tab_targets
+                .iter()
+                .find(|(area, _)| area.contains((event.column, event.row).into()))
+        {
+            self.show_section(view.clone());
+
+            return Ok(());
+        }
 
         if self.mode != Mode::Normal || !rows.contains((event.column, event.row).into()) {
             return Ok(());
@@ -1209,6 +1428,23 @@ mod tests {
 
     // KeyCode means an unmodified press; explicit events retain modifiers and kind.
     #[track_caller]
+    fn app_with_texts(texts: &[&str]) -> App {
+        App::new(
+            texts
+                .iter()
+                .map(|text| Task {
+                    carried: false,
+                    text: (*text).into(),
+                    completed: false,
+                })
+                .collect(),
+        )
+    }
+
+    fn texts(app: &App) -> Vec<&str> {
+        app.tasks.iter().map(|task| task.text.as_str()).collect()
+    }
+
     fn press(app: &mut App, fixture: &Fixture, key: impl Into<KeyEvent>) -> bool {
         app.key(key.into(), &fixture.storage).unwrap()
     }
@@ -1864,20 +2100,241 @@ mod tests {
     }
 
     #[test]
-    fn prefix_recognition_matches_the_existing_leading_colon_rule() {
-        for (text, expected) in [
-            ("Work: Fix bug", Some("Work")),
-            ("Work:Fix bug", Some("Work")),
-            ("Fix the bug: urgent", None),
-            (":empty", None),
-            ("no colon", None),
-            ("one\u{2003}two: task", None),
-            ("家👩‍💻: task", Some("家👩‍💻")),
-            ("e\u{301}:\u{301} task", Some("e\u{301}")),
-            ("foo:bar:baz", Some("foo")),
+    fn section_prefix_is_a_leading_word_followed_by_a_colon_and_space() {
+        for (text, expected, body) in [
+            ("Work: Fix bug", Some("Work"), "Fix bug"),
+            ("Work:   spaced", Some("Work"), "spaced"),
+            ("foo: bar: baz", Some("foo"), "bar: baz"),
+            ("家👩‍💻: task", Some("家👩‍💻"), "task"),
+            ("Work:Fix bug", None, "Work:Fix bug"),
+            ("https://example.com", None, "https://example.com"),
+            ("10:30 call", None, "10:30 call"),
+            ("Fix the bug: urgent", None, "Fix the bug: urgent"),
+            (":empty", None, ":empty"),
+            ("no colon", None, "no colon"),
+            ("one\u{2003}two: task", None, "one\u{2003}two: task"),
+            ("e\u{301}:\u{301} task", None, "e\u{301}:\u{301} task"),
+            ("foo:bar:baz", None, "foo:bar:baz"),
         ] {
-            assert_eq!(task_prefix(text), expected);
+            assert_eq!(task_prefix(text), expected, "{text}");
+            assert_eq!(section_body(text), body, "{text}");
         }
+    }
+
+    #[test]
+    fn section_tabs_list_current_sections_alphabetically_between_all_and_unsectioned() {
+        let mut app = app_with_texts(&["work: a", "Home: b", "plain", "Work: c", "Errands: d"]);
+
+        let labels: Vec<_> = app
+            .section_tabs()
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect();
+
+        // Sections match case-insensitively and take the first spelling in the list.
+        assert_eq!(labels, ["[*]", "Errands", "Home", "work", "[-]"]);
+
+        app.tasks.remove(2);
+        let labels: Vec<_> = app
+            .section_tabs()
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect();
+        assert_eq!(labels, ["[*]", "Errands", "Home", "work"]);
+
+        let plain = app_with_texts(&["plain", "https://example.com", "10:30 call"]);
+        assert!(plain.section_tabs().is_empty());
+    }
+
+    #[test]
+    fn tab_keys_cycle_section_views_and_keep_a_visible_selection() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c", "plain"]);
+        app.list.select(Some(2));
+
+        for (key, view, selected) in [
+            (KeyCode::Tab, SectionView::Named("home".into()), 1),
+            (KeyCode::Tab, SectionView::Named("work".into()), 0),
+            (KeyCode::Tab, SectionView::Unsectioned, 3),
+            (KeyCode::Tab, SectionView::All, 3),
+            (KeyCode::BackTab, SectionView::Unsectioned, 3),
+            (KeyCode::BackTab, SectionView::Named("work".into()), 0),
+        ] {
+            press(&mut app, &fixture, key);
+
+            assert_eq!(app.view, view, "{key:?}");
+            assert_eq!(app.list.selected(), Some(selected), "{key:?}");
+        }
+
+        // Shift+Tab and held keys also cycle; releases do nothing.
+        let shift_tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT);
+        press(&mut app, &fixture, shift_tab);
+        assert_eq!(app.view, SectionView::Named("home".into()));
+
+        let held = KeyEvent::new_with_kind(KeyCode::Tab, KeyModifiers::NONE, KeyEventKind::Repeat);
+        press(&mut app, &fixture, held);
+        assert_eq!(app.view, SectionView::Named("work".into()));
+
+        let released =
+            KeyEvent::new_with_kind(KeyCode::Tab, KeyModifiers::NONE, KeyEventKind::Release);
+        press(&mut app, &fixture, released);
+        assert_eq!(app.view, SectionView::Named("work".into()));
+
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn navigation_and_jumps_stay_within_the_current_section() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: x", "Work: b", "plain", "Work: c"]);
+        app.show_section(SectionView::Named("work".into()));
+
+        for (keys, expected) in [
+            ("j", 2),
+            ("j", 4),
+            ("j", 0),
+            ("k", 4),
+            ("5k", 0),
+            ("9j", 4),
+            ("g", 0),
+            ("G", 4),
+        ] {
+            type_keys(&mut app, &fixture, keys);
+            assert_eq!(app.list.selected(), Some(expected), "{keys}");
+        }
+    }
+
+    #[test]
+    fn reordering_in_a_section_moves_past_its_own_tasks_as_one_change() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: x", "Work: b", "Home: y", "Work: c"]);
+        app.show_section(SectionView::Named("work".into()));
+
+        press(&mut app, &fixture, KeyCode::Char('J'));
+
+        assert_eq!(
+            texts(&app),
+            ["Home: x", "Work: b", "Work: a", "Home: y", "Work: c"]
+        );
+        assert_eq!(app.list.selected(), Some(2));
+
+        type_keys(&mut app, &fixture, "2J");
+
+        assert_eq!(
+            texts(&app),
+            ["Home: x", "Work: b", "Home: y", "Work: c", "Work: a"]
+        );
+        assert_eq!(app.list.selected(), Some(4));
+        assert_eq!(app.history.len(), 2);
+
+        type_keys(&mut app, &fixture, "9J");
+        assert_eq!(app.history.len(), 2);
+
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(
+            texts(&app),
+            ["Home: x", "Work: b", "Work: a", "Home: y", "Work: c"]
+        );
+    }
+
+    #[test]
+    fn deleting_in_a_section_selects_a_neighbor_there_and_an_emptied_tab_shows_all() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: x", "Work: b"]);
+        app.show_section(SectionView::Named("work".into()));
+
+        press(&mut app, &fixture, KeyCode::Char('d'));
+
+        assert_eq!(texts(&app), ["Home: x", "Work: b"]);
+        assert_eq!(app.list.selected(), Some(1));
+        assert_eq!(app.view, SectionView::Named("work".into()));
+
+        press(&mut app, &fixture, KeyCode::Char('d'));
+
+        assert_eq!(texts(&app), ["Home: x"]);
+        assert_eq!(app.list.selected(), Some(0));
+        assert_eq!(app.view, SectionView::All);
+    }
+
+    #[test]
+    fn changes_that_move_the_selection_out_of_a_tab_follow_it_to_its_section() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: x", "Work: b"]);
+        app.show_section(SectionView::Named("work".into()));
+
+        press(&mut app, &fixture, KeyCode::Char('e'));
+        press(&mut app, &fixture, KeyCode::Home);
+        for _ in 0.."Work".len() {
+            press(&mut app, &fixture, KeyCode::Delete);
+        }
+        type_keys(&mut app, &fixture, "Home");
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(texts(&app), ["Home: a", "Home: x", "Work: b"]);
+        assert_eq!(app.view, SectionView::Named("home".into()));
+        assert_eq!(app.list.selected(), Some(0));
+
+        press(&mut app, &fixture, KeyCode::Char('u'));
+
+        assert_eq!(texts(&app), ["Work: a", "Home: x", "Work: b"]);
+        assert_eq!(app.view, SectionView::Named("work".into()));
+        assert_eq!(app.list.selected(), Some(0));
+    }
+
+    #[test]
+    fn search_in_a_section_matches_only_its_tasks_and_ignores_the_prefix() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: fix", "Home: fix", "Work: other"]);
+        app.show_section(SectionView::Named("work".into()));
+        app.list.select(Some(2));
+
+        press(&mut app, &fixture, KeyCode::Char('/'));
+        app.paste("fix");
+        assert_eq!(app.list.selected(), Some(0));
+
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.list.selected(), Some(0));
+
+        press(&mut app, &fixture, KeyCode::Char('/'));
+        app.paste("work");
+        assert_eq!(app.list.selected(), None);
+
+        press(&mut app, &fixture, KeyCode::Esc);
+        app.show_section(SectionView::All);
+        press(&mut app, &fixture, KeyCode::Char('/'));
+        app.paste("work");
+        assert_eq!(app.list.selected(), Some(0));
+    }
+
+    #[test]
+    fn the_section_tab_is_saved_and_restored_and_unknown_sections_fall_back_to_all() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "plain"]);
+        fixture.storage.save(&app.tasks).unwrap();
+        let unsectioned_file = std::fs::read_to_string(fixture.task_path()).unwrap();
+        assert!(!unsectioned_file.contains("section"));
+
+        for (view, saved) in [
+            (SectionView::Named("work".into()), "\"section\": \"work\""),
+            (SectionView::Unsectioned, "\"section\": \"\""),
+        ] {
+            app.show_section(view.clone());
+            app.save_selection(&fixture.storage).unwrap();
+
+            let file = std::fs::read_to_string(fixture.task_path()).unwrap();
+            assert!(file.contains(saved), "{file}");
+
+            let restored = App::from_document(fixture.storage.load_document().unwrap());
+            assert_eq!(restored.view, view);
+        }
+
+        let file = std::fs::read_to_string(fixture.task_path()).unwrap();
+        std::fs::write(fixture.task_path(), file.replace("\"\"", "\"missing\"")).unwrap();
+        let restored = App::from_document(fixture.storage.load_document().unwrap());
+
+        assert_eq!(restored.view, SectionView::All);
     }
 
     #[test]
@@ -2396,136 +2853,10 @@ mod tests {
     }
 
     #[test]
-    fn tab_navigation_skips_completed_wraps_and_handles_missing_selection() {
+    fn section_tab_keys_do_nothing_outside_normal_mode() {
         let fixture = Fixture::new();
-
-        let mut app = app_with_tasks(5);
-        app.tasks[1].completed = true;
-        app.tasks[3].completed = true;
-        app.tasks[2].carried = true;
-
-        let cases = [
-            (None, 0, 4),
-            (Some(0), 2, 4),
-            (Some(1), 2, 0),
-            (Some(2), 4, 0),
-            (Some(3), 4, 2),
-            (Some(4), 0, 2),
-        ];
-
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
         let original = app.tasks.clone();
-
-        for (selected, forward, backward) in cases {
-            for (code, modifiers, expected) in [
-                (KeyCode::Tab, KeyModifiers::NONE, forward),
-                (KeyCode::BackTab, KeyModifiers::SHIFT, backward),
-                (KeyCode::Tab, KeyModifiers::SHIFT, backward),
-            ] {
-                for kind in [KeyEventKind::Press, KeyEventKind::Repeat] {
-                    app.list.select(selected);
-                    app.reveal_selection = false;
-                    press(
-                        &mut app,
-                        &fixture,
-                        KeyEvent::new_with_kind(code, modifiers, kind),
-                    );
-
-                    assert_eq!(app.list.selected(), Some(expected));
-                    assert!(app.reveal_selection);
-                }
-
-                app.list.select(selected);
-                press(
-                    &mut app,
-                    &fixture,
-                    KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Release),
-                );
-
-                assert_eq!(app.list.selected(), selected);
-            }
-        }
-
-        app.list.select(Some(0));
-
-        for _ in 0..20 {
-            press(&mut app, &fixture, KeyCode::Tab);
-            assert!(!app.tasks[app.list.selected().unwrap()].completed);
-        }
-
-        for _ in 0..20 {
-            press(&mut app, &fixture, KeyCode::BackTab);
-            assert!(!app.tasks[app.list.selected().unwrap()].completed);
-        }
-
-        assert_eq!(app.list.selected(), Some(0));
-        assert_eq!(app.tasks, original);
-        assert!(!app.can_undo() && !app.can_redo());
-
-        for count in [0, 1, 3] {
-            let mut app = app_with_tasks(count);
-
-            for task in &mut app.tasks {
-                task.completed = true;
-            }
-
-            for selected in [None, count.checked_sub(1)] {
-                app.list.select(selected);
-                app.reveal_selection = false;
-
-                for code in [KeyCode::Tab, KeyCode::BackTab] {
-                    press(&mut app, &fixture, code);
-                    assert_eq!(app.list.selected(), selected);
-                    assert!(!app.reveal_selection);
-                }
-            }
-
-            if count > 0 {
-                app.tasks[count - 1].completed = false;
-
-                for _ in 0..3 {
-                    for code in [KeyCode::Tab, KeyCode::BackTab] {
-                        press(&mut app, &fixture, code);
-                        assert_eq!(app.list.selected(), Some(count - 1));
-                    }
-                }
-            }
-        }
-
-        assert!(!fixture.task_path().exists());
-    }
-
-    #[test]
-    fn tab_navigation_is_mode_specific_and_reveals_distant_wrapped_tasks() {
-        let fixture = Fixture::new();
-        let mut app = app_with_tasks(20);
-
-        for index in 1..19 {
-            app.tasks[index].completed = true;
-        }
-
-        app.tasks[19].text = "distant wrapped task ".repeat(10).trim().into();
-        app.keybinds = false;
-        let original = app.tasks.clone();
-        let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(24, 6)).unwrap();
-
-        for (key, selected) in [
-            (KeyCode::Tab, 19),
-            (KeyCode::Tab, 0),
-            (KeyCode::BackTab, 19),
-            (KeyCode::BackTab, 0),
-        ] {
-            press(&mut app, &fixture, key);
-            let mut rows = Rect::default();
-            terminal
-                .draw(|frame| rows = crate::ui::draw(frame, &mut app))
-                .unwrap();
-
-            assert_eq!(app.list.selected(), Some(selected));
-
-            let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
-            assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
-        }
 
         for mode in [
             Mode::Adding("text".into(), AddPlacement::End),
@@ -2549,7 +2880,9 @@ mod tests {
 
             for code in [KeyCode::Tab, KeyCode::BackTab] {
                 press(&mut app, &fixture, code);
+
                 assert_eq!(format!("{:?}", app.mode), before);
+                assert_eq!(app.view, SectionView::All);
 
                 if !matches!(app.mode, Mode::Searching { .. }) {
                     assert_eq!(app.list.selected(), selected);
@@ -4414,13 +4747,13 @@ mod tests {
         assert_eq!(notice(&done), Some("Completed tasks can't be carried"));
 
         press(&mut done, &fixture, KeyCode::Tab);
-        assert_eq!(notice(&done), Some("No unfinished tasks"));
+        assert_eq!(
+            notice(&done),
+            Some("No sections yet (start a task with \"Name: \")")
+        );
         assert_eq!(done.tasks, original);
+        assert_eq!(done.view, SectionView::All);
         assert!(!done.can_undo());
-
-        let mut empty = app_with_tasks(0);
-        press(&mut empty, &fixture, KeyCode::Tab);
-        assert_eq!(notice(&empty), None);
     }
 
     #[test]

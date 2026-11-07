@@ -21,6 +21,9 @@ pub struct TaskDocument {
     pub tasks: Vec<Task>,
     #[serde(default)]
     pub selected: Option<usize>,
+    // The active section tab: absent for all tasks, "" for unsectioned, else a lowercase key.
+    #[serde(default)]
+    pub section: Option<String>,
     #[serde(skip)]
     pub needs_migration: bool,
 }
@@ -194,6 +197,7 @@ impl Storage {
             Input::Legacy(tasks) => TaskDocument {
                 tasks,
                 selected: None,
+                section: None,
                 needs_migration: true,
             },
         };
@@ -214,11 +218,23 @@ impl Storage {
         self.save_selected(tasks, None)
     }
 
+    #[cfg(test)]
     pub fn save_selected(&self, tasks: &[Task], selected: Option<usize>) -> Result<()> {
+        self.save_view(tasks, selected, None)
+    }
+
+    pub fn save_view(
+        &self,
+        tasks: &[Task],
+        selected: Option<usize>,
+        section: Option<&str>,
+    ) -> Result<()> {
         #[derive(Serialize)]
         struct Saved<'a> {
             tasks: &'a [Task],
             selected: Option<usize>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            section: Option<&'a str>,
         }
 
         atomic_save(
@@ -226,6 +242,7 @@ impl Storage {
             &Saved {
                 tasks,
                 selected: valid_selection(tasks, selected),
+                section,
             },
             "Original tasks are unchanged",
             "The new task list is already visible",

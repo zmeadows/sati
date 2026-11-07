@@ -10,7 +10,7 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Mode, Task};
+use crate::app::{App, Mode, SectionView, Task};
 use crate::input::TextInput;
 use crate::styles::Styles;
 
@@ -84,8 +84,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         }
     }
 
-    let rows = block.inner(sections[0]);
+    let mut rows = block.inner(sections[0]);
     frame.render_widget(block, sections[0]);
+
+    let tabs = app.section_tabs();
+    app.tab_targets.clear();
+
+    // The tab bar takes the first inner row, only when sections exist and tasks still fit.
+    if !tabs.is_empty() && rows.height >= 2 {
+        let bar = Rect { height: 1, ..rows };
+        app.tab_targets = draw_section_tabs(frame, app, &tabs, bar);
+        rows.y += 1;
+        rows.height -= 1;
+    }
 
     draw_tasks(frame, app, rows);
 
@@ -121,6 +132,92 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     }
 
     rows
+}
+
+const TAB_GAP: usize = 2;
+const TAB_MARKER: usize = 2;
+
+// Draw one row of section tabs, scrolled to keep the active tab visible. Returns each
+// drawn tab's clickable area.
+fn draw_section_tabs(
+    frame: &mut Frame,
+    app: &App,
+    tabs: &[(SectionView, String)],
+    area: Rect,
+) -> Vec<(Rect, SectionView)> {
+    let width = usize::from(area.width);
+    let widths: Vec<usize> = tabs.iter().map(|(_, label)| label.width()).collect();
+
+    let active = tabs
+        .iter()
+        .position(|(view, _)| *view == app.view)
+        .unwrap_or(0);
+
+    // Slide the window right until the active tab fits.
+    let mut start = 0;
+
+    while start < active && fitting_tabs(&widths, start, width) <= active {
+        start += 1;
+    }
+
+    let end = fitting_tabs(&widths, start, width);
+
+    let mut spans = vec![Span::styled(
+        if start > 0 { "‹ " } else { " " },
+        app.styles.muted,
+    )];
+    let mut targets = Vec::new();
+    let mut x = area.x + if start > 0 { TAB_MARKER as u16 } else { 1 };
+
+    for (offset, (view, label)) in tabs[start..end].iter().enumerate() {
+        if offset > 0 {
+            spans.push(Span::raw(" ".repeat(TAB_GAP)));
+            x += TAB_GAP as u16;
+        }
+
+        let style = if *view == app.view {
+            app.styles.accent.add_modifier(Modifier::BOLD)
+        } else {
+            app.styles.muted
+        };
+
+        let label_width = widths[start + offset] as u16;
+        spans.push(Span::styled(label.clone(), style));
+        targets.push((Rect::new(x, area.y, label_width, 1), view.clone()));
+        x += label_width;
+    }
+
+    if end < tabs.len() {
+        spans.push(Span::styled(" ›", app.styles.muted));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+
+    targets
+}
+
+// The end (exclusive) of the tabs that fit from `start`, leaving room for edge markers.
+fn fitting_tabs(widths: &[usize], start: usize, width: usize) -> usize {
+    let mut used = if start > 0 { TAB_MARKER } else { 1 };
+    let mut end = start;
+
+    while end < widths.len() {
+        let gap = if end > start { TAB_GAP } else { 0 };
+        let more_after = if end + 1 < widths.len() {
+            TAB_MARKER
+        } else {
+            0
+        };
+
+        if used + gap + widths[end] + more_after > width {
+            break;
+        }
+
+        used += gap + widths[end];
+        end += 1;
+    }
+
+    end
 }
 
 // Prepared once per draw; the row mapping is moved back to App for navigation.
@@ -204,13 +301,31 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
             break;
         };
 
-        let text: String = task
-            .text
+        if !app.is_visible(index) {
+            continue;
+        }
+
+        // Inside a section tab every task shares the prefix, so show only the body.
+        let in_section = matches!(app.view, SectionView::Named(_));
+
+        let shown = if in_section {
+            crate::app::section_body(&task.text)
+        } else {
+            &task.text
+        };
+
+        let text: String = shown
             .chars()
             .map(|c| if c.is_control() { ' ' } else { c })
             .collect();
 
-        let tag_end = crate::app::task_prefix(&text).map_or(0, |prefix| {
+        let section_prefix = if in_section {
+            None
+        } else {
+            crate::app::task_prefix(&text)
+        };
+
+        let tag_end = section_prefix.map_or(0, |prefix| {
             let end = prefix.len();
             text.grapheme_indices(true)
                 .take_while(|(index, _)| *index <= end)
@@ -531,6 +646,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             .is_some_and(|index| !app.tasks[index].completed);
 
         for (key, label, available) in [
+            ("Tab", "Section", !app.section_tabs().is_empty()),
             ("Ctrl+R", "Redo", app.can_redo()),
             ("m", "Carry", can_carry),
             ("t/T", "Theme", true),
@@ -889,6 +1005,156 @@ mod tests {
             .join("\n")
     }
 
+    fn row_text(terminal: &Terminal<TestBackend>, y: u16) -> String {
+        screen(terminal)
+            .lines()
+            .nth(usize::from(y))
+            .unwrap()
+            .to_owned()
+    }
+
+    fn app_with_texts(texts: &[&str]) -> App {
+        App::new(
+            texts
+                .iter()
+                .map(|text| Task {
+                    carried: false,
+                    text: (*text).into(),
+                    completed: false,
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn section_tab_bar_appears_only_with_sections_and_highlights_the_active_tab() {
+        let mut plain = app_with_texts(&["plain", "https://example.com"]);
+        plain.keybinds = false;
+        let mut terminal = test_terminal(40, 8);
+        let rows = render(&mut terminal, &mut plain);
+
+        assert_eq!(rows.y, 1);
+        assert!(plain.tab_targets.is_empty());
+        assert!(row_text(&terminal, 1).contains("plain"));
+
+        let mut app = app_with_texts(&["Work: a", "home: b", "plain"]);
+        app.keybinds = false;
+        app.styles.accent = app.styles.accent.fg(Color::Rgb(20, 40, 60));
+        let rows = render(&mut terminal, &mut app);
+
+        assert_eq!(rows.y, 2);
+        assert_eq!(
+            row_text(&terminal, 1).trim_end(),
+            "│ [*]  home  Work  [-]                 │"
+        );
+
+        let active = &terminal.backend().buffer()[(2, 1)];
+        assert_eq!(active.fg, Color::Rgb(20, 40, 60));
+        assert!(active.modifier.contains(Modifier::BOLD));
+        assert!(
+            terminal.backend().buffer()[(7, 1)]
+                .modifier
+                .contains(Modifier::DIM)
+        );
+    }
+
+    #[test]
+    fn a_section_tab_shows_only_its_tasks_without_the_prefix() {
+        let mut app = app_with_texts(&["Work: fix bug", "Home: laundry", "Work: email"]);
+        app.keybinds = false;
+        app.show_section(crate::app::SectionView::Named("work".into()));
+        let mut terminal = test_terminal(40, 8);
+        render(&mut terminal, &mut app);
+        let screen = screen(&terminal);
+
+        assert!(screen.contains("fix bug") && screen.contains("email"));
+        assert!(!screen.contains("Work: ") && !screen.contains("laundry"));
+        assert_eq!(app.row_tasks, [Some(0), Some(2)]);
+        assert!(
+            !terminal.backend().buffer()[(7, 2)]
+                .modifier
+                .contains(Modifier::BOLD)
+        );
+
+        app.show_section(crate::app::SectionView::All);
+        render(&mut terminal, &mut app);
+
+        assert!(row_text(&terminal, 2).contains("Work: fix bug"));
+        assert!(
+            terminal.backend().buffer()[(7, 2)]
+                .modifier
+                .contains(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn overflowing_tabs_scroll_to_the_active_tab_with_edge_markers() {
+        let texts: Vec<String> = (0..12)
+            .map(|index| format!("Section{index:02}: task"))
+            .collect();
+        let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let mut app = app_with_texts(&texts);
+        app.keybinds = false;
+        let mut terminal = test_terminal(30, 8);
+
+        render(&mut terminal, &mut app);
+        let first = row_text(&terminal, 1);
+        assert!(
+            first.starts_with("│ [*]") && first.contains(" ›"),
+            "{first}"
+        );
+
+        app.show_section(crate::app::SectionView::Named("section11".into()));
+        render(&mut terminal, &mut app);
+        let last = row_text(&terminal, 1);
+
+        assert!(
+            last.starts_with("│‹ ") && last.contains("Section11"),
+            "{last}"
+        );
+        assert!(!last.contains('›'), "{last}");
+
+        for (area, _) in &app.tab_targets {
+            assert!(area.right() < 29);
+        }
+    }
+
+    #[test]
+    fn clicking_a_tab_shows_that_section_and_the_legend_mentions_tab() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        let mut terminal = test_terminal(80, 12);
+        let rows = render(&mut terminal, &mut app);
+
+        assert!(screen(&terminal).contains("Tab Section"));
+
+        let (area, view) = app.tab_targets[1].clone();
+        assert_eq!(view, crate::app::SectionView::Named("home".into()));
+
+        app.mouse(
+            ratatui::crossterm::event::MouseEvent {
+                kind: ratatui::crossterm::event::MouseEventKind::Down(
+                    ratatui::crossterm::event::MouseButton::Left,
+                ),
+                column: area.x,
+                row: area.y,
+                modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+            },
+            rows,
+            &fixture.storage,
+        )
+        .unwrap();
+
+        assert_eq!(app.view, view);
+        assert_eq!(app.list.selected(), Some(1));
+        assert!(app.tasks.iter().all(|task| !task.completed));
+        assert!(!fixture.task_path().exists());
+
+        let mut plain = app_with_texts(&["plain"]);
+        render(&mut terminal, &mut plain);
+        assert!(!screen(&terminal).contains("Section"));
+    }
+
     #[test]
     fn semantic_styles_and_reverse_highlights_preserve_modifier_hierarchy() {
         assert_eq!(DEFAULT_ACCENT, Color::LightYellow);
@@ -923,13 +1189,14 @@ mod tests {
             let mut terminal = test_terminal(40, 10);
             render(&mut terminal, &mut app);
             let buffer = terminal.backend().buffer();
-            let marker = &buffer[(4, 1)];
+            // Row 1 holds the section tab bar, so the task is drawn on row 2.
+            let marker = &buffer[(4, 2)];
 
             assert_eq!(marker.fg, accent);
             assert!(!marker.modifier.contains(Modifier::DIM));
 
             for x in 7..11 {
-                let cell = &buffer[(x, 1)];
+                let cell = &buffer[(x, 2)];
                 assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
                 assert!(
                     cell.modifier
@@ -938,7 +1205,7 @@ mod tests {
                 assert!(!cell.modifier.contains(Modifier::DIM));
             }
 
-            let ordinary = &buffer[(13, 1)];
+            let ordinary = &buffer[(13, 2)];
             assert!(
                 ordinary
                     .modifier
@@ -1055,31 +1322,32 @@ mod tests {
             render(&mut terminal, &mut app);
             let buffer = terminal.backend().buffer();
 
-            assert_eq!(buffer[(1, 1)].fg, Color::Blue);
+            // Row 1 holds the section tab bar, so the task is drawn on row 2.
+            assert_eq!(buffer[(1, 2)].fg, Color::Blue);
             assert!(
-                buffer[(1, 1)]
+                buffer[(1, 2)]
                     .modifier
                     .contains(Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED)
             );
-            assert!(!buffer[(3, 1)].modifier.contains(Modifier::BOLD));
+            assert!(!buffer[(3, 2)].modifier.contains(Modifier::BOLD));
             assert!(
-                buffer[(7, 1)]
+                buffer[(7, 2)]
                     .modifier
                     .contains(Modifier::BOLD | Modifier::CROSSED_OUT)
             );
-            assert_eq!(buffer[(13, 1)].fg, Color::Red);
+            assert_eq!(buffer[(13, 2)].fg, Color::Red);
             assert_eq!(
-                buffer[(13, 1)].modifier.contains(Modifier::DIM),
+                buffer[(13, 2)].modifier.contains(Modifier::DIM),
                 modifiers != "[]"
             );
-            assert!(buffer[(13, 1)].modifier.contains(Modifier::CROSSED_OUT));
+            assert!(buffer[(13, 2)].modifier.contains(Modifier::CROSSED_OUT));
 
             app.mode = Mode::SearchResults {
                 input: "Work".into(),
                 original: Some(0),
             };
             render(&mut terminal, &mut app);
-            let cell = &terminal.backend().buffer()[(7, 1)];
+            let cell = &terminal.backend().buffer()[(7, 2)];
 
             assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
             assert!(
@@ -2185,20 +2453,21 @@ mod tests {
         render(&mut terminal, &mut app);
         let buffer = terminal.backend().buffer();
 
-        assert_eq!(buffer[(1, 1)].symbol(), "›");
-        assert_eq!(buffer[(1, 3)].symbol(), " ");
+        // Row 1 holds the section tab bar, so tasks are drawn on rows 2 to 4.
+        assert_eq!(buffer[(1, 2)].symbol(), "›");
+        assert_eq!(buffer[(1, 4)].symbol(), " ");
 
-        for y in [1, 2] {
+        for y in [2, 3] {
             assert_eq!(buffer[(4, y)].symbol(), "■");
             assert_eq!(buffer[(4, y)].fg, app.styles.accent.fg.unwrap());
         }
 
-        assert_eq!(buffer[(4, 3)].symbol(), "□");
-        assert_eq!(buffer[(4, 3)].fg, Color::Reset);
-        assert_eq!(buffer[(7, 1)].symbol(), "w");
-        assert!(buffer[(7, 1)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(4, 4)].symbol(), "□");
+        assert_eq!(buffer[(4, 4)].fg, Color::Reset);
+        assert_eq!(buffer[(7, 2)].symbol(), "w");
+        assert!(buffer[(7, 2)].modifier.contains(Modifier::BOLD));
 
-        for (y, expected) in [(1, "İfooİFOO"), (2, "İfoo")] {
+        for (y, expected) in [(2, "İfooİFOO"), (3, "İfoo")] {
             let mut highlighted = String::new();
 
             for x in 7..39 {
@@ -2209,7 +2478,7 @@ mod tests {
                     assert_eq!(cell.fg, Color::Reset);
                     assert_eq!(cell.bg, Color::Reset);
                     assert!(!cell.modifier.contains(Modifier::DIM));
-                    assert_eq!(cell.modifier.contains(Modifier::CROSSED_OUT), y == 2);
+                    assert_eq!(cell.modifier.contains(Modifier::CROSSED_OUT), y == 3);
                 }
             }
 
@@ -2226,10 +2495,10 @@ mod tests {
 
         assert_eq!(app.list.selected(), Some(1));
         assert_eq!(app.tasks, original);
-        assert_eq!(terminal.backend().buffer()[(4, 1)].symbol(), " ");
-        assert_eq!(terminal.backend().buffer()[(4, 2)].symbol(), "✓");
+        assert_eq!(terminal.backend().buffer()[(4, 2)].symbol(), " ");
+        assert_eq!(terminal.backend().buffer()[(4, 3)].symbol(), "✓");
 
-        for y in 1..4 {
+        for y in 2..5 {
             for x in 7..39 {
                 assert_eq!(terminal.backend().buffer()[(x, y)].bg, Color::Reset);
             }
@@ -2275,7 +2544,8 @@ mod tests {
 
         assert_eq!(app.row_tasks, mapping);
 
-        for (y, length) in [(1, 4), (2, 4)] {
+        // Row 1 holds the section tab bar, so the matching rows are 2 and 3.
+        for (y, length) in [(2, 4), (3, 4)] {
             for x in 7..7 + length {
                 assert!(
                     terminal.backend().buffer()[(x, y)]
@@ -2965,13 +3235,15 @@ mod tests {
     fn only_leading_tags_are_bold_across_wrapping_and_completion_styles() {
         for (text, tag) in [
             ("foo: first bar:", "foo:"),
-            ("foo:bar", "foo:"),
+            ("foo:bar", ""),
+            ("https://example.com", ""),
+            ("10:30 call", ""),
             ("no tag: task", ""),
             ("task foo:", ""),
             (":empty", ""),
             ("e\u{301}👩‍💻: body", "e\u{301}👩‍💻:"),
             ("abcdefghijkl: body", "abcdefghijkl:"),
-            ("a:\u{301} body", "a:\u{301}"),
+            ("a:\u{301} body", ""),
         ] {
             for completed in [false, true] {
                 for (width, wrap) in [(12, true), (40, true), (40, false)] {
@@ -2989,7 +3261,10 @@ mod tests {
                     let buffer = terminal.backend().buffer();
                     let mut bold = String::new();
 
-                    for y in 1..19 {
+                    // A section adds the tab bar on row 1, pushing the task to row 2.
+                    let first_row = if tag.is_empty() { 1 } else { 2 };
+
+                    for y in first_row..19 {
                         for x in 7..width - 1 {
                             let cell = &buffer[(x, y)];
 
@@ -3008,8 +3283,8 @@ mod tests {
                     }
 
                     assert_eq!(bold, tag, "{text:?}, width={width}, wrap={wrap}");
-                    assert!(!buffer[(3, 1)].modifier.contains(Modifier::BOLD));
-                    assert_eq!(buffer[(1, 1)].fg, app.styles.accent.fg.unwrap());
+                    assert!(!buffer[(3, first_row)].modifier.contains(Modifier::BOLD));
+                    assert_eq!(buffer[(1, first_row)].fg, app.styles.accent.fg.unwrap());
                     assert_eq!(app.tasks, original);
                     assert!(!app.can_undo());
                 }
