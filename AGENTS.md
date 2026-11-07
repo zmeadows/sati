@@ -126,6 +126,7 @@ Reread your diff as a reviewer would. If any hunk looks like a wall of text, add
 - When behavior or options change, update the relevant README documentation and on-screen hints, subject to the deliberate Page Up/Down omission above.
 - Keep `Cargo.lock` checked in; review dependency changes for MSRV and Linux/macOS/Windows compatibility.
 - Do not automatically commit or push. If asked to commit, use a short Conventional Commit subject (for example, `fix: ...`, `feat: ...`, or `docs: ...`).
+- Never add watermarks, attribution, or trailers such as `Co-Authored-By:` or "Generated with ..." to commit messages, pull requests, or code.
 
 ## Verification commands
 
