@@ -45,6 +45,10 @@ fn single_line_character(character: char) -> char {
     }
 }
 
+fn task_noun(count: usize) -> &'static str {
+    if count == 1 { "task" } else { "tasks" }
+}
+
 pub(crate) fn task_prefix(text: &str) -> Option<&str> {
     text.find(':')
         .filter(|&end| end > 0 && !text[..end].chars().any(char::is_whitespace))
@@ -81,6 +85,8 @@ pub enum Mode {
 struct UndoState {
     tasks: Vec<Task>,
     selected: Option<usize>,
+    // Describes the change from this snapshot to the next state, e.g. "delete task".
+    label: String,
 }
 
 pub struct App {
@@ -205,9 +211,13 @@ impl App {
             (0..end).rev().chain((end..len).rev()).find(unfinished)
         };
 
-        if let Some(index) = next {
-            self.list.select(Some(index));
-            self.reveal_selection = true;
+        match next {
+            Some(index) => {
+                self.list.select(Some(index));
+                self.reveal_selection = true;
+            }
+            None if len > 0 => self.notify("No unfinished tasks"),
+            None => {}
         }
     }
 
@@ -226,6 +236,7 @@ impl App {
         &mut self,
         text: String,
         placement: AddPlacement,
+        label: &str,
         storage: &Storage,
     ) -> Result<()> {
         let index = self.insertion_index(placement);
@@ -239,7 +250,7 @@ impl App {
             },
         );
 
-        self.replace(tasks, Some(index), storage)
+        self.replace(tasks, Some(index), label, storage)
     }
 
     fn page(&mut self, forward: bool) {
@@ -303,6 +314,7 @@ impl App {
         &mut self,
         tasks: Vec<Task>,
         selected: Option<usize>,
+        label: impl Into<String>,
         storage: &Storage,
     ) -> Result<()> {
         storage.save_selected(&tasks, selected)?;
@@ -316,6 +328,7 @@ impl App {
         self.history.push_back(UndoState {
             tasks: std::mem::replace(&mut self.tasks, tasks),
             selected: self.list.selected(),
+            label: label.into(),
         });
         self.redo_history.clear();
         self.list.select(selected);
@@ -394,6 +407,8 @@ impl App {
 
     fn resume_search(&mut self, forward: bool) {
         let Some(query) = self.last_search_query.as_deref() else {
+            self.notify("No previous search");
+
             return;
         };
 
@@ -402,14 +417,18 @@ impl App {
             .filter(|&index| crate::search::matches(&self.tasks[index].text, query))
             .or_else(|| self.find_search_result(query, forward));
 
-        if let Some(index) = selected {
-            self.mode = Mode::SearchResults {
-                input: query.into(),
-                original,
-            };
-            self.list.select(Some(index));
-            self.reveal_selection = true;
-        }
+        let Some(index) = selected else {
+            self.notify(format!("No matches for \"{query}\""));
+
+            return;
+        };
+
+        self.mode = Mode::SearchResults {
+            input: query.into(),
+            original,
+        };
+        self.list.select(Some(index));
+        self.reveal_selection = true;
     }
 
     fn finish_search(&mut self, accept: bool) {
@@ -444,25 +463,39 @@ impl App {
             (&mut self.history, &mut self.redo_history)
         };
 
-        if let Some(previous) = source.back() {
-            storage.save_selected(&previous.tasks, previous.selected)?;
-            self.persisted_selection =
-                crate::storage::valid_selection(&previous.tasks, previous.selected);
-            self.needs_migration = false;
-            let previous = source.pop_back().unwrap();
-
-            if destination.len() == HISTORY_LIMIT {
-                destination.pop_front();
-            }
-
-            destination.push_back(UndoState {
-                tasks: std::mem::replace(&mut self.tasks, previous.tasks),
-                selected: self.list.selected(),
+        let Some(previous) = source.back() else {
+            self.notify(if redo {
+                "Nothing to redo"
+            } else {
+                "Nothing to undo"
             });
-            self.list
-                .select(previous.selected.filter(|&index| index < self.tasks.len()));
-            self.reveal_selection = true;
+
+            return Ok(());
+        };
+
+        storage.save_selected(&previous.tasks, previous.selected)?;
+        self.persisted_selection =
+            crate::storage::valid_selection(&previous.tasks, previous.selected);
+        self.needs_migration = false;
+        let previous = source.pop_back().unwrap();
+
+        if destination.len() == HISTORY_LIMIT {
+            destination.pop_front();
         }
+
+        let verb = if redo { "Redid" } else { "Undid" };
+        let message = format!("{verb}: {}", previous.label);
+
+        // The label describes the same change in either direction, so it moves with it.
+        destination.push_back(UndoState {
+            tasks: std::mem::replace(&mut self.tasks, previous.tasks),
+            selected: self.list.selected(),
+            label: previous.label,
+        });
+        self.list
+            .select(previous.selected.filter(|&index| index < self.tasks.len()));
+        self.reveal_selection = true;
+        self.notify(message);
 
         Ok(())
     }
@@ -472,8 +505,14 @@ impl App {
         tasks[index].completed = !tasks[index].completed;
         tasks[index].carried = false;
 
+        let label = if tasks[index].completed {
+            "complete task"
+        } else {
+            "uncomplete task"
+        };
+
         // The task stays in place, so do not force the viewport to scroll to it.
-        self.replace(tasks, Some(index), storage)?;
+        self.replace(tasks, Some(index), label, storage)?;
         self.reveal_selection = false;
 
         Ok(())
@@ -485,13 +524,21 @@ impl App {
         };
 
         if self.tasks[index].completed {
+            self.notify("Completed tasks can't be carried");
+
             return Ok(());
         }
 
         let mut tasks = self.tasks.clone();
         tasks[index].carried = !tasks[index].carried;
 
-        self.replace(tasks, Some(index), storage)
+        let label = if tasks[index].carried {
+            "mark carryover"
+        } else {
+            "unmark carryover"
+        };
+
+        self.replace(tasks, Some(index), label, storage)
     }
 
     fn clear_unmarked(&mut self, storage: &Storage) -> Result<()> {
@@ -511,14 +558,26 @@ impl App {
             .min_by_key(|(_, (index, _))| index.abs_diff(anchor))
             .map(|(index, _)| index);
 
-        let tasks = self
+        let tasks: Vec<_> = self
             .tasks
             .iter()
             .filter(|task| task.carried)
             .cloned()
             .collect();
 
-        self.replace(tasks, selected, storage)
+        let kept = tasks.len();
+        let removed = self.tasks.len() - kept;
+        let cleared = format!("{removed} {}", task_noun(removed));
+
+        self.replace(tasks, selected, format!("clear {cleared}"), storage)?;
+
+        if kept == 0 {
+            self.notify(format!("Cleared {cleared}"));
+        } else {
+            self.notify(format!("Cleared {cleared}, kept {kept} carried"));
+        }
+
+        Ok(())
     }
 
     fn move_selected(&mut self, down: bool, count: usize, storage: &Storage) -> Result<()> {
@@ -541,11 +600,13 @@ impl App {
         let task = tasks.remove(index);
         tasks.insert(target, task);
 
-        self.replace(tasks, Some(target), storage)
+        self.replace(tasks, Some(target), "move task", storage)
     }
 
     fn clear_completed(&mut self, storage: &Storage) -> Result<()> {
         if !self.tasks.iter().any(|task| task.completed) {
+            self.notify("No completed tasks");
+
             return Ok(());
         }
 
@@ -564,7 +625,12 @@ impl App {
             Some(before.min(tasks.len() - 1))
         };
 
-        self.replace(tasks, selected, storage)
+        let removed = self.tasks.len() - tasks.len();
+        let cleared = format!("{removed} completed {}", task_noun(removed));
+        self.replace(tasks, selected, format!("clear {cleared}"), storage)?;
+        self.notify(format!("Cleared {cleared}"));
+
+        Ok(())
     }
 
     fn cycle_theme(&mut self, forward: bool) {
@@ -587,10 +653,12 @@ impl App {
 
     fn paste_task(&mut self, placement: AddPlacement, storage: &Storage) -> Result<()> {
         let Some(text) = self.task_register.clone() else {
+            self.notify("Nothing to paste");
+
             return Ok(());
         };
 
-        self.insert_task(text, placement, storage)
+        self.insert_task(text, placement, "paste task", storage)
     }
 
     pub fn copy_markdown(&mut self, output: &mut impl std::io::Write) {
@@ -881,10 +949,10 @@ impl App {
                         if self.tasks[index].text != text {
                             let mut tasks = self.tasks.clone();
                             tasks[index].text = text;
-                            self.replace(tasks, Some(index), storage)?;
+                            self.replace(tasks, Some(index), "edit task", storage)?;
                         }
                     } else {
-                        self.insert_task(text, placement, storage)?;
+                        self.insert_task(text, placement, "add task", storage)?;
                     }
                 }
 
@@ -970,6 +1038,7 @@ impl App {
             KeyCode::Char('w') => {
                 self.wrap = !self.wrap;
                 self.reveal_selection = true;
+                self.notify(if self.wrap { "Wrap on" } else { "Wrap off" });
             }
             KeyCode::Char('m') => self.toggle_carryover(storage)?,
             KeyCode::Char('x') => self.clear_completed(storage)?,
@@ -1034,7 +1103,8 @@ impl App {
                         Some(index.min(tasks.len() - 1))
                     };
 
-                    self.replace(tasks, selected, storage)?;
+                    self.replace(tasks, selected, "delete task", storage)?;
+                    self.notify("Deleted task");
                 }
             }
             KeyCode::Char('D') if self.tasks.iter().any(|task| !task.carried) => {
@@ -1154,6 +1224,10 @@ mod tests {
         selected: Option<usize>,
         history: VecDeque<UndoState>,
         redo_history: VecDeque<UndoState>,
+    }
+
+    fn notice(app: &App) -> Option<&str> {
+        app.notification.as_ref().map(Notification::message)
     }
 
     fn task_state(app: &App) -> TaskState {
@@ -1398,6 +1472,11 @@ mod tests {
 
         assert_eq!(output, expected);
         assert!(app.notification.is_none());
+
+        for key in ['u', 'w', 'd', 'x', 'p'] {
+            press(&mut app, &fixture, KeyCode::Char(key));
+            assert!(app.notification.is_none(), "{key}");
+        }
 
         app.copy_markdown(&mut BrokenOutput);
 
@@ -4242,15 +4321,16 @@ mod tests {
     fn undo_restores_list_and_selection_for_every_modification() {
         use KeyCode::{Char, Enter};
 
-        for keys in [
-            vec![Char('d')],
-            vec![Char('x')],
-            vec![Char(' ')],
-            vec![Char('J')],
-            vec![Char('K')],
-            vec![Char('D'), Enter],
-            vec![Char('a'), Char('x'), Enter],
-            vec![Char('e'), Char('x'), Enter],
+        for (keys, label) in [
+            (vec![Char('d')], "delete task"),
+            (vec![Char('x')], "clear 1 completed task"),
+            (vec![Char(' ')], "uncomplete task"),
+            (vec![Char('J')], "move task"),
+            (vec![Char('K')], "move task"),
+            (vec![Char('D'), Enter], "clear 3 tasks"),
+            (vec![Char('a'), Char('x'), Enter], "add task"),
+            (vec![Char('e'), Char('x'), Enter], "edit task"),
+            (vec![Char('y'), Char('p')], "paste task"),
         ] {
             let fixture = Fixture::new();
             let mut app = app_with_tasks(3);
@@ -4274,9 +4354,11 @@ mod tests {
             assert_eq!(fixture.storage.load().unwrap(), original);
             assert!(app.reveal_selection);
             assert!(app.history.is_empty());
+            assert_eq!(notice(&app), Some(format!("Undid: {label}").as_str()));
 
             press(&mut app, &fixture, Char('u'));
             assert_eq!(app.tasks, original);
+            assert_eq!(notice(&app), Some("Nothing to undo"));
 
             press(
                 &mut app,
@@ -4288,7 +4370,126 @@ mod tests {
             assert_eq!(app.list.selected(), selected_before_undo);
             assert_eq!(fixture.storage.load().unwrap(), modified);
             assert!(!app.can_redo());
+            assert_eq!(notice(&app), Some(format!("Redid: {label}").as_str()));
+
+            press(
+                &mut app,
+                &fixture,
+                KeyEvent::new(Char('r'), KeyModifiers::CONTROL),
+            );
+            assert_eq!(app.tasks, modified);
+            assert_eq!(notice(&app), Some("Nothing to redo"));
         }
+    }
+
+    #[test]
+    fn notifications_explain_no_ops_without_changing_tasks() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(2);
+        let original = app.tasks.clone();
+
+        press(&mut app, &fixture, KeyCode::Char('p'));
+        assert_eq!(notice(&app), Some("Nothing to paste"));
+
+        press(&mut app, &fixture, KeyCode::Char('n'));
+        assert_eq!(notice(&app), Some("No previous search"));
+
+        app.last_search_query = Some("missing".into());
+        press(&mut app, &fixture, KeyCode::Char('n'));
+        assert_eq!(notice(&app), Some("No matches for \"missing\""));
+        assert_eq!(app.mode, Mode::Normal);
+
+        press(&mut app, &fixture, KeyCode::Char('x'));
+        assert_eq!(notice(&app), Some("No completed tasks"));
+
+        assert_eq!(app.tasks, original);
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
+
+        let mut done = app_with_tasks(2);
+        done.tasks.iter_mut().for_each(|task| task.completed = true);
+        let original = done.tasks.clone();
+
+        press(&mut done, &fixture, KeyCode::Char('m'));
+        assert_eq!(notice(&done), Some("Completed tasks can't be carried"));
+
+        press(&mut done, &fixture, KeyCode::Tab);
+        assert_eq!(notice(&done), Some("No unfinished tasks"));
+        assert_eq!(done.tasks, original);
+        assert!(!done.can_undo());
+
+        let mut empty = app_with_tasks(0);
+        press(&mut empty, &fixture, KeyCode::Tab);
+        assert_eq!(notice(&empty), None);
+    }
+
+    #[test]
+    fn notifications_confirm_easy_to_miss_changes() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(5);
+
+        press(&mut app, &fixture, KeyCode::Char('w'));
+        assert_eq!(notice(&app), Some("Wrap off"));
+
+        press(&mut app, &fixture, KeyCode::Char('w'));
+        assert_eq!(notice(&app), Some("Wrap on"));
+
+        press(&mut app, &fixture, KeyCode::Char('m'));
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(notice(&app), Some("Undid: mark carryover"));
+
+        press(&mut app, &fixture, KeyCode::Char('d'));
+        assert_eq!(notice(&app), Some("Deleted task"));
+
+        for (completed, message) in [
+            (1, "Cleared 1 completed task"),
+            (2, "Cleared 2 completed tasks"),
+        ] {
+            let mut app = app_with_tasks(3);
+            app.tasks[..completed]
+                .iter_mut()
+                .for_each(|task| task.completed = true);
+
+            press(&mut app, &fixture, KeyCode::Char('x'));
+            assert_eq!(notice(&app), Some(message));
+        }
+
+        for (carried, message) in [
+            (false, "Cleared 3 tasks"),
+            (true, "Cleared 2 tasks, kept 1 carried"),
+        ] {
+            let mut app = app_with_tasks(3);
+            app.tasks[0].carried = carried;
+
+            press(&mut app, &fixture, KeyCode::Char('D'));
+            press(&mut app, &fixture, KeyCode::Enter);
+            assert_eq!(notice(&app), Some(message));
+        }
+    }
+
+    #[test]
+    fn failed_saves_never_confirm_a_change() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        app.tasks[0].completed = true;
+        fixture.storage.save(&app.tasks).unwrap();
+        block_saves(&fixture);
+
+        for key in [KeyCode::Char('d'), KeyCode::Char('x')] {
+            let result = app.key(KeyEvent::new(key, KeyModifiers::NONE), &fixture.storage);
+
+            assert!(result.is_err());
+            assert_eq!(notice(&app), None);
+        }
+
+        press(&mut app, &fixture, KeyCode::Char('D'));
+        let result = app.key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &fixture.storage,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(notice(&app), None);
     }
 
     #[test]

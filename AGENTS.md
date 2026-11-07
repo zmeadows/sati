@@ -37,6 +37,7 @@
 - `a` appends, `o` inserts below selection, and `O` inserts above selection.
 - `j`/`k`/`J`/`K` and their aliases accept a Vim-style count (`5j`); counted moves clamp at the ends while plain `j`/`k` wrap, and a counted reorder is one undo step. A pending count is transient, never saved or shown, and any other key, mouse event, or paste discards it.
 - Undo and redo each hold at most **256 in-memory snapshots** of tasks and selection. Only successful mutations enter ordinary history and clear redo. Undo/redo transfer snapshots between stacks after saving. Navigation, cancellation, and no-ops leave both histories unchanged.
+- Each undo snapshot carries a short action label (e.g. "delete task") that `replace` stores and undo/redo show as "Undid:/Redid: …"; every new mutation must pass one. Routine notifications go through `App::notify` so `--no-notifications` can hide them.
 - Undo/redo history is session-only. Never read, write, or delete legacy `history.json` files. Undo/redo still save their resulting task lists to authoritative `tasks.json` before transferring snapshots.
 
 ### Storage and failure handling

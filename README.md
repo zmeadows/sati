@@ -267,8 +267,9 @@ items, with task order and literal text preserved.
 Press `c` in the checklist to send the same Markdown to the terminal clipboard
 using OSC 52. The brief “Copy sent to terminal” message clears on subsequent
 activity; clipboard acceptance depends on terminal and multiplexer support.
-`--no-notifications` (or `notifications = false`) hides this and the other brief
-confirmations, but a failed copy is still reported.
+`--no-notifications` (or `notifications = false`) hides this and sati's other brief
+messages (undo/redo descriptions, wrap, delete and clear confirmations, and hints such as
+“Nothing to undo”), but a failed copy is still reported.
 
 ## Data
 

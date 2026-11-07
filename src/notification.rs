@@ -28,6 +28,9 @@ impl Notification {
         match self.message.as_str() {
             "Copy sent to terminal" => "Copy sent",
             message if message.starts_with("Copy failed") => "Copy failed",
+            message if message.starts_with("Undid: ") => "Undid",
+            message if message.starts_with("Redid: ") => "Redid",
+            message if message.starts_with("Cleared ") => "Cleared",
             message if message.starts_with("Theme: ") => message
                 .rsplit_once(" (")
                 .and_then(|(_, id)| id.strip_suffix(')'))
@@ -81,6 +84,10 @@ mod tests {
             ("Copied task", "Copied task"),
             ("Copy sent to terminal", "Copy sent"),
             ("Copy failed: output unavailable", "Copy failed"),
+            ("Undid: clear 3 completed tasks", "Undid"),
+            ("Redid: delete task", "Redid"),
+            ("Cleared 2 tasks, kept 1 carried", "Cleared"),
+            ("Nothing to undo", "Nothing to undo"),
         ] {
             assert_eq!(Notification::new(message).compact_message(), compact);
         }
