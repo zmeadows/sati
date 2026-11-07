@@ -12,17 +12,21 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
+
         let root = std::env::temp_dir().join(format!(
             "sati-export-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
+
         fs::create_dir(&root).unwrap();
+
         let data = if cfg!(target_os = "macos") {
             root.join("Library/Application Support/sati")
         } else {
             root.join("sati")
         };
+
         Self { root, data }
     }
     fn command(&self) -> Command {
@@ -33,6 +37,7 @@ impl Fixture {
             .env("APPDATA", &self.root)
             .env("XDG_DATA_HOME", &self.root)
             .stdin(Stdio::null());
+
         command
     }
     fn run(&self, args: &[&str]) -> Output {
@@ -59,6 +64,7 @@ const MARKDOWN: &str = "- [ ] Work: 日本語\n- [x] done\n";
 fn export_reads_committed_tasks_while_the_writer_lock_is_held() {
     let fixture = Fixture::new();
     fixture.prepare();
+
     let held = OpenOptions::new()
         .read(true)
         .write(true)
@@ -66,9 +72,11 @@ fn export_reads_committed_tasks_while_the_writer_lock_is_held() {
         .truncate(false)
         .open(fixture.data.join("tasks.lock"))
         .unwrap();
+
     fs4::FileExt::try_lock(&held).unwrap();
     let before = fs::read(fixture.data.join("tasks.json")).unwrap();
     let output = fixture.run(&[]);
+
     assert!(
         output.status.success(),
         "{}",
@@ -77,12 +85,14 @@ fn export_reads_committed_tasks_while_the_writer_lock_is_held() {
     assert_eq!(output.stdout, MARKDOWN.as_bytes());
     assert!(output.stderr.is_empty());
     assert_eq!(fs::read(fixture.data.join("tasks.json")).unwrap(), before);
+
     let document = format!(
         r#"{{"tasks":{},"selected":1}}"#,
         String::from_utf8(before).unwrap()
     );
     fs::write(fixture.data.join("tasks.json"), &document).unwrap();
     let output = fixture.run(&[]);
+
     assert!(output.status.success() && output.stderr.is_empty());
     assert_eq!(output.stdout, MARKDOWN.as_bytes());
     assert_eq!(
@@ -112,7 +122,9 @@ fn missing_and_invalid_storage_never_get_created_or_repaired() {
     assert!(output.status.success());
     assert!(output.stdout.is_empty() && output.stderr.is_empty());
     assert_eq!(fs::read_dir(&fixture.root).unwrap().count(), 0);
+
     fixture.prepare();
+
     for invalid in [
         "malformed",
         r#"[{"text":"bad","completed":true,"carried":true}]"#,
@@ -135,19 +147,23 @@ fn export_files_require_force_and_do_not_leave_partial_outputs() {
     let fixture = Fixture::new();
     fixture.prepare();
     let path = fixture.root.join("tasks.md");
+
     let first = fixture
         .command()
         .arg("--output")
         .arg(&path)
         .output()
         .unwrap();
+
     assert!(first.status.success());
     assert!(first.stdout.is_empty() && first.stderr.is_empty());
     assert_eq!(fs::read(&path).unwrap(), MARKDOWN.as_bytes());
+
     fs::write(&path, "original\n").unwrap();
     let refused = fixture.command().arg("-o").arg(&path).output().unwrap();
     assert!(!refused.status.success());
     assert_eq!(fs::read(&path).unwrap(), b"original\n");
+
     let replaced = fixture
         .command()
         .arg("--force")
@@ -155,8 +171,10 @@ fn export_files_require_force_and_do_not_leave_partial_outputs() {
         .arg(&path)
         .output()
         .unwrap();
+
     assert!(replaced.status.success());
     assert_eq!(fs::read(&path).unwrap(), MARKDOWN.as_bytes());
+
     let missing = fixture.root.join("missing/tasks.md");
     assert!(
         !fixture
@@ -177,6 +195,7 @@ fn concurrent_exports_cannot_overwrite_each_other_without_force() {
     let fixture = Fixture::new();
     fixture.prepare();
     let path = fixture.root.join("tasks.md");
+
     let mut first = fixture
         .command()
         .arg("-o")
@@ -185,6 +204,7 @@ fn concurrent_exports_cannot_overwrite_each_other_without_force() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+
     let second = fixture.command().arg("-o").arg(&path).output().unwrap();
     let status = first.wait().unwrap();
     assert_ne!(status.success(), second.status.success());
@@ -195,6 +215,7 @@ fn concurrent_exports_cannot_overwrite_each_other_without_force() {
 fn export_protects_state_files_and_rejects_invalid_arguments() {
     let fixture = Fixture::new();
     fixture.prepare();
+
     for name in [
         "tasks.json",
         "history.json",
@@ -203,16 +224,21 @@ fn export_protects_state_files_and_rejects_invalid_arguments() {
         ".history.json.writer.tmp",
     ] {
         let path = fixture.data.join(name);
+
         if name != "tasks.json" && name != "history.json" {
             fs::write(&path, "protected").unwrap();
         }
+
         let bytes = fs::read(&path).unwrap();
+
         for force in [false, true] {
             let mut command = fixture.command();
             command.arg("-o").arg(&path);
+
             if force {
                 command.arg("--force");
             }
+
             let output = command.output().unwrap();
             assert!(!output.status.success(), "accepted {name}");
             assert!(output.stdout.is_empty());
@@ -222,6 +248,7 @@ fn export_protects_state_files_and_rejects_invalid_arguments() {
             assert_eq!(fs::read(&path).unwrap(), bytes);
         }
     }
+
     for args in [
         vec!["--force"],
         vec!["--output"],
@@ -234,8 +261,10 @@ fn export_protects_state_files_and_rejects_invalid_arguments() {
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
     }
+
     let help = fixture.run(&["--help"]);
     assert!(help.status.success());
+
     let help = String::from_utf8(help.stdout).unwrap();
     assert!(help.contains("--output") && help.contains("--force") && help.contains("-o"));
 }
@@ -245,10 +274,12 @@ fn export_protects_state_files_and_rejects_invalid_arguments() {
 fn export_refuses_symlink_aliases_of_state_files() {
     let fixture = Fixture::new();
     fixture.prepare();
+
     for name in ["tasks.json", "history.json"] {
         let alias = fixture.root.join(format!("{name}.md"));
         std::os::unix::fs::symlink(fixture.data.join(name), &alias).unwrap();
         let bytes = fs::read(&alias).unwrap();
+
         assert!(
             !fixture
                 .command()
@@ -270,6 +301,7 @@ fn windows_export_refuses_normalized_state_names_even_when_missing() {
     let fixture = Fixture::new();
     fixture.prepare();
     fs::remove_file(fixture.data.join("history.json")).unwrap();
+
     for name in ["history.json.", "HISTORY.JSON ", "history.json:stream"] {
         assert!(
             !fixture
@@ -283,5 +315,6 @@ fn windows_export_refuses_normalized_state_names_even_when_missing() {
                 .success()
         );
     }
+
     assert!(!fixture.data.join("history.json").exists());
 }

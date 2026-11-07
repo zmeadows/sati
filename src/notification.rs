@@ -60,6 +60,7 @@ fn timing(mut elapsed: Duration, phases: [Duration; 2]) -> Option<(usize, Durati
         // Subtract instead of summing deadlines to avoid overflow for long phases.
         elapsed -= duration;
     }
+
     None
 }
 
@@ -90,6 +91,7 @@ mod tests {
         let config: crate::config::Config = toml::from_str("[styles.normal]\nfg='lightblue'\nmodifiers=['bold']\n[styles.muted]\nmodifiers=['italic']\n[styles.accent]\nfg='3'\nmodifiers=[]").unwrap();
         let styles = crate::styles::Styles::resolve(config.theme, &config.styles, None);
         let notice = Notification::new("Copied task");
+
         for (elapsed, expected) in [
             (0, styles.accent),
             (299, styles.accent),
@@ -105,6 +107,7 @@ mod tests {
                 Some(expected)
             );
         }
+
         assert!(
             notice
                 .next_redraw(notice.started + Duration::from_millis(3560))
@@ -116,6 +119,7 @@ mod tests {
     fn waits_only_for_boundaries_and_skips_elapsed_phases() {
         let ms = Duration::from_millis;
         let phases = [ms(300), ms(3260)];
+
         for (elapsed, phase, wait) in [
             (0, 0, 300),
             (299, 0, 1),
@@ -125,6 +129,7 @@ mod tests {
         ] {
             assert_eq!(timing(ms(elapsed), phases), Some((phase, ms(wait))));
         }
+
         assert!(timing(ms(3560), phases).is_none());
         assert!(timing(ms(5000), phases).is_none());
     }
@@ -134,12 +139,14 @@ mod tests {
         let zero = Duration::ZERO;
         let tick = Duration::from_nanos(1);
         assert!(timing(zero, [zero; 2]).is_none());
+
         for phase in 0..2 {
             let mut phases = [zero; 2];
             phases[phase] = tick;
             assert_eq!(timing(zero, phases), Some((phase, tick)));
             assert!(timing(tick, phases).is_none());
         }
+
         assert_eq!(
             timing(Duration::MAX, [Duration::MAX; 2]),
             Some((1, Duration::MAX))
@@ -150,28 +157,33 @@ mod tests {
     fn phases_select_styles_directly_and_replacements_restart() {
         let first = Notification::new("Copied task");
         let start = first.started;
+
         for colors in [
             [Color::Rgb(255, 0, 128), Color::Rgb(212, 190, 152)],
             [Color::Red, Color::Reset],
             [Color::Indexed(3), Color::Indexed(8)],
         ] {
             let [accent, normal] = colors.map(|color| Style::default().fg(color));
+
             for (elapsed, expected) in [(0, accent), (299, accent), (300, normal), (3559, normal)] {
                 assert_eq!(
                     first.style(start + Duration::from_millis(elapsed), accent, normal),
                     Some(expected)
                 );
             }
+
             assert!(
                 first
                     .style(start + Duration::from_millis(3560), accent, normal)
                     .is_none()
             );
         }
+
         let replacement = Notification {
             message: "Copy sent to terminal".into(),
             started: start + Duration::from_secs(4),
         };
+
         assert_eq!(
             replacement.style(
                 replacement.started,
@@ -180,6 +192,7 @@ mod tests {
             ),
             Some(Style::default().fg(Color::Blue))
         );
+
         for (elapsed, wait) in [
             (0, Some(300)),
             (300, Some(3260)),

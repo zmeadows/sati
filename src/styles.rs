@@ -18,17 +18,20 @@ impl Styles {
         cli_accent: Option<Color>,
     ) -> Self {
         let bases = theme.base_styles();
+
         let apply = |base: Style, value: &crate::config::StyleOverride| {
             let style = if let Some(fg) = value.fg {
                 base.fg(fg)
             } else {
                 base
             };
+
             let style = if let Some(bg) = value.bg {
                 style.bg(bg)
             } else {
                 style
             };
+
             if let Some(modifiers) = value.modifiers {
                 style
                     .remove_modifier(Modifier::all())
@@ -37,14 +40,17 @@ impl Styles {
                 style
             }
         };
+
         let normal = apply(bases.normal, &overrides.normal);
         let muted = apply(normal.patch(bases.muted), &overrides.muted);
         let completed = apply(muted.patch(bases.completed), &overrides.completed);
         let border = apply(muted.patch(bases.border), &overrides.border);
         let mut accent = apply(normal.patch(bases.accent), &overrides.accent);
+
         if let Some(fg) = cli_accent {
             accent = accent.fg(fg);
         }
+
         Self {
             normal,
             muted,
@@ -77,6 +83,7 @@ mod tests {
     #[test]
     fn cascade_inherits_foregrounds_and_replaces_modifier_sets() {
         assert_eq!(resolve(""), Styles::default());
+
         let styles = resolve("[styles.normal]\nfg='lightblue'\nmodifiers=['bold']");
         assert_eq!(styles.normal.fg, Some(Color::LightBlue));
         assert_eq!(styles.muted.fg, Some(Color::LightBlue));
@@ -85,10 +92,12 @@ mod tests {
         assert_eq!(styles.border, styles.muted);
         assert_eq!(styles.accent.fg, Some(DEFAULT_ACCENT));
         assert_eq!(styles.accent.add_modifier, Modifier::BOLD);
+
         for (text, modifiers) in [("['italic']", Modifier::ITALIC), ("[]", Modifier::empty())] {
             let styles = resolve(&format!(
                 "[styles.normal]\nfg='lightblue'\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers={text}"
             ));
+
             assert_eq!(styles.muted.fg, Some(Color::Green));
             assert_eq!(styles.muted.add_modifier, modifiers);
             assert_eq!(styles.completed, styles.muted);
@@ -96,9 +105,11 @@ mod tests {
             assert_eq!(styles.normal.fg, Some(Color::LightBlue));
             assert_eq!(styles.normal.patch(styles.muted).add_modifier, modifiers);
         }
+
         let styles = resolve(
             "[styles.completed]\nfg='red'\nmodifiers=[]\n[styles.border]\nfg='3'\nmodifiers=['underlined','crossed_out']",
         );
+
         assert_eq!(styles.completed.fg, Some(Color::Red));
         assert!(styles.completed.add_modifier.is_empty());
         assert_eq!(
@@ -140,6 +151,7 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::DIM)
         );
+
         let accent = styles.accent.add_modifier(Modifier::ITALIC);
         let overridden = accent.fg(Color::Indexed(3));
         assert_eq!(overridden.add_modifier, accent.add_modifier);

@@ -121,11 +121,13 @@ impl BuiltinTheme {
             .iter()
             .position(|(theme, _, _)| *theme == self)
             .expect("registered theme");
+
         let next = if forward {
             (index + 1) % Self::ALL.len()
         } else {
             (index + Self::ALL.len() - 1) % Self::ALL.len()
         };
+
         Self::ALL[next].0
     }
 
@@ -355,6 +357,7 @@ mod tests {
                 &crate::config::StyleOverrides::default(),
                 None,
             );
+
             for role in [
                 styles.normal,
                 styles.muted,
@@ -365,6 +368,7 @@ mod tests {
                 assert_eq!(role.bg, Some(Color::Rgb(rgb.0, rgb.1, rgb.2)), "{name}");
             }
         }
+
         assert_eq!(Styles::default().normal.bg, None);
     }
 
@@ -381,6 +385,7 @@ mod tests {
             assert_eq!(theme.cycle(true).cycle(false), theme);
             assert_eq!(theme.cycle(false).cycle(true), theme);
         }
+
         assert_eq!(
             BuiltinTheme::Default.cycle(false),
             BuiltinTheme::SolarizedDark
@@ -396,12 +401,15 @@ mod tests {
             names.iter().collect::<std::collections::HashSet<_>>().len(),
             16
         );
+
         for name in names {
             let theme = name.parse::<BuiltinTheme>().unwrap();
             let config: crate::config::Config = toml::from_str(&format!("theme='{name}'")).unwrap();
             assert_eq!(config.theme, theme);
             assert!(name.to_uppercase().parse::<BuiltinTheme>().is_err());
+
             let resolved = Styles::resolve(theme, &config.styles, None);
+
             if theme != BuiltinTheme::Default {
                 for role in [
                     resolved.normal,
@@ -416,6 +424,7 @@ mod tests {
                     assert_eq!(role.sub_modifier, Modifier::all());
                 }
             }
+
             let config: crate::config::Config = toml::from_str(&format!("theme='{name}'\n[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers=['italic']\n[styles.accent]\nfg='red'\nmodifiers=['bold']")).unwrap();
             let resolved = Styles::resolve(config.theme, &config.styles, Some(Color::Blue));
             assert_eq!(resolved.normal.add_modifier, Modifier::BOLD);
@@ -423,6 +432,7 @@ mod tests {
             assert_eq!(resolved.muted.add_modifier, Modifier::ITALIC);
             assert_eq!(resolved.accent.fg, Some(Color::Blue));
             assert_eq!(resolved.accent.add_modifier, Modifier::BOLD);
+
             if theme != BuiltinTheme::Default {
                 assert!(resolved.completed.add_modifier.is_empty());
                 assert!(resolved.border.add_modifier.is_empty());
@@ -439,7 +449,9 @@ mod tests {
             config.theme
         );
         assert!("Gruvbox-Material".parse::<BuiltinTheme>().is_err());
+
         let styles = Styles::resolve(config.theme, &config.styles, None);
+
         for (role, color) in [
             (styles.normal, Color::Rgb(212, 190, 152)),
             (styles.muted, Color::Rgb(168, 153, 132)),
@@ -452,11 +464,14 @@ mod tests {
             assert!(role.add_modifier.is_empty());
             assert_eq!(role.sub_modifier, Modifier::all());
         }
+
         let inherited: crate::config::Config =
             toml::from_str("theme='gruvbox-material'\n[styles.normal]\nmodifiers=['bold']")
                 .unwrap();
         let inherited = Styles::resolve(inherited.theme, &inherited.styles, None);
+
         assert_eq!(inherited.normal.add_modifier, Modifier::BOLD);
+
         for role in [
             inherited.muted,
             inherited.completed,
@@ -465,6 +480,7 @@ mod tests {
         ] {
             assert!(role.add_modifier.is_empty());
         }
+
         let config: crate::config::Config = toml::from_str("theme='gruvbox-material'\n[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers=['italic']\n[styles.completed]\nmodifiers=['dim']\n[styles.border]\nmodifiers=[]\n[styles.accent]\nfg='blue'\nmodifiers=['bold']").unwrap();
         let styles = Styles::resolve(config.theme, &config.styles, Some(Color::Red));
         assert_eq!(styles.normal.add_modifier, Modifier::BOLD);
@@ -482,18 +498,22 @@ mod tests {
             "default".parse::<BuiltinTheme>().unwrap(),
             BuiltinTheme::Default
         );
+
         for name in ["", "Default", "DEFAULT", "not-a-theme", " default"] {
             let error = name.parse::<BuiltinTheme>().unwrap_err();
             assert!(error.contains("Available themes: default"));
         }
+
         let omitted: crate::config::Config = toml::from_str("").unwrap();
         let explicit: crate::config::Config = toml::from_str("theme='default'").unwrap();
         assert_eq!(omitted.theme, explicit.theme);
+
         let actual = Styles::resolve(explicit.theme, &explicit.styles, None);
         let normal = Style::default()
             .fg(Color::Reset)
             .remove_modifier(Modifier::all());
         let muted = normal.add_modifier(Modifier::DIM);
+
         assert_eq!(
             actual,
             Styles {
@@ -504,6 +524,7 @@ mod tests {
                 accent: normal.fg(Color::LightYellow)
             }
         );
+
         for text in ["theme='Default'", "theme='unknown'", "theme=1", "theme=[]"] {
             assert!(toml::from_str::<crate::config::Config>(text).is_err());
         }

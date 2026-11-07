@@ -41,9 +41,11 @@ impl Storage {
         let base = match env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
             Some(path) => {
                 let path = PathBuf::from(path);
+
                 if !path.is_absolute() {
                     return Err("XDG_DATA_HOME must be an absolute path".into());
                 }
+
                 path
             }
             None => PathBuf::from(
@@ -53,6 +55,7 @@ impl Storage {
             )
             .join(".local/share"),
         };
+
         #[cfg(target_os = "macos")]
         let base = PathBuf::from(
             env::var_os("HOME")
@@ -60,15 +63,18 @@ impl Storage {
                 .ok_or("HOME is not set")?,
         )
         .join("Library/Application Support");
+
         #[cfg(windows)]
         let base = PathBuf::from(
             env::var_os("APPDATA")
                 .filter(|value| !value.is_empty())
                 .ok_or("APPDATA is not set")?,
         );
+
         if !base.is_absolute() {
             return Err("data directory must be an absolute path".into());
         }
+
         Ok(Self {
             path: base.join("sati").join("tasks.json"),
         })
@@ -80,22 +86,27 @@ impl Storage {
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
+
         let directory = fs::canonicalize(parent).map_err(|error| {
             format!(
                 "could not access export directory {}: {error}",
                 parent.display()
             )
         })?;
+
         let destination = directory.join(name);
+
         let state_directory = match fs::canonicalize(self.path.parent().unwrap()) {
             Ok(path) => Some(path),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };
+
         let state_name = name.to_str();
         #[cfg(windows)]
         let state_name =
             state_name.map(|name| name.split(':').next().unwrap().trim_end_matches(['.', ' ']));
+
         for reserved in ["tasks.json", "history.json", "tasks.lock"] {
             if state_directory.as_ref() == Some(&directory)
                 && state_name.is_some_and(|name| {
@@ -107,8 +118,10 @@ impl Storage {
             {
                 return Err("export cannot overwrite sati state files".into());
             }
+
             // Also reject existing symlink/junction aliases to state files.
             let state = self.path.with_file_name(reserved);
+
             if let (Ok(state), Ok(target)) =
                 (fs::canonicalize(state), fs::canonicalize(&destination))
                 && state == target
@@ -116,6 +129,7 @@ impl Storage {
                 return Err("export cannot overwrite sati state files".into());
             }
         }
+
         Ok(destination)
     }
 
@@ -134,6 +148,7 @@ impl Storage {
         let file = options
             .open(&path)
             .map_err(|error| format!("could not open {}: {error}", path.display()))?;
+
         // Keep this file open and never unlink it: every instance must lock the same inode.
         match fs4::FileExt::try_lock(&file) {
             Ok(()) => Ok(file),
@@ -156,12 +171,14 @@ impl Storage {
                 return Err(format!("could not read {}: {error}", self.path.display()).into());
             }
         };
+
         let invalid_file = |problem: String| {
             format!(
                 "invalid task file {}: {problem}. The file has been left untouched; repair it or move it aside before restarting",
                 self.path.display()
             )
         };
+
         // Temporary compatibility: legacy arrays migrate on the next save or clean exit.
         #[derive(Deserialize)]
         #[serde(untagged)]
@@ -171,6 +188,7 @@ impl Storage {
         }
         let input: Input =
             serde_json::from_slice(&contents).map_err(|error| invalid_file(error.to_string()))?;
+
         let mut document = match input {
             Input::Document(document) => document,
             Input::Legacy(tasks) => TaskDocument {
@@ -179,12 +197,15 @@ impl Storage {
                 needs_migration: true,
             },
         };
+
         for (index, task) in document.tasks.iter().enumerate() {
             if let Some(problem) = task.validation_error() {
                 return Err(invalid_file(format!("task {} {problem}", index + 1)).into());
             }
         }
+
         document.selected = valid_selection(&document.tasks, document.selected);
+
         Ok(document)
     }
 
@@ -199,6 +220,7 @@ impl Storage {
             tasks: &'a [Task],
             selected: Option<usize>,
         }
+
         atomic_save(
             &self.path,
             &Saved {
@@ -245,6 +267,7 @@ fn atomic_save<T: Serialize + ?Sized>(
                 temporary.display()
             )
         })?;
+
     // Replacement is now visible. A directory-sync failure cannot roll it back.
     #[cfg(unix)]
         File::open(directory)
@@ -266,14 +289,17 @@ fn create_data_directory(directory: &Path) -> io::Result<()> {
     if let Some(parent) = directory.parent() {
         fs::create_dir_all(parent)?;
     }
+
     // Apply private permissions only when creating sati's own directory.
     let builder = DirBuilder::new();
+
     #[cfg(unix)]
     let builder = {
         let mut builder = builder;
         builder.mode(0o700);
         builder
     };
+
     match builder.create(directory) {
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists && directory.is_dir() => Ok(()),
         result => result,
@@ -287,6 +313,7 @@ pub(crate) fn create_temporary(directory: &Path, name: &str) -> Result<(PathBuf,
         options.write(true).create_new(true);
         #[cfg(unix)]
         options.mode(0o600);
+
         match options.open(&path) {
             Ok(file) => return Ok((path, file)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -295,6 +322,7 @@ pub(crate) fn create_temporary(directory: &Path, name: &str) -> Result<(PathBuf,
             }
         }
     }
+
     Err(format!("too many temporary files in {}", directory.display()).into())
 }
 
@@ -319,7 +347,9 @@ pub mod tests {
                 std::process::id(),
                 NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
             ));
+
             fs::create_dir(&directory).unwrap();
+
             Self {
                 storage: Storage {
                     path: directory.join("data/tasks.json"),
@@ -345,8 +375,10 @@ pub mod tests {
         let absent = fixture.storage.load_document().unwrap();
         assert!(absent.tasks.is_empty() && !absent.needs_migration);
         assert!(!fixture.task_path().exists());
+
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
         let tasks = r#"[{"text":"first","completed":false},{"text":"second","completed":false}]"#;
+
         for (json, selected, legacy) in [
             (tasks.to_owned(), Some(0), true),
             (
@@ -373,6 +405,7 @@ pub mod tests {
             assert_eq!(document.needs_migration, legacy);
             assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
         }
+
         for json in [
             r#"{"tasks":[],"selected":null,"extra":true}"#,
             r#"{"tasks":[{"text":"bad\ntext","completed":false}],"selected":0}"#,
@@ -381,9 +414,11 @@ pub mod tests {
             assert!(fixture.storage.load_document().is_err());
             assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
         }
+
         fixture.storage.save_selected(&[], Some(99)).unwrap();
         let json: serde_json::Value =
             serde_json::from_slice(&fs::read(fixture.task_path()).unwrap()).unwrap();
+
         assert_eq!(json, serde_json::json!({"tasks":[], "selected":null}));
     }
 
@@ -394,7 +429,9 @@ pub mod tests {
         let legacy = r#"[{"text":"old","completed":false},{"text":"done","completed":true}]"#;
         fs::write(fixture.task_path(), legacy).unwrap();
         let mut tasks = fixture.storage.load().unwrap();
+
         assert!(tasks.iter().all(|task| !task.carried));
+
         let ordinary = serde_json::to_value(&tasks).unwrap();
         assert!(
             ordinary
@@ -403,12 +440,15 @@ pub mod tests {
                 .iter()
                 .all(|task| task.get("carried").is_none())
         );
+
         tasks[0].carried = true;
         fixture.storage.save(&tasks).unwrap();
         assert_eq!(fixture.storage.load().unwrap(), tasks);
+
         let json = serde_json::to_value(&tasks).unwrap();
         assert_eq!(json[0]["carried"], true);
         assert!(json[1].get("carried").is_none());
+
         for invalid in [
             r#"[{"text":"bad","completed":true,"carried":true}]"#,
             r#"[{"text":"bad","completed":false,"carried":null}]"#,
@@ -417,9 +457,11 @@ pub mod tests {
             fs::write(fixture.task_path(), invalid).unwrap();
             let error = fixture.storage.load().unwrap_err().to_string();
             assert!(error.contains("invalid task file"));
+
             if invalid.contains(r#""completed":true"#) {
                 assert!(error.contains("task 1 cannot be both completed and carried"));
             }
+
             assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), invalid);
         }
     }
@@ -440,6 +482,7 @@ pub mod tests {
                 }])
                 .unwrap();
             let directory = fixture.task_path().parent().unwrap();
+
             assert_eq!(
                 fs::metadata(directory).unwrap().permissions().mode() & 0o777,
                 0o700
@@ -460,6 +503,7 @@ pub mod tests {
                     & 0o777,
                 0o755
             );
+
             if with_lock {
                 assert_eq!(
                     fs::metadata(directory.join("tasks.lock"))
@@ -470,8 +514,10 @@ pub mod tests {
                     0o600
                 );
             }
+
             let (path, file) = create_temporary(directory, "tasks.json").unwrap();
             assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+
             drop(file);
             fs::remove_file(path).unwrap();
         }
@@ -493,6 +539,7 @@ pub mod tests {
         fs::write(&unrelated, "Keep this file unchanged").unwrap();
         fs::set_permissions(&unrelated, fs::Permissions::from_mode(0o644)).unwrap();
         let _held = fixture.storage.lock().unwrap();
+
         assert!(fixture.storage.load().unwrap().is_empty());
         assert_eq!(
             fs::metadata(fixture.task_path())
@@ -502,6 +549,7 @@ pub mod tests {
                 & 0o777,
             0o640
         );
+
         fixture.storage.save(&[]).unwrap();
         // A save publishes the private replacement; it does not chmod other existing paths.
         assert_eq!(
@@ -535,6 +583,7 @@ pub mod tests {
         let fixture = Fixture::new();
         let held = fixture.storage.lock().unwrap();
         let path = fixture.task_path().parent().unwrap().join("tasks.lock");
+
         assert!(path.is_file());
         assert!(fixture.storage.load().unwrap().is_empty());
         assert!(
@@ -545,11 +594,13 @@ pub mod tests {
                 .to_string()
                 .contains("already running")
         );
+
         let tasks = vec![Task {
             carried: false,
             text: "Keep me".into(),
             completed: false,
         }];
+
         fixture.storage.save(&tasks).unwrap();
         fixture.storage.save(&[]).unwrap();
         assert!(
@@ -560,8 +611,10 @@ pub mod tests {
                 .to_string()
                 .contains("already running")
         );
+
         drop(held);
         assert!(path.is_file());
+
         let _reacquired = fixture.storage.lock().unwrap();
     }
 
@@ -574,6 +627,7 @@ pub mod tests {
         let alias = second.directory.join("alias");
         #[cfg(unix)]
         std::os::unix::fs::symlink(first.task_path().parent().unwrap(), &alias).unwrap();
+
         #[cfg(windows)]
         {
             fs::create_dir(&alias).unwrap();
@@ -584,9 +638,11 @@ pub mod tests {
             )
             .unwrap();
         }
+
         let same_directory = Storage {
             path: alias.join("tasks.json"),
         };
+
         assert!(
             same_directory
                 .lock()
@@ -601,6 +657,7 @@ pub mod tests {
         let fixture = Fixture::new();
         let directory = fixture.task_path().parent().unwrap();
         fs::write(directory, "blocking file").unwrap();
+
         assert!(
             fixture
                 .storage
@@ -609,6 +666,7 @@ pub mod tests {
                 .to_string()
                 .contains("could not create")
         );
+
         fs::remove_file(directory).unwrap();
         fs::create_dir_all(directory.join("tasks.lock")).unwrap();
         assert!(
@@ -625,6 +683,7 @@ pub mod tests {
     fn saves_order_unicode_and_completion_and_replaces_atomically() {
         let fixture = Fixture::new();
         assert!(fixture.storage.load().unwrap().is_empty());
+
         let tasks = vec![
             Task {
                 carried: false,
@@ -637,19 +696,24 @@ pub mod tests {
                 completed: true,
             },
         ];
+
         fixture.storage.save(&tasks).unwrap();
         assert_eq!(fixture.storage.load().unwrap(), tasks);
+
         let json = fs::read_to_string(fixture.task_path()).unwrap();
         assert!(json.starts_with("{\n"));
         assert!(json.ends_with('\n'));
+
         let mut replacement = tasks.clone();
         replacement.reverse();
         replacement[0].completed = false;
         replacement[1].text.push_str(" updated");
+
         for list in [&replacement, &tasks, &replacement] {
             fixture.storage.save(list).unwrap();
             assert_eq!(fixture.storage.load().unwrap(), *list);
         }
+
         fixture.storage.save(&[]).unwrap();
         assert!(fixture.storage.load().unwrap().is_empty());
         assert_eq!(
@@ -663,20 +727,24 @@ pub mod tests {
     #[test]
     fn temporary_collisions_preserve_existing_files_and_live_data() {
         let fixture = Fixture::new();
+
         let tasks = vec![Task {
             carried: false,
             text: "Keep the original".into(),
             completed: true,
         }];
+
         fixture.storage.save(&tasks).unwrap();
         let original = fs::read(fixture.task_path()).unwrap();
         let directory = fixture.task_path().parent().unwrap();
         let collision = directory.join(format!(".tasks.json.{}.0.tmp", std::process::id()));
         fs::write(&collision, "old recovery data").unwrap();
         let (temporary, file) = create_temporary(directory, "tasks.json").unwrap();
+
         assert_eq!(temporary.parent(), Some(directory));
         assert_ne!(temporary, collision);
         assert_eq!(fs::read_to_string(&collision).unwrap(), "old recovery data");
+
         drop(file);
         fs::remove_file(temporary).unwrap();
 
@@ -689,6 +757,7 @@ pub mod tests {
             )
             .unwrap();
         }
+
         let error = fixture.storage.save(&[]).unwrap_err().to_string();
         assert!(error.contains("too many temporary files"), "{error}");
         assert_eq!(fs::read(fixture.task_path()).unwrap(), original);
@@ -700,6 +769,7 @@ pub mod tests {
     fn corrupt_or_incompatible_data_is_never_replaced_at_startup() {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+
         for invalid in [
             "not json",
             "{}",
@@ -717,6 +787,7 @@ pub mod tests {
     fn invalid_task_text_is_rejected_without_changing_the_file() {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+
         let invalid = [
             "",
             " ",
@@ -733,6 +804,7 @@ pub mod tests {
                 .chain([0x2028, 0x2029])
                 .map(|code| format!("before{}after", char::from_u32(code).unwrap())),
         );
+
         for text in invalid {
             let tasks = vec![
                 Task {
@@ -746,15 +818,19 @@ pub mod tests {
                     completed: true,
                 },
             ];
+
             let original = serde_json::to_vec_pretty(&tasks).unwrap();
             fs::write(fixture.task_path(), &original).unwrap();
             let error = fixture.storage.load().unwrap_err().to_string();
+
             assert!(error.contains("invalid task file"));
             assert!(error.contains("task 2 text"));
             assert!(error.contains("left untouched"));
+
             if tasks[1].text.contains(['\u{2028}', '\u{2029}']) {
                 assert!(error.contains("Unicode line separator"));
             }
+
             assert_eq!(fs::read(fixture.task_path()).unwrap(), original);
             assert_eq!(
                 fs::read_dir(fixture.task_path().parent().unwrap())
@@ -768,6 +844,7 @@ pub mod tests {
     #[test]
     fn valid_unicode_and_long_task_text_loads_unchanged() {
         let fixture = Fixture::new();
+
         let tasks = vec![
             Task { carried: false,
                 text: "日本語 e\u{301} 👩‍💻 👍🏽 — [punctuation!]  spaces\u{a0}inside\u{2003}text\u{2009}and\u{202f}text".into(),
@@ -775,6 +852,7 @@ pub mod tests {
             },
             Task { carried: false, text: "long🪷".repeat(100_000), completed: false },
         ];
+
         fixture.storage.save(&tasks).unwrap();
         let original = fs::read(fixture.task_path()).unwrap();
         assert_eq!(fixture.storage.load().unwrap(), tasks);
@@ -785,19 +863,23 @@ pub mod tests {
     fn replacement_failure_keeps_recovery_file() {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path()).unwrap();
+
         let tasks = vec![Task {
             carried: false,
             text: "Recover me".into(),
             completed: false,
         }];
+
         let error = fixture.storage.save(&tasks).unwrap_err().to_string();
         assert!(error.contains("fully written temporary file remains"));
         assert!(fixture.task_path().is_dir());
+
         let temporary = fs::read_dir(fixture.task_path().parent().unwrap())
             .unwrap()
             .map(|entry| entry.unwrap().path())
             .find(|path| path.extension().is_some_and(|extension| extension == "tmp"))
             .unwrap();
+
         #[cfg(unix)]
         assert_eq!(
             fs::metadata(&temporary).unwrap().permissions().mode() & 0o777,
@@ -826,17 +908,20 @@ pub mod tests {
             }])
             .unwrap();
         let original = fs::read(fixture.task_path()).unwrap();
+
         // Denying delete sharing prevents replacement even on privileged runners.
         let held = OpenOptions::new()
             .read(true)
             .share_mode(0)
             .open(fixture.task_path())
             .unwrap();
+
         let replacement = vec![Task {
             carried: false,
             text: "Recover me".into(),
             completed: false,
         }];
+
         let error = fixture.storage.save(&replacement).unwrap_err().to_string();
         drop(held);
         assert!(error.contains("could not replace"), "{error}");
@@ -846,11 +931,13 @@ pub mod tests {
             "{error}"
         );
         assert_eq!(fs::read(fixture.task_path()).unwrap(), original);
+
         let temporary = fs::read_dir(fixture.task_path().parent().unwrap())
             .unwrap()
             .map(|entry| entry.unwrap().path())
             .find(|path| path.extension().is_some_and(|extension| extension == "tmp"))
             .unwrap();
+
         assert_eq!(
             serde_json::from_slice::<TaskDocument>(&fs::read(temporary).unwrap())
                 .unwrap()
@@ -874,19 +961,23 @@ pub mod tests {
         let directory = fixture.task_path().parent().unwrap();
         // Write/search permission permits replacement, but opening the directory for sync fails.
         fs::set_permissions(directory, fs::Permissions::from_mode(0o300)).unwrap();
+
         if File::open(directory).is_ok() {
             // Root/capability-enabled test runners can bypass these permissions.
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
             return;
         }
+
         let replacement = vec![Task {
             carried: false,
             text: "New list".into(),
             completed: true,
         }];
+
         let result = fixture.storage.save(&replacement);
         fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
         let error = result.unwrap_err().to_string();
+
         assert!(error.contains("replaced "));
         assert!(error.contains("already visible"));
         assert!(error.contains("uncertain"));

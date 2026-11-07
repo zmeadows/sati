@@ -118,6 +118,7 @@ fn main() -> ExitCode {
 
 fn run() -> Result<()> {
     let mut arguments = std::env::args_os().skip(1).peekable();
+
     if arguments
         .peek()
         .is_some_and(|argument| argument == "export")
@@ -125,6 +126,7 @@ fn run() -> Result<()> {
         arguments.next();
         return export::run(arguments);
     }
+
     let Some(options) = parse_arguments(arguments)? else {
         println!(
             "{USAGE}\n\n--theme NAME      Select a built-in theme (available: {available_themes}; default: default).\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--logo / --no-logo  Show / hide the sati border title.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--completed-at-bottom / --no-completed-at-bottom  Enable / disable grouping.\n--accent COLOR    Override theme/TOML accent foreground: ANSI name, #RRGGBB, or index 0-255.\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, logo, keybinds, rounded_corners, ascii_markers, completed_at_bottom.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg, bg (#RRGGBB or reset), and modifiers. --accent overrides only the accent foreground.\n\nexport             Export Markdown to stdout or --output/-o PATH.\n--force            Allow replacing an export file.",
@@ -132,14 +134,17 @@ fn run() -> Result<()> {
         );
         return Ok(());
     };
+
     if options.print_version {
         println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+
     let config = config::Config::load(options.config.as_deref())?;
     let options = options.resolve(config);
     let storage = Storage::discover()?;
     let _instance_lock = storage.lock()?;
+
     let mut app = App::from_document(load_tasks(&storage, options.completed_at_bottom)?);
     app.wrap = options.wrap;
     app.logo = options.logo;
@@ -151,6 +156,7 @@ fn run() -> Result<()> {
     app.theme = options.theme;
     app.style_overrides = options.style_overrides;
     app.cli_accent = options.cli_accent;
+
     // Atomics let the panic hook clean up without locking state held by setup.
     let modes = Arc::new(TerminalModes::default());
     let panic_modes = Arc::clone(&modes);
@@ -169,23 +175,29 @@ fn run() -> Result<()> {
         execute!(io::stdout(), EnterAlternateScreen)?;
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(io::stdout()))?;
+
         // The capability probe retries reader errors internally; validate input first.
         event::poll(std::time::Duration::ZERO)?;
         let enhanced = keyboard_support(terminal::supports_keyboard_enhancement())?;
         modes.enable_input(&mut io::stdout(), enhanced)?;
+
         let mut background = None;
         let mut rendered_theme = app.theme;
+
         loop {
             let changed = modes.update_background(
                 &mut io::stdout(),
                 &mut background,
                 app.styles.normal.bg,
             )?;
+
             if changed || rendered_theme != app.theme {
                 terminal.clear()?;
                 rendered_theme = app.theme;
             }
+
             let draw_started = std::time::Instant::now();
+
             if app
                 .notification
                 .as_ref()
@@ -193,8 +205,10 @@ fn run() -> Result<()> {
             {
                 app.notification = None;
             }
+
             let mut rows = ratatui::layout::Rect::default();
             terminal.draw(|frame| rows = ui::draw(frame, &mut app))?;
+
             if let Some(wait) = app
                 .notification
                 .as_ref()
@@ -203,6 +217,7 @@ fn run() -> Result<()> {
             {
                 continue;
             }
+
             match event::read()? {
                 Event::Key(key) => {
                     if app.key(key, &storage)? {
@@ -215,10 +230,13 @@ fn run() -> Result<()> {
                 _ => {}
             }
         }
+
         Ok(())
     })();
+
     let restore_result = modes.restore(&mut io::stdout());
     finish_session(result, restore_result)?;
+
     app.save_selection(&storage)
 }
 
@@ -254,9 +272,11 @@ impl TerminalModes {
     ) -> io::Result<bool> {
         use ratatui::style::Color;
         let target = background.filter(|color| matches!(color, Color::Rgb(..)));
+
         if *current == target {
             return Ok(false);
         }
+
         if let Some(Color::Rgb(r, g, b)) = target {
             // Remember attempts too: a failed write may already have changed the terminal.
             self.background.store(true, Ordering::Relaxed);
@@ -265,7 +285,9 @@ impl TerminalModes {
         } else {
             self.restore_background(output)?;
         }
+
         *current = target;
+
         Ok(true)
     }
 
@@ -275,6 +297,7 @@ impl TerminalModes {
             output.flush()?;
             self.background.store(false, Ordering::Relaxed);
         }
+
         Ok(())
     }
 
@@ -283,6 +306,7 @@ impl TerminalModes {
         // Crossterm's Windows console reader does not emit Paste events.
         #[cfg(unix)]
         enable_optional(output, &self.paste, EnableBracketedPaste)?;
+
         if enhanced {
             enable_optional(
                 output,
@@ -290,6 +314,7 @@ impl TerminalModes {
                 PushKeyboardEnhancementFlags(KEYBOARD_FLAGS),
             )?;
         }
+
         Ok(())
     }
 
@@ -300,7 +325,9 @@ impl TerminalModes {
         } else {
             Ok(())
         };
+
         let paste = restore_mode(&self.paste, || execute!(output, DisableBracketedPaste));
+
         // Windows restores a raw-mode console snapshot; retrying after raw cleanup
         // could re-enable raw mode. Keep this operation one-shot on that backend.
         #[cfg(windows)]
@@ -309,12 +336,14 @@ impl TerminalModes {
         } else {
             Ok(())
         };
+
         #[cfg(not(windows))]
         let mouse = restore_mode(&self.mouse, || execute!(output, DisableMouseCapture));
         let cursor = restore_mode(&self.cursor, || execute!(output, Show));
         let raw = restore_mode(&self.raw, terminal::disable_raw_mode);
         let alternate = restore_mode(&self.alternate, || execute!(output, LeaveAlternateScreen));
         let background = self.restore_background(output);
+
         // Evaluate every cleanup step before returning the first failure.
         keyboard
             .and(paste)
@@ -333,6 +362,7 @@ fn restore_mode(enabled: &AtomicBool, restore: impl FnOnce() -> io::Result<()>) 
         restore()?;
         enabled.store(false, Ordering::Relaxed);
     }
+
     Ok(())
 }
 
@@ -344,9 +374,11 @@ fn enable_optional(
     let supported = optional_mode(output.queue(command).map(|_| ()))?;
     // Remember a fully queued command even if flushing subsequently fails.
     enabled.store(supported, Ordering::Relaxed);
+
     if supported {
         output.flush()?;
     }
+
     Ok(())
 }
 
@@ -377,6 +409,7 @@ fn keyboard_support(result: io::Result<bool>) -> io::Result<bool> {
 
 fn load_tasks(storage: &Storage, completed_at_bottom: bool) -> Result<storage::TaskDocument> {
     let mut document = storage.load_document()?;
+
     if completed_at_bottom
         && document
             .tasks
@@ -392,9 +425,11 @@ fn load_tasks(storage: &Storage, completed_at_bottom: bool) -> Result<storage::T
             .into_iter()
             .map(|index| document.tasks[index].clone())
             .collect();
+
         storage.save_selected(&document.tasks, document.selected)?;
         document.needs_migration = false;
     }
+
     Ok(document)
 }
 
@@ -408,10 +443,13 @@ fn parse_arguments(
         print_version: false,
         config: None,
     };
+
     let mut help = false;
     let mut arguments = arguments.into_iter();
+
     while let Some(argument) = arguments.next() {
         let flag = argument.to_str().unwrap_or("");
+
         let setting = match flag {
             "--wrap" | "--no-wrap" => Some((&mut options.display.wrap, flag == "--wrap")),
             "--logo" | "--no-logo" => Some((&mut options.display.logo, flag == "--logo")),
@@ -432,6 +470,7 @@ fn parse_arguments(
             )),
             _ => None,
         };
+
         if let Some((setting, value)) = setting {
             if setting.is_some_and(|previous| previous != value) {
                 return Err(format!("contradictory display flags: {flag}").into());
@@ -445,12 +484,14 @@ fn parse_arguments(
                 )
                 .into());
             }
+
             let name = arguments.next().ok_or_else(|| {
                 format!(
                     "--theme requires a name; available themes: {}",
                     themes::BuiltinTheme::names()
                 )
             })?;
+
             options.theme = Some(
                 name.to_str()
                     .unwrap_or("")
@@ -460,7 +501,9 @@ fn parse_arguments(
             if options.config.is_some() {
                 return Err("--config specified more than once".into());
             }
+
             let path = arguments.next().ok_or("--config requires a path")?;
+
             if path.is_empty()
                 || path
                     .to_str()
@@ -468,6 +511,7 @@ fn parse_arguments(
             {
                 return Err("--config requires a path".into());
             }
+
             options.config = Some(path.into());
         } else if argument == "--add-to-bottom" {
             // Accepted for compatibility with v0.1.0; insertion is now key-specific.
@@ -486,6 +530,7 @@ fn parse_arguments(
             );
         }
     }
+
     Ok((!help).then_some(options))
 }
 
@@ -529,7 +574,9 @@ mod tests {
                 }
                 None => bytes.len(),
             };
+
             self.bytes.extend_from_slice(&bytes[..count]);
+
             Ok(count)
         }
 
@@ -541,6 +588,7 @@ mod tests {
                 }
                 *remaining -= 1;
             }
+
             Ok(())
         }
     }
@@ -554,16 +602,20 @@ mod tests {
                 .to_string(),
             "task save failed"
         );
+
         let error = finish_session(Ok(()), Err(io::ErrorKind::BrokenPipe.into()))
             .unwrap_err()
             .to_string();
+
         assert!(error.contains("could not restore terminal"));
+
         let both = finish_session(
             Err("task save failed".into()),
             Err(io::ErrorKind::BrokenPipe.into()),
         )
         .unwrap_err()
         .to_string();
+
         assert!(both.contains("task save failed") && both.contains("could not restore terminal"));
     }
 
@@ -573,12 +625,14 @@ mod tests {
         let modes = TerminalModes::default();
         let mut output = Vec::new();
         let mut current = None;
+
         assert!(
             !modes
                 .update_background(&mut output, &mut current, None)
                 .unwrap()
         );
         assert!(output.is_empty());
+
         let color = Some(Color::Rgb(40, 40, 40));
         assert!(
             modes
@@ -597,15 +651,18 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(output, b"\x1b]11;#282828\x1b\\\x1b]111\x1b\\");
+
         output.clear();
         modes.restore(&mut output).unwrap();
         assert!(output.is_empty());
+
         modes
             .update_background(&mut output, &mut current, Some(Color::Rgb(1, 2, 3)))
             .unwrap();
         output.clear();
         modes.restore(&mut output).unwrap();
         modes.restore(&mut output).unwrap();
+
         assert_eq!(output, b"\x1b]111\x1b\\");
 
         struct Broken;
@@ -619,12 +676,14 @@ mod tests {
         }
         let modes = TerminalModes::default();
         let mut current = None;
+
         assert!(
             modes
                 .update_background(&mut Broken, &mut current, color)
                 .is_err()
         );
         assert!(current.is_none());
+
         let mut recovery = Vec::new();
         modes.restore(&mut recovery).unwrap();
         assert_eq!(recovery, b"\x1b]111\x1b\\");
@@ -637,6 +696,7 @@ mod tests {
 
         let fixture = storage::tests::Fixture::new();
         let path = fixture.directory.join("config.toml");
+
         for (configured, cli_theme, initial, changes) in [
             (
                 "gruvbox-material",
@@ -655,14 +715,18 @@ mod tests {
                 let mut text = format!(
                     "theme='{configured}'\n[styles.accent]\nfg='red'\nmodifiers=['bold']\n"
                 );
+
                 if custom_background.is_some() {
                     text.push_str("[styles.normal]\nbg='#20242d'\n");
                 }
+
                 std::fs::write(&path, &text).unwrap();
                 let mut args = vec!["--accent", "blue"];
+
                 if let Some(name) = cli_theme {
                     args.extend(["--theme", name]);
                 }
+
                 let options = super::parse_arguments(args.into_iter().map(Into::into))
                     .unwrap()
                     .unwrap()
@@ -676,6 +740,7 @@ mod tests {
                 let mut current = None;
                 let mut output = Vec::new();
                 let mut terminal = ratatui::Terminal::new(TestBackend::new(40, 10)).unwrap();
+
                 for (key, expected) in std::iter::once((None, initial))
                     .chain(changes.map(|(key, theme)| (Some(key), theme)))
                 {
@@ -687,6 +752,7 @@ mod tests {
                             format!("Theme: {} ({})", expected.display_name(), expected.id())
                         );
                     }
+
                     assert_eq!(app.theme, expected);
                     assert_eq!(app.styles.normal.fg, expected.base_styles().normal.fg);
                     assert_eq!(app.styles.accent.fg, Some(Color::Blue));
@@ -694,13 +760,16 @@ mod tests {
                         app.styles.accent.add_modifier,
                         ratatui::style::Modifier::BOLD
                     );
+
                     let background = custom_background.or(expected.base_styles().normal.bg);
                     assert_eq!(app.styles.normal.bg, background);
+
                     let previous = current;
                     output.clear();
                     let changed = modes
                         .update_background(&mut output, &mut current, app.styles.normal.bg)
                         .unwrap();
+
                     let expected_output = if previous == background {
                         String::new()
                     } else if let Some(Color::Rgb(r, g, b)) = background {
@@ -708,14 +777,17 @@ mod tests {
                     } else {
                         "\x1b]111\x1b\\".into()
                     };
+
                     assert_eq!(changed, previous != background);
                     assert_eq!(output, expected_output.as_bytes());
+
                     terminal.clear().unwrap();
                     terminal
                         .draw(|frame| {
                             ui::draw(frame, &mut app);
                         })
                         .unwrap();
+
                     assert!(
                         terminal
                             .backend()
@@ -725,6 +797,7 @@ mod tests {
                             .all(|cell| cell.bg == background.unwrap_or(Color::Reset))
                     );
                 }
+
                 output.clear();
                 modes.restore(&mut output).unwrap();
                 assert_eq!(
@@ -750,6 +823,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let selected = name.parse::<themes::BuiltinTheme>().unwrap();
+
             assert_eq!(
                 cli.resolve(config).styles,
                 styles::Styles::resolve(selected, &config::StyleOverrides::default(), None)
@@ -781,6 +855,7 @@ mod tests {
             let cli = super::parse_arguments(args.into_iter().map(Into::into))
                 .unwrap()
                 .unwrap();
+
             assert_eq!(cli.resolve(config).styles.normal.fg, Some(expected));
         }
     }
@@ -792,7 +867,9 @@ mod tests {
             super::parse_arguments(["--theme", "default", "--accent", "blue"].map(Into::into))
                 .unwrap()
                 .unwrap();
+
         assert_eq!(cli.theme, Some(themes::BuiltinTheme::Default));
+
         let styles = cli.resolve(config).styles;
         assert_eq!(styles.normal.fg, Some(ratatui::style::Color::LightBlue));
         assert_eq!(styles.muted.fg, styles.normal.fg);
@@ -801,6 +878,7 @@ mod tests {
         assert_eq!(styles.border, styles.muted);
         assert_eq!(styles.accent.fg, Some(ratatui::style::Color::Blue));
         assert_eq!(styles.accent.add_modifier, ratatui::style::Modifier::BOLD);
+
         for args in [
             vec!["--theme"],
             vec!["--theme", "unknown"],
@@ -810,6 +888,7 @@ mod tests {
             let error = super::parse_arguments(args.into_iter().map(Into::into))
                 .unwrap_err()
                 .to_string();
+
             assert!(error.contains("default"), "{error}");
         }
     }
@@ -820,6 +899,7 @@ mod tests {
             toml::from_str::<config::Config>("[styles.accent]\nfg='blue'\nmodifiers=['bold']")
                 .unwrap()
         };
+
         assert!(
             super::parse_arguments([])
                 .unwrap()
@@ -827,15 +907,19 @@ mod tests {
                 .accent
                 .is_none()
         );
+
         let options = super::parse_arguments([])
             .unwrap()
             .unwrap()
             .resolve(config());
+
         assert_eq!(options.styles.accent.fg, Some(ratatui::style::Color::Blue));
+
         let options = super::parse_arguments(["--accent", "red"].map(Into::into))
             .unwrap()
             .unwrap()
             .resolve(config());
+
         assert_eq!(options.styles.accent.fg, Some(ratatui::style::Color::Red));
         assert_eq!(
             options.styles.accent.add_modifier,
@@ -853,6 +937,7 @@ mod tests {
             "ascii_markers",
             "completed_at_bottom",
         ];
+
         let flags = [
             ("--wrap", "--no-wrap"),
             ("--logo", "--no-logo"),
@@ -861,6 +946,7 @@ mod tests {
             ("--ascii-markers", "--unicode-markers"),
             ("--completed-at-bottom", "--no-completed-at-bottom"),
         ];
+
         let values = |options: Options| {
             [
                 options.wrap,
@@ -871,6 +957,7 @@ mod tests {
                 options.completed_at_bottom,
             ]
         };
+
         for (index, (yes, no)) in flags.into_iter().enumerate() {
             for configured in [true, false] {
                 let text = format!("[display]\n{} = {configured}", fields[index]);
@@ -884,18 +971,22 @@ mod tests {
                     )[index],
                     configured
                 );
+
                 for (flag, expected) in [(yes, true), (no, false)] {
                     let options = super::parse_arguments([flag.into()])
                         .unwrap()
                         .unwrap()
                         .resolve(config());
+
                     assert_eq!(values(options)[index], expected);
                 }
             }
+
             for pair in [[yes, no], [no, yes]] {
                 assert!(super::parse_arguments(pair.map(Into::into)).is_err());
             }
         }
+
         assert!(
             super::parse_arguments(["--config", "one", "--config", "two"].map(Into::into)).is_err()
         );
@@ -905,6 +996,7 @@ mod tests {
     #[test]
     fn startup_grouping_remaps_selected_original_indices_including_duplicates() {
         let fixture = storage::tests::Fixture::new();
+
         let tasks: Vec<_> = [true, false, true, false]
             .map(|completed| app::Task {
                 text: "duplicate".into(),
@@ -912,17 +1004,20 @@ mod tests {
                 carried: false,
             })
             .into();
+
         for (selected, remapped) in [(0, 2), (1, 0), (2, 3), (3, 1)] {
             fixture
                 .storage
                 .save_selected(&tasks, Some(selected))
                 .unwrap();
             let document = load_tasks(&fixture.storage, true).unwrap();
+
             assert_eq!(document.selected, Some(remapped));
             assert_eq!(
                 fixture.storage.load_document().unwrap().selected,
                 Some(remapped)
             );
+
             let bytes = std::fs::read(fixture.task_path()).unwrap();
             load_tasks(&fixture.storage, true).unwrap();
             assert_eq!(std::fs::read(fixture.task_path()).unwrap(), bytes);
@@ -932,6 +1027,7 @@ mod tests {
     #[test]
     fn completed_at_bottom_groups_existing_tasks_stably_and_is_opt_in() {
         let fixture = crate::storage::tests::Fixture::new();
+
         let original: Vec<_> = [
             ("done 1", true),
             ("active 1", false),
@@ -944,10 +1040,12 @@ mod tests {
             completed,
         })
         .into();
+
         fixture.storage.save(&original).unwrap();
         let contents = std::fs::read(fixture.task_path()).unwrap();
         assert_eq!(load_tasks(&fixture.storage, false).unwrap().tasks, original);
         assert_eq!(std::fs::read(fixture.task_path()).unwrap(), contents);
+
         let grouped = load_tasks(&fixture.storage, true).unwrap().tasks;
         assert_eq!(
             grouped,
@@ -961,11 +1059,13 @@ mod tests {
         assert_eq!(fixture.storage.load().unwrap(), grouped);
         assert_eq!(load_tasks(&fixture.storage, true).unwrap().tasks, grouped);
         assert!(!parse_arguments([]).unwrap().unwrap().completed_at_bottom);
+
         let options = parse_arguments(
             ["--completed-at-bottom", "--add-to-bottom", "--no-wrap"].map(Into::into),
         )
         .unwrap()
         .unwrap();
+
         assert!(options.completed_at_bottom);
         assert!(!options.wrap);
     }
@@ -980,7 +1080,9 @@ mod tests {
         PushKeyboardEnhancementFlags(KEYBOARD_FLAGS)
             .write_ansi(&mut enabled)
             .unwrap();
+
         assert!(enabled.contains("\x1b[?2004h"));
+
         let flags: u8 = enabled
             .split("\x1b[>")
             .nth(1)
@@ -990,6 +1092,7 @@ mod tests {
             .unwrap()
             .parse()
             .unwrap();
+
         // Protocol bits: disambiguation, event types, shifted keys, and all keys (including Enter).
         assert_eq!(flags & 0b1111, 0b1111);
 
@@ -1000,6 +1103,7 @@ mod tests {
         DisableBracketedPaste.write_ansi(&mut restored).unwrap();
         DisableMouseCapture.write_ansi(&mut restored).unwrap();
         Show.write_ansi(&mut restored).unwrap();
+
         assert!(restored.contains("\x1b[?2004l"));
         assert!(restored.contains("\x1b[<1u"));
         assert!(restored.contains("\x1b[?1006l"));
@@ -1012,15 +1116,18 @@ mod tests {
         assert!(!optional_mode(Err(io::ErrorKind::Unsupported.into())).unwrap());
         assert!(keyboard_support(Ok(true)).unwrap());
         assert!(!keyboard_support(Ok(false)).unwrap());
+
         for kind in [io::ErrorKind::Unsupported, io::ErrorKind::TimedOut] {
             assert!(!keyboard_support(Err(kind.into())).unwrap());
         }
+
         assert!(
             !keyboard_support(Err(io::Error::other(
                 "The keyboard enhancement status could not be read within a normal duration"
             )))
             .unwrap()
         );
+
         for kind in [
             io::ErrorKind::BrokenPipe,
             io::ErrorKind::PermissionDenied,
@@ -1029,6 +1136,7 @@ mod tests {
             assert_eq!(optional_mode(Err(kind.into())).unwrap_err().kind(), kind);
             assert_eq!(keyboard_support(Err(kind.into())).unwrap_err().kind(), kind);
         }
+
         for (kind, message) in [
             (io::ErrorKind::Other, "keyboard query reader failed"),
             (
@@ -1068,18 +1176,24 @@ mod tests {
                 modes.alternate.store(true, Ordering::Relaxed);
                 modes.cursor.store(true, Ordering::Relaxed);
                 output.clear();
+
                 let result = if failed {
                     Err("task save failed".into())
                 } else {
                     Ok(())
                 };
+
                 let finished = finish_session(result, modes.restore(&mut output));
                 assert_eq!(finished.is_err(), failed);
+
                 let mut expected = b"\x1b[?25h\x1b[?1049l".to_vec();
+
                 if themed {
                     expected.extend_from_slice(b"\x1b]111\x1b\\");
                 }
+
                 assert_eq!(output, expected);
+
                 output.clear();
                 modes.restore(&mut output).unwrap();
                 assert!(output.is_empty());
@@ -1092,6 +1206,7 @@ mod tests {
         let modes = TerminalModes::default();
         let mut output = Vec::new();
         modes.restore(&mut output).unwrap();
+
         assert!(output.is_empty());
     }
 
@@ -1099,6 +1214,7 @@ mod tests {
     #[cfg(windows)]
     fn windows_backend_does_not_enable_kitty_protocol() {
         assert!(!terminal::supports_keyboard_enhancement().unwrap());
+
         let modes = TerminalModes::default();
         assert!(!modes.keyboard.load(Ordering::Relaxed));
         assert!(!modes.paste.load(Ordering::Relaxed));
@@ -1114,10 +1230,12 @@ mod tests {
             write_remaining: Some(mouse.len()),
             ..FailOnce::default()
         };
+
         assert_eq!(
             modes.enable_input(&mut output, true).unwrap_err().kind(),
             io::ErrorKind::BrokenPipe
         );
+
         modes.restore(&mut output).unwrap();
         let restored = String::from_utf8(output.bytes).unwrap();
         assert!(restored.contains("\x1b[?1006l"));
@@ -1130,13 +1248,16 @@ mod tests {
             write_remaining: Some(0),
             ..FailOnce::default()
         };
+
         assert_eq!(
             modes.restore(&mut output).unwrap_err().kind(),
             io::ErrorKind::BrokenPipe
         );
+
         let restored = String::from_utf8(output.bytes).unwrap();
         assert!(restored.contains("\x1b[?2004l"));
         assert!(restored.contains("\x1b[?1006l"));
+
         let mut repeated = Vec::new();
         modes.restore(&mut repeated).unwrap();
         assert!(repeated.is_empty());
@@ -1147,6 +1268,7 @@ mod tests {
     fn cleanup_retries_only_safe_resets_after_partial_writes_and_flush_failures() {
         let mut mouse = String::new();
         DisableMouseCapture.write_ansi(&mut mouse).unwrap();
+
         let commands = [
             "\x1b[<1u",
             "\x1b[?2004l",
@@ -1155,10 +1277,13 @@ mod tests {
             "\x1b[?1049l",
             "\x1b]111\x1b\\",
         ];
+
         for (failed, command) in commands.iter().enumerate() {
             let preceding: usize = commands[..failed].iter().map(|command| command.len()).sum();
+
             for (partial, flush) in [(0, false), (command.len() / 2, false), (0, true)] {
                 let modes = TerminalModes::default();
+
                 for enabled in [
                     &modes.keyboard,
                     &modes.paste,
@@ -1169,16 +1294,20 @@ mod tests {
                 ] {
                     enabled.store(true, Ordering::Relaxed);
                 }
+
                 let mut output = FailOnce {
                     write_remaining: (!flush).then_some(preceding + partial),
                     flush_remaining: flush.then_some(failed),
                     ..FailOnce::default()
                 };
+
                 assert_eq!(
                     modes.restore(&mut output).unwrap_err().kind(),
                     io::ErrorKind::BrokenPipe
                 );
+
                 let mut expected = String::new();
+
                 for (index, command) in commands.iter().enumerate() {
                     expected.push_str(if index == failed && !flush {
                         &command[..partial]
@@ -1186,21 +1315,26 @@ mod tests {
                         command
                     });
                 }
+
                 // Every later cleanup step still runs, including OSC 111.
                 assert_eq!(
                     output.bytes,
                     expected.as_bytes(),
                     "step {failed}, flush {flush}"
                 );
+
                 output.bytes.clear();
                 modes.restore(&mut output).unwrap();
+
                 // A failed keyboard pop is deliberately consumed, even after a partial write.
                 let retry = if failed == 0 {
                     b"".as_slice()
                 } else {
                     command.as_bytes()
                 };
+
                 assert_eq!(output.bytes, retry, "step {failed}, flush {flush}");
+
                 output.bytes.clear();
                 modes.restore(&mut output).unwrap();
                 assert!(output.bytes.is_empty());
@@ -1218,10 +1352,12 @@ mod tests {
             flush_remaining: Some(0),
             ..FailOnce::default()
         };
+
         assert_eq!(
             modes.restore(&mut output).unwrap_err().kind(),
             io::ErrorKind::BrokenPipe
         );
+
         modes.restore(&mut output).unwrap();
         assert!(output.bytes.is_empty());
     }
@@ -1234,15 +1370,19 @@ mod tests {
             let mut output = Vec::new();
             modes.enable_input(&mut output, enhanced).unwrap();
             let enabled = String::from_utf8(output).unwrap();
+
             assert!(enabled.contains("\x1b[?1006h"));
             assert!(enabled.contains("\x1b[?2004h"));
             assert_eq!(enabled.contains("\x1b[>15u"), enhanced);
+
             let mut restored = Vec::new();
             modes.restore(&mut restored).unwrap();
             let restored = String::from_utf8(restored).unwrap();
+
             assert!(restored.contains("\x1b[?2004l"));
             assert!(restored.contains("\x1b[?1006l"));
             assert_eq!(restored.contains("\x1b[<1u"), enhanced);
+
             let mut repeated = Vec::new();
             modes.restore(&mut repeated).unwrap();
             assert!(repeated.is_empty());
@@ -1272,9 +1412,11 @@ mod tests {
                 .unwrap()
                 .keybinds
         );
+
         let options = parse_arguments(["--no-logo", "--round-corners"].map(Into::into))
             .unwrap()
             .unwrap();
+
         assert!(!options.logo);
         assert!(options.rounded);
         assert!(options.wrap);
@@ -1294,6 +1436,7 @@ mod tests {
             parse_arguments(["--version", "--no-wrap", "--accent", "#a9b665"].map(Into::into))
                 .unwrap()
                 .unwrap();
+
         assert!(options.print_version);
         assert!(!options.wrap);
         assert_eq!(
@@ -1321,6 +1464,7 @@ mod tests {
                 Some(ratatui::style::Color::Rgb(169, 182, 101))
             );
         }
+
         for color in ["#000000", "#ffffff"] {
             assert!(parse_accent(std::ffi::OsStr::new(color)).is_ok());
         }
@@ -1329,6 +1473,7 @@ mod tests {
     #[test]
     fn accent_accepts_native_named_and_indexed_colors() {
         use ratatui::style::Color;
+
         for (text, expected) in [
             ("yellow", Color::Yellow),
             ("lightblue", Color::LightBlue),
@@ -1342,6 +1487,7 @@ mod tests {
     #[test]
     fn accent_rejects_missing_or_invalid_values() {
         assert!(parse_arguments(["--accent".into()]).is_err());
+
         for color in [
             "",
             "orange",

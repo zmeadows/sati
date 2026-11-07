@@ -25,18 +25,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let input_height = u16::from(searching && area.height > 0);
     let mut shortcuts = shortcut_lines(app, area.width);
     let available = usize::from(area.height.saturating_sub(3 + input_height));
+
     if shortcuts.len() > available {
         shortcuts.clear();
     } else if !shortcuts.is_empty() && shortcuts.len() < available {
         shortcuts.insert(0, Line::raw(""));
     }
+
     let legend_height = shortcuts.len() as u16;
+
     let sections = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(input_height),
         Constraint::Length(legend_height),
     ])
     .split(area);
+
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(if app.rounded {
@@ -45,16 +49,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
             BorderType::Plain
         })
         .border_style(app.styles.border);
+
     // Hide the title when it cannot fit intact between the corners.
     if app.logo && sections[0].width >= 8 {
         block = block.title(Line::styled(" sati ", app.styles.muted).right_aligned());
     }
+
     let completed = app.tasks.iter().filter(|task| task.completed).count();
     let counter = format!("[{completed}/{}]", app.tasks.len());
+
     if sections[0].height >= 2 && counter.width() + 2 <= usize::from(sections[0].width) {
         block =
             block.title_bottom(Line::styled(counter.as_str(), app.styles.muted).right_aligned());
     }
+
     if let Some(notice) = &app.notification
         && let Some(notification_style) = notice.style(
             std::time::Instant::now(),
@@ -64,15 +72,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     {
         let available = usize::from(sections[0].width).saturating_sub(counter.width() + 3);
         let short = notice.compact_message();
+
         let message = if notice.message().width() <= available {
             notice.message()
         } else {
             short
         };
+
         if sections[0].height >= 2 && message.width() <= available {
             block = block.title_bottom(Line::styled(message, notification_style).left_aligned());
         }
     }
+
     let rows = block.inner(sections[0]);
     frame.render_widget(block, sections[0]);
 
@@ -81,11 +92,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     match &app.mode {
         Mode::Searching { input, .. } | Mode::SearchResults { input, .. } => {
             let no_matches = !input.text().is_empty() && app.list.selected().is_none();
+
             let label = if no_matches && sections[1].width >= 28 {
                 "search (No matches)"
             } else {
                 "search"
             };
+
             draw_input_line(
                 frame,
                 sections[1],
@@ -97,13 +110,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         }
         _ => {}
     }
+
     frame.render_widget(
         Paragraph::new(shortcuts).style(app.styles.muted),
         sections[2],
     );
+
     if app.mode == Mode::ConfirmClear {
         draw_confirmation(frame, area, &app.styles);
     }
+
     rows
 }
 
@@ -119,13 +135,16 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
     let mapping = std::mem::take(&mut app.row_tasks);
     let layout = prepare_task_layout(app, area.width, mapping);
     let visible = update_task_viewport(app, &layout, area.height);
+
     let TaskLayout {
         lines,
         row_tasks,
         input_row,
         ..
     } = layout;
+
     app.row_tasks = row_tasks;
+
     if lines.is_empty() {
         frame.render_widget(
             Paragraph::new(" Press a to add a task").style(app.styles.muted),
@@ -133,6 +152,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         );
         return;
     }
+
     frame.render_widget(
         Paragraph::new(
             lines
@@ -148,20 +168,25 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>) -> TaskLayout {
     row_tasks.clear();
+
     let inline = match &app.mode {
         Mode::Adding(_, placement) => Some(app.insertion_index(*placement)),
         Mode::Editing { index, .. } => Some(*index),
         _ => None,
     };
+
     let editing = matches!(app.mode, Mode::Editing { .. });
+
     let selected = if inline.is_some() {
         None
     } else {
         app.list.selected()
     };
+
     let mut lines = Vec::new();
     let mut input_row = None;
     let text_width = usize::from(width.saturating_sub(6));
+
     for index in 0..=app.tasks.len() {
         if let Some(position) = inline
             && position == index
@@ -169,18 +194,22 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
             input_row = Some(lines.len());
             lines.push(Line::default());
             row_tasks.push(editing.then_some(index));
+
             if editing {
                 continue;
             }
         }
+
         let Some(task) = app.tasks.get(index) else {
             break;
         };
+
         let text: String = task
             .text
             .chars()
             .map(|c| if c.is_control() { ' ' } else { c })
             .collect();
+
         let tag_end = crate::app::task_prefix(&text).map_or(0, |prefix| {
             let end = prefix.len();
             text.grapheme_indices(true)
@@ -188,22 +217,27 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
                 .last()
                 .map_or(0, |(index, grapheme)| index + grapheme.len())
         });
+
         let searching = app.search_query().is_some();
         let matches = app
             .search_query()
             .map_or_else(Vec::new, |query| crate::search::match_ranges(&text, query));
+
         let wrapped = if app.wrap && text_width > 0 {
             wrap_text(&text, text_width)
         } else {
             vec![(0..text.len(), text.as_str())]
         };
+
         let text_style = if task.completed {
             app.styles.completed.add_modifier(Modifier::CROSSED_OUT)
         } else {
             app.styles.normal
         };
+
         for (row, (source, text)) in wrapped.into_iter().enumerate() {
             row_tasks.push(Some(index));
+
             let prefix = if row > 0 {
                 "     "
             } else if searching {
@@ -215,6 +249,7 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
             } else {
                 task_checkbox(task, app.unicode_markers)
             };
+
             let marker_style = if searching {
                 if matches.is_empty() {
                     app.styles.muted
@@ -228,6 +263,7 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
             } else {
                 app.styles.normal
             };
+
             let mut line = Line::from(vec![
                 Span::styled(
                     if row == 0 && selected == Some(index) {
@@ -239,6 +275,7 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
                 ),
                 Span::styled(prefix, marker_style),
             ]);
+
             line.spans.extend(task_spans(
                 text,
                 source.start,
@@ -249,6 +286,7 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
             lines.push(line);
         }
     }
+
     TaskLayout {
         lines,
         row_tasks,
@@ -259,15 +297,19 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
 
 fn update_task_viewport(app: &mut App, layout: &TaskLayout, height: u16) -> Range<usize> {
     app.viewport_height = height;
+
     if layout.lines.is_empty() {
         app.scroll = 0;
         return 0..0;
     }
+
     let height = usize::from(height);
     app.scroll = app.scroll.min(layout.lines.len().saturating_sub(height));
+
     if height == 0 {
         return app.scroll..app.scroll;
     }
+
     let focus = layout.input_row.map(|row| (row, row + 1)).or_else(|| {
         layout.selected_task.map(|selected| {
             let start = layout
@@ -275,15 +317,18 @@ fn update_task_viewport(app: &mut App, layout: &TaskLayout, height: u16) -> Rang
                 .iter()
                 .position(|&task| task == Some(selected))
                 .unwrap_or(0);
+
             let end = layout
                 .row_tasks
                 .iter()
                 .rposition(|&task| task == Some(selected))
                 .unwrap_or(start)
                 + 1;
+
             (start, end)
         })
     });
+
     if let Some((start, end)) = focus
         && (app.reveal_selection || end <= app.scroll || start >= app.scroll + height)
     {
@@ -293,7 +338,9 @@ fn update_task_viewport(app: &mut App, layout: &TaskLayout, height: u16) -> Rang
             app.scroll = end - height;
         }
     }
+
     app.reveal_selection = false;
+
     app.scroll..(app.scroll + height).min(layout.lines.len())
 }
 
@@ -309,6 +356,7 @@ fn draw_inline_input(
         Mode::Editing { input, .. } => Some((input, "edit")),
         _ => None,
     };
+
     if let Some((input, label)) = inline
         && let Some(row) = input_row
         && row >= visible.start
@@ -347,13 +395,16 @@ fn task_checkbox(task: &Task, unicode: bool) -> &'static str {
 fn wrap_text(text: &str, width: usize) -> Vec<(Range<usize>, &str)> {
     let mut lines = Vec::new();
     let mut remaining = text;
+
     while !remaining.is_empty() {
         let offset = text.len() - remaining.len();
         let mut used = 0;
         let mut word_break = None;
         let mut split = None;
+
         for (index, grapheme) in remaining.grapheme_indices(true) {
             let size = grapheme.width();
+
             if used + size > width {
                 // A glyph wider than the entire text column cannot be drawn intact.
                 if index == 0 {
@@ -365,26 +416,34 @@ fn wrap_text(text: &str, width: usize) -> Vec<(Range<usize>, &str)> {
                     } else {
                         word_break.filter(|&offset| offset > 0).unwrap_or(index)
                     };
+
                     split = Some(boundary);
+
                     // Trim only complete whitespace clusters, preserving marks attached to spaces.
                     let end = remaining[..boundary]
                         .grapheme_indices(true)
                         .rev()
                         .find(|(_, grapheme)| !grapheme.chars().all(char::is_whitespace))
                         .map_or(0, |(index, grapheme)| index + grapheme.len());
+
                     lines.push((offset..offset + end, &remaining[..end]));
                 }
+
                 break;
             }
+
             if grapheme.chars().all(char::is_whitespace) {
                 word_break = Some(index);
             }
+
             used += size;
         }
+
         let Some(split) = split else {
             lines.push((offset..text.len(), remaining));
             break;
         };
+
         remaining = &remaining[split..];
         let start = remaining
             .grapheme_indices(true)
@@ -392,9 +451,11 @@ fn wrap_text(text: &str, width: usize) -> Vec<(Range<usize>, &str)> {
             .map_or(remaining.len(), |(index, _)| index);
         remaining = &remaining[start..];
     }
+
     if lines.is_empty() {
         lines.push((0..0, ""));
     }
+
     lines
 }
 
@@ -410,15 +471,19 @@ fn task_spans(
         .bg(base.bg.unwrap_or(Color::Reset))
         .remove_modifier(Modifier::DIM)
         .add_modifier(Modifier::REVERSED);
+
     let mut spans = Vec::new();
     let mut start = 0;
     let mut style = base;
     let mut matching = 0;
+
     for (index, _) in text.grapheme_indices(true) {
         let source = offset + index;
+
         while matching < matches.len() && matches[matching].end <= source {
             matching += 1;
         }
+
         let mut next = if matches
             .get(matching)
             .is_some_and(|range| range.contains(&source))
@@ -427,16 +492,21 @@ fn task_spans(
         } else {
             base
         };
+
         if source < tag_end {
             next = next.add_modifier(Modifier::BOLD);
         }
+
         if index > start && next != style {
             spans.push(Span::styled(text[start..index].to_owned(), style));
             start = index;
         }
+
         style = next;
     }
+
     spans.push(Span::styled(text[start..].to_owned(), style));
+
     spans
 }
 
@@ -444,18 +514,22 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     if !app.keybinds || width == 0 || app.mode == Mode::ConfirmClear {
         return Vec::new();
     }
+
     let keys = app.styles.normal.add_modifier(Modifier::BOLD);
+
     // The full aligned legend occupies 54 columns; pack smaller contexts by action.
     let mut lines = if app.mode == Mode::Normal && !app.tasks.is_empty() && width >= 54 {
         aligned_shortcuts(app, width)
     } else {
         compact_shortcuts(app, width)
     };
+
     if app.mode == Mode::Normal {
         let can_carry = app
             .list
             .selected()
             .is_some_and(|index| !app.tasks[index].completed);
+
         for (key, label, available) in [
             ("Ctrl+R", "Redo", app.can_redo()),
             ("m", "Carry", can_carry),
@@ -466,6 +540,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             }
         }
     }
+
     lines
 }
 
@@ -497,41 +572,52 @@ fn compact_shortcuts(app: &App, width: u16) -> Vec<Line<'static>> {
             vec![("x", "Clear done"), ("D", "Clear"), ("q", "Quit")],
         ],
     };
+
     for row in &mut rows {
         row.retain(|(key, _)| shortcut_available(app, key));
     }
+
     let mut lines = wrap_shortcuts(&rows, width, &app.styles);
+
     // Keep at most three hint rows, dropping secondary actions first.
     for omit in ["x", "D", "w", "u", "d", "j/k", "↑/↓"] {
         if lines.len() <= 3 {
             break;
         }
+
         for row in &mut rows {
             row.retain(|(key, _)| *key != omit);
         }
+
         lines = wrap_shortcuts(&rows, width, &app.styles);
     }
+
     lines
 }
 
 fn aligned_shortcuts(app: &App, width: u16) -> Vec<Line<'static>> {
     let keys = app.styles.normal.add_modifier(Modifier::BOLD);
+
     let columns = [
         [("j/k", "Navigate"), ("a", "Add"), ("d", "Delete")],
         [("g/G", "First/last"), ("e", "Edit"), ("x", "Clear done")],
         [("J/K", "Move"), ("Space", "Toggle"), ("D", "Clear")],
         [("w", "Wrap"), ("u", "Undo"), ("q", "Quit")],
     ];
+
     let mut lines = vec![Line::raw(" "); 3];
     let column_count = columns.len();
+
     for (index, column) in columns.into_iter().enumerate() {
         let gap = if index + 1 == column_count { "" } else { "  " };
         let key_width = column.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
+
         let label_width = column
             .iter()
             .map(|(_, label)| label.len())
             .max()
             .unwrap_or(0);
+
         for (line, (key, label)) in lines.iter_mut().zip(column) {
             if !shortcut_available(app, key) {
                 line.push_span(Span::raw(
@@ -539,11 +625,14 @@ fn aligned_shortcuts(app: &App, width: u16) -> Vec<Line<'static>> {
                 ));
                 continue;
             }
+
             line.push_span(Span::styled(format!("{key:<key_width$}"), keys));
             line.push_span(Span::raw(format!(" {label:<label_width$}{gap}")));
         }
     }
+
     append_shortcut(&mut lines[..1], ("/", "Search"), width, keys);
+
     lines
 }
 
@@ -554,6 +643,7 @@ fn append_shortcut(
     keys: Style,
 ) {
     let extra_width = 2 + key.width() + 1 + label.width();
+
     if let Some(line) = lines
         .iter_mut()
         .find(|line| line.width() + extra_width <= usize::from(width))
@@ -567,62 +657,79 @@ fn append_shortcut(
 fn wrap_shortcuts(rows: &[Vec<(&str, &str)>], width: u16, styles: &Styles) -> Vec<Line<'static>> {
     let keys = styles.normal.add_modifier(Modifier::BOLD);
     let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+
     if column_count == 0 {
         return Vec::new();
     }
+
     let mut widths = vec![(0, 0); column_count];
+
     for row in rows {
         for (column, (key, label)) in row.iter().enumerate() {
             widths[column].0 = widths[column].0.max(key.width());
             widths[column].1 = widths[column].1.max(label.width());
         }
     }
+
     let aligned_width = 1
         + widths
             .iter()
             .map(|(key, label)| key + 1 + label)
             .sum::<usize>()
         + 2 * (column_count - 1);
+
     if aligned_width <= usize::from(width) {
         return rows
             .iter()
             .filter(|row| !row.is_empty())
             .map(|row| {
                 let mut line = Line::raw(" ");
+
                 for (column, (key, label)) in row.iter().enumerate() {
                     let (key_width, label_width) = widths[column];
                     line.push_span(Span::styled(format!("{key:<key_width$}"), keys));
                     line.push_span(Span::raw(format!(" {label}")));
+
                     if column + 1 < row.len() {
                         line.push_span(Span::raw(" ".repeat(label_width - label.width() + 2)));
                     }
                 }
+
                 line
             })
             .collect();
     }
+
     let mut lines = Vec::new();
+
     for row in rows {
         let mut line = Line::raw(" ");
+
         for &(key, label) in row {
             let pair_width = key.width() + 1 + label.width();
+
             if pair_width + 1 > usize::from(width) {
                 continue;
             }
+
             let gap = if line.width() > 1 { "  " } else { "" };
+
             if line.width() + gap.len() + pair_width > usize::from(width) {
                 lines.push(line);
                 line = Line::raw(" ");
             } else {
                 line.push_span(Span::raw(gap));
             }
+
             line.push_span(Span::styled(key.to_owned(), keys));
             line.push_span(Span::raw(format!(" {label}")));
         }
+
         if line.width() > 1 {
             lines.push(line);
         }
     }
+
     lines
 }
 
@@ -641,11 +748,13 @@ fn draw_input_line(
     if area.is_empty() {
         return;
     }
+
     let mut line = Line::from(vec![
         Span::styled(label, styles.muted),
         Span::raw(" "),
         Span::styled("› ", styles.accent),
     ]);
+
     // Use a compact prompt when the full label would leave no cursor cell.
     if usize::from(area.width) <= line.width() {
         line = if area.width >= 3 {
@@ -654,6 +763,7 @@ fn draw_input_line(
             Line::default()
         };
     }
+
     let prefix_width = line.width();
     let capacity = usize::from(area.width).saturating_sub(prefix_width + 1);
     // Keep whole graphemes visible and reserve one cell for the cursor.
@@ -662,28 +772,37 @@ fn draw_input_line(
     let before_capacity = capacity - text[cursor..].width().min(capacity / 2);
     let mut start = cursor;
     let mut width = 0;
+
     for (index, grapheme) in text[..cursor].grapheme_indices(true).rev() {
         let grapheme_width = grapheme.width();
+
         if width + grapheme_width > before_capacity {
             break;
         }
+
         width += grapheme_width;
         start = index;
     }
+
     let mut end = cursor;
     let mut visible_width = width;
+
     for grapheme in text[cursor..].graphemes(true) {
         let size = grapheme.width();
+
         if prefix_width + visible_width + size > usize::from(area.width) {
             break;
         }
+
         visible_width += size;
         end += grapheme.len();
     }
+
     let visible = &text[start..end];
     line.push_span(Span::styled(visible, styles.normal));
     frame.render_widget(Paragraph::new(line), area);
     let cursor = (prefix_width + width).min(usize::from(area.width - 1));
+
     if show_cursor {
         frame.set_cursor_position((area.x + cursor as u16, area.y));
     }
@@ -692,17 +811,20 @@ fn draw_input_line(
 fn draw_confirmation(frame: &mut Frame, area: Rect, styles: &Styles) {
     let width = area.width.min(40);
     let height = area.height.min(7);
+
     let dialog = Rect::new(
         area.x + (area.width - width) / 2,
         area.y + (area.height - height) / 2,
         width,
         height,
     );
+
     frame.render_widget(Clear, dialog);
     frame.render_widget(Block::default().style(styles.normal), dialog);
     let block = Block::bordered().border_style(styles.border);
     let inner = block.inner(dialog);
     frame.render_widget(block, dialog);
+
     let lines = if inner.height >= 5 {
         vec![
             Line::raw(""),
@@ -718,6 +840,7 @@ fn draw_confirmation(frame: &mut Frame, area: Rect, styles: &Styles) {
     } else {
         vec![Line::raw("Clear unmarked tasks?")]
     };
+
     frame.render_widget(
         Paragraph::new(lines)
             .alignment(Alignment::Center)
@@ -742,6 +865,7 @@ mod tests {
     fn render(terminal: &mut Terminal<TestBackend>, app: &mut App) -> Rect {
         let mut rows = Rect::default();
         terminal.draw(|frame| rows = draw(frame, app)).unwrap();
+
         rows
     }
 
@@ -751,12 +875,14 @@ mod tests {
             .map(|y| {
                 let mut line = String::new();
                 let mut x = 0;
+
                 while x < buffer.area.width {
                     let symbol = buffer[(x, y)].symbol();
                     line.push_str(symbol);
                     // Wide characters occupy subsequent cells that contain placeholders.
                     x += symbol.width().max(1) as u16;
                 }
+
                 line
             })
             .collect::<Vec<_>>()
@@ -774,6 +900,7 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::DIM)
         );
+
         for accent in [Color::Yellow, Color::Indexed(3), Color::Rgb(20, 40, 60)] {
             assert!(
                 !Styles::default()
@@ -782,6 +909,7 @@ mod tests {
                     .add_modifier
                     .contains(Modifier::DIM)
             );
+
             let mut app = App::new(vec![Task {
                 text: "Work: text".into(),
                 completed: true,
@@ -796,8 +924,10 @@ mod tests {
             render(&mut terminal, &mut app);
             let buffer = terminal.backend().buffer();
             let marker = &buffer[(4, 1)];
+
             assert_eq!(marker.fg, accent);
             assert!(!marker.modifier.contains(Modifier::DIM));
+
             for x in 7..11 {
                 let cell = &buffer[(x, 1)];
                 assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
@@ -807,6 +937,7 @@ mod tests {
                 );
                 assert!(!cell.modifier.contains(Modifier::DIM));
             }
+
             let ordinary = &buffer[(13, 1)];
             assert!(
                 ordinary
@@ -815,6 +946,7 @@ mod tests {
             );
             assert!(!ordinary.modifier.contains(Modifier::REVERSED));
         }
+
         let spans = task_spans(
             "abc",
             0,
@@ -822,6 +954,7 @@ mod tests {
             std::slice::from_ref(&(1..2)),
             Styles::default().muted.add_modifier(Modifier::ITALIC),
         );
+
         assert!(
             spans[1]
                 .style
@@ -846,9 +979,11 @@ mod tests {
                 render(&mut terminal, &mut app);
                 let buffer = terminal.backend().buffer();
                 let focus = &buffer[(1, 1)];
+
                 assert_eq!(focus.symbol(), focus_marker(unicode));
                 assert_eq!(focus.fg, accent);
                 assert!(focus.modifier.contains(Modifier::BOLD));
+
                 for x in [3, 7] {
                     assert!(!buffer[(x, 1)].modifier.contains(Modifier::BOLD));
                 }
@@ -878,12 +1013,14 @@ mod tests {
         let mut terminal = test_terminal(60, 12);
         render(&mut terminal, &mut app);
         let buffer = terminal.backend().buffer();
+
         assert_eq!(buffer[(0, 0)].fg, Color::Cyan);
         assert_eq!(buffer[(1, 1)].fg, Color::Magenta);
         assert!(buffer[(1, 1)].modifier.contains(Modifier::BOLD));
         assert_eq!(buffer[(7, 1)].fg, Color::Red);
         assert_eq!(buffer[(7, 2)].fg, Color::Blue);
         assert!(buffer[(7, 2)].modifier.contains(Modifier::CROSSED_OUT));
+
         let mut input_terminal = test_terminal(40, 1);
         input_terminal
             .draw(|frame| {
@@ -897,6 +1034,7 @@ mod tests {
             })
             .unwrap();
         let buffer = input_terminal.backend().buffer();
+
         assert_eq!(buffer[(0, 0)].fg, Color::Green);
         assert_eq!(buffer[(4, 0)].fg, Color::Magenta);
         assert_eq!(buffer[(6, 0)].fg, Color::Red);
@@ -906,6 +1044,7 @@ mod tests {
     fn configured_styles_preserve_mandatory_focus_completion_and_search_modifiers() {
         for modifiers in ["[]", "['dim']"] {
             let config: crate::config::Config = toml::from_str(&format!("[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nmodifiers=['italic']\n[styles.completed]\nfg='red'\nmodifiers={modifiers}\n[styles.accent]\nfg='blue'\nmodifiers=['italic','underlined']")).unwrap();
+
             let mut app = App::new(vec![Task {
                 text: "Work: task".into(),
                 completed: true,
@@ -915,6 +1054,7 @@ mod tests {
             let mut terminal = test_terminal(40, 12);
             render(&mut terminal, &mut app);
             let buffer = terminal.backend().buffer();
+
             assert_eq!(buffer[(1, 1)].fg, Color::Blue);
             assert!(
                 buffer[(1, 1)]
@@ -933,12 +1073,14 @@ mod tests {
                 modifiers != "[]"
             );
             assert!(buffer[(13, 1)].modifier.contains(Modifier::CROSSED_OUT));
+
             app.mode = Mode::SearchResults {
                 input: "Work".into(),
                 original: Some(0),
             };
             render(&mut terminal, &mut app);
             let cell = &terminal.backend().buffer()[(7, 1)];
+
             assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
             assert!(
                 cell.modifier
@@ -957,6 +1099,7 @@ mod tests {
                     completed: true,
                     carried: false,
                 }]);
+
                 let config: crate::config::Config =
                     toml::from_str("theme='nord'\n[styles.normal]\nbg='#20242d'").unwrap();
                 app.styles = Styles::resolve(config.theme, &config.styles, None);
@@ -979,6 +1122,7 @@ mod tests {
                 };
                 let mut terminal = test_terminal(width, 12);
                 render(&mut terminal, &mut app);
+
                 for cell in &terminal.backend().buffer().content {
                     assert_eq!(
                         cell.bg,
@@ -988,12 +1132,14 @@ mod tests {
                 }
             }
         }
+
         let mut app = App::new(Vec::new());
         let config: crate::config::Config =
             toml::from_str("theme='nord'\n[styles.border]\nbg='#112233'").unwrap();
         app.styles = Styles::resolve(config.theme, &config.styles, None);
         let mut terminal = test_terminal(40, 12);
         render(&mut terminal, &mut app);
+
         assert_eq!(
             terminal.backend().buffer()[(0, 0)].bg,
             Color::Rgb(17, 34, 51)
@@ -1021,6 +1167,7 @@ mod tests {
                     let mut terminal = test_terminal(width, 12);
                     let before = render(&mut terminal, &mut app);
                     app.copy_markdown(&mut Vec::new());
+
                     for notice in [
                         "Copy sent to terminal",
                         "Copy failed: output unavailable",
@@ -1032,14 +1179,18 @@ mod tests {
                         app.notification = Some(crate::notification::Notification::new(notice));
                         let after = render(&mut terminal, &mut app);
                         assert_eq!(before, after);
+
                         let text = screen(&terminal);
+
                         if width >= 7 {
                             assert!(text.contains("[0/0]"));
                         }
+
                         if width == 80 {
                             assert!(text.contains(notice));
                         } else if width == 24 || width == 32 {
                             let compact = app.notification.as_ref().unwrap().compact_message();
+
                             if notice.starts_with("Theme: ") {
                                 assert_eq!(
                                     text.contains(compact),
@@ -1055,6 +1206,7 @@ mod tests {
                                 }));
                             }
                         }
+
                         if width >= 2 {
                             let buffer = terminal.backend().buffer();
                             assert_eq!(
@@ -1067,6 +1219,7 @@ mod tests {
                             );
                         }
                     }
+
                     app.notification = None;
                     render(&mut terminal, &mut app);
                     assert!(!screen(&terminal).contains("Copy"));
@@ -1091,6 +1244,7 @@ mod tests {
                             if mode == 2 && total == 0 {
                                 continue;
                             }
+
                             for width in [0, 1, 2, 6, 7, 8, 24] {
                                 let mut app = App::new(
                                     (0..total)
@@ -1123,9 +1277,11 @@ mod tests {
                                 };
                                 let mut terminal = test_terminal(width, 12);
                                 let rows = render(&mut terminal, &mut app);
+
                                 if mode == 5 {
                                     continue;
                                 } // The existing dialog may cover the border.
+
                                 if width >= 2 {
                                     let y = rows.bottom();
                                     let buffer = terminal.backend().buffer();
@@ -1137,9 +1293,12 @@ mod tests {
                                         buffer[(width - 1, y)].symbol(),
                                         if rounded { "╯" } else { "┘" }
                                     );
+
                                     let fits = expected.width() + 2 <= usize::from(width);
+
                                     if fits {
                                         let start = width - 1 - expected.len() as u16;
+
                                         for (offset, character) in expected.chars().enumerate() {
                                             let cell = &buffer[(start + offset as u16, y)];
                                             assert_eq!(cell.symbol(), character.to_string());
@@ -1157,10 +1316,12 @@ mod tests {
                 }
             }
         }
+
         for height in [0, 1] {
             let mut app = App::new(Vec::new());
             let mut terminal = test_terminal(24, height);
             render(&mut terminal, &mut app);
+
             assert!(!screen(&terminal).contains('['));
         }
     }
@@ -1169,6 +1330,7 @@ mod tests {
     fn completion_counter_tracks_mutations_clearing_and_history() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
+
         let mut app = App::new(vec![
             Task {
                 text: "ordinary".into(),
@@ -1188,6 +1350,7 @@ mod tests {
         ]);
         app.keybinds = false;
         let mut terminal = test_terminal(30, 10);
+
         let mut check = |app: &mut App, expected: &str| {
             let rows = render(&mut terminal, app);
             assert_eq!(rows, Rect::new(1, 1, 28, 8));
@@ -1199,7 +1362,9 @@ mod tests {
                     .ends_with(&format!("{expected}┘"))
             );
         };
+
         check(&mut app, "[1/3]");
+
         for (code, modifiers, expected) in [
             (KeyCode::Char(' '), KeyModifiers::NONE, "[2/3]"),
             (KeyCode::Char(' '), KeyModifiers::NONE, "[1/3]"),
@@ -1208,6 +1373,7 @@ mod tests {
                 .unwrap();
             check(&mut app, expected);
         }
+
         app.key(
             KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
             &fixture.storage,
@@ -1220,6 +1386,7 @@ mod tests {
         )
         .unwrap();
         check(&mut app, "[1/4]");
+
         for (code, modifiers, expected) in [
             (KeyCode::Char('d'), KeyModifiers::NONE, "[1/3]"),
             (KeyCode::Char('x'), KeyModifiers::NONE, "[0/2]"),
@@ -1240,9 +1407,11 @@ mod tests {
     #[test]
     fn remembered_search_is_invisible_until_resumed_and_restores_its_checkpoint() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
         for grouped in [false, true] {
             for single in [false, true] {
                 let fixture = crate::storage::tests::Fixture::new();
+
                 let mut app = App::new(
                     (0..20)
                         .map(|index| Task {
@@ -1267,14 +1436,18 @@ mod tests {
                 key(&mut app, KeyCode::Char('/'));
                 app.paste("needle");
                 key(&mut app, KeyCode::Enter);
+
                 if !single {
                     key(&mut app, KeyCode::Enter);
                 }
+
                 let mut terminal = test_terminal(28, 7);
+
                 for _ in 0..2 {
                     let rows = render(&mut terminal, &mut app);
                     assert_eq!(app.mode, Mode::Normal);
                     assert_eq!(app.list.selected(), Some(19));
+
                     let rendered = screen(&terminal);
                     assert!(
                         !rendered.contains('■')
@@ -1291,10 +1464,13 @@ mod tests {
                             .all(|cell| cell.bg == Color::Reset)
                     );
                     assert!(!terminal.backend().cursor_visible());
+
                     let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
                     assert!(app.row_tasks[app.scroll..end].contains(&Some(19)));
+
                     key(&mut app, KeyCode::Char('n'));
                     assert_eq!(app.list.selected(), Some(19));
+
                     render(&mut terminal, &mut app);
                     assert!(screen(&terminal).contains("search › needle"));
                     assert!(screen(&terminal).contains('■'));
@@ -1306,15 +1482,20 @@ mod tests {
                             .iter()
                             .any(|cell| cell.modifier.contains(Modifier::REVERSED))
                     );
+
                     key(&mut app, KeyCode::Char('n'));
                     assert_eq!(app.list.selected(), Some(if single { 19 } else { 0 }));
+
                     key(&mut app, KeyCode::Esc);
                     assert_eq!(app.list.selected(), Some(19));
                 }
+
                 key(&mut app, KeyCode::Char('j'));
                 assert_eq!(app.list.selected(), Some(0));
+
                 key(&mut app, KeyCode::Char('N'));
                 assert_eq!(app.list.selected(), Some(if single { 19 } else { 0 }));
+
                 key(&mut app, KeyCode::Enter);
                 assert_eq!(app.mode, Mode::Normal);
                 assert_eq!(app.search_query(), None);
@@ -1328,9 +1509,11 @@ mod tests {
     #[test]
     fn search_enter_accepts_one_task_but_keeps_zero_and_multiple_results() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
         for grouped in [false, true] {
             for (query, count) in [("missing", 0), ("task 18", 1), ("task 1", 11)] {
                 let fixture = crate::storage::tests::Fixture::new();
+
                 let mut app = App::new(
                     (0..20)
                         .map(|index| Task {
@@ -1345,7 +1528,9 @@ mod tests {
                 let original = app.tasks.clone();
                 let mut terminal = test_terminal(24, 6);
                 render(&mut terminal, &mut app);
+
                 assert_eq!(app.scroll, 0);
+
                 for accept in [false, true] {
                     app.key(
                         KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
@@ -1363,6 +1548,7 @@ mod tests {
                         &fixture.storage,
                     )
                     .unwrap();
+
                     if !accept {
                         assert_eq!(app.mode, Mode::Normal);
                         assert_eq!(app.list.selected(), Some(0));
@@ -1372,6 +1558,7 @@ mod tests {
                             1 => {
                                 assert_eq!(app.mode, Mode::Normal);
                                 assert_eq!(app.list.selected(), Some(18));
+
                                 app.key(
                                     KeyEvent::new_with_kind(
                                         KeyCode::Enter,
@@ -1384,26 +1571,32 @@ mod tests {
                             }
                             _ => {
                                 assert!(matches!(app.mode, Mode::SearchResults { .. }));
+
                                 app.key(
                                     KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
                                     &fixture.storage,
                                 )
                                 .unwrap();
+
                                 assert_ne!(app.list.selected(), selected);
                             }
                         }
                     }
+
                     let rows = render(&mut terminal, &mut app);
+
                     if let Some(selected) = app.list.selected() {
                         let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
                         assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
                     }
+
                     if accept && count == 1 {
                         let rendered = screen(&terminal);
                         assert!(rendered.contains("[✓] task 18"));
                         assert!(!rendered.contains('■') && !rendered.contains('□'));
                         assert!(!rendered.contains("search ›"));
                     }
+
                     assert_eq!(app.tasks, original);
                     assert!(!app.can_undo() && !app.can_redo());
                     assert!(!fixture.task_path().exists());
@@ -1417,8 +1610,10 @@ mod tests {
         for glyph in ["\u{2713}", "\u{21aa}", ">", "\u{203a}"] {
             assert_eq!(glyph.width(), 1);
         }
+
         assert_eq!(focus_marker(false), ">");
         assert_eq!(focus_marker(true), "\u{203a}");
+
         let tasks = vec![
             Task {
                 text: "ordinary task wraps here".into(),
@@ -1436,6 +1631,7 @@ mod tests {
                 carried: true,
             },
         ];
+
         for (task, ascii, unicode) in [
             (&tasks[0], " [ ] ", " [ ] "),
             (&tasks[1], " [x] ", " [\u{2713}] "),
@@ -1446,6 +1642,7 @@ mod tests {
             assert_eq!(ascii.width(), 5);
             assert_eq!(unicode.width(), 5);
         }
+
         for width in [0, 1, 2, 3, 8, 18, 40] {
             for wrap in [false, true] {
                 for mode in [
@@ -1462,6 +1659,7 @@ mod tests {
                     let searching = mode != Mode::Normal;
                     let mut app = App::new(tasks.clone());
                     assert!(app.unicode_markers);
+
                     app.unicode_markers = false;
                     app.mode = mode;
                     app.list.select(Some(1));
@@ -1475,10 +1673,13 @@ mod tests {
                     let scroll = app.scroll;
                     app.unicode_markers = true;
                     let unicode_rows = render(&mut terminal, &mut app);
+
                     assert_eq!(rows, unicode_rows);
                     assert_eq!(app.row_tasks, mapping);
                     assert_eq!(app.scroll, scroll);
+
                     let mut unicode = terminal.backend().buffer().clone();
+
                     for (offset, cell) in unicode.content.iter_mut().enumerate() {
                         match cell.symbol() {
                             "›" if offset % usize::from(width) == usize::from(rows.x) => {
@@ -1493,6 +1694,7 @@ mod tests {
                             _ => {}
                         }
                     }
+
                     assert_eq!(ascii, unicode);
                     assert_eq!(app.tasks, tasks);
                     assert!(!app.can_undo() && !app.can_redo());
@@ -1505,6 +1707,7 @@ mod tests {
     fn carryover_checkboxes_preserve_layout_and_search_markers() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
+
         let mut app = App::new(vec![Task {
             text: "carry words across wrapped lines".into(),
             completed: false,
@@ -1515,6 +1718,7 @@ mod tests {
         let mut terminal = test_terminal(24, 12);
         render(&mut terminal, &mut app);
         let mapping = app.row_tasks.clone();
+
         assert!(mapping.len() > 1);
         assert!(screen(&terminal).contains("› [↪] carry"));
         assert_eq!(
@@ -1522,6 +1726,7 @@ mod tests {
             app.styles.accent.fg.unwrap()
         );
         assert_eq!(terminal.backend().buffer()[(1, 2)].symbol(), " ");
+
         app.key(
             KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
             &fixture.storage,
@@ -1529,24 +1734,30 @@ mod tests {
         .unwrap();
         app.paste("carry");
         render(&mut terminal, &mut app);
+
         assert_eq!(app.row_tasks, mapping);
         assert!(screen(&terminal).contains('■'));
         assert!(!screen(&terminal).contains("[↪]"));
+
         app.key(
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
             &fixture.storage,
         )
         .unwrap();
         render(&mut terminal, &mut app);
+
         assert_eq!(app.row_tasks, mapping);
         assert!(screen(&terminal).contains("[↪]"));
         assert!(app.tasks[0].carried);
+
         app.keybinds = true;
+
         for width in [1, 18, 40, 60, 80] {
             let lines = shortcut_lines(&app, width);
             assert!(lines.len() <= 3);
             assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
         }
+
         assert!(
             shortcut_lines(&app, 80)
                 .iter()
@@ -1558,6 +1769,7 @@ mod tests {
     #[test]
     fn inline_add_preview_matches_saved_position_without_changing_tasks() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
         for count in [0usize, 4] {
             for grouped in [false, true] {
                 for selected in [None, (count > 0).then_some(0), count.checked_sub(1)] {
@@ -1567,6 +1779,7 @@ mod tests {
                         ('O', AddPlacement::Above),
                     ] {
                         let fixture = crate::storage::tests::Fixture::new();
+
                         let mut app = App::new(
                             (0..count)
                                 .map(|index| Task {
@@ -1592,16 +1805,19 @@ mod tests {
                         let index = app.insertion_index(placement);
                         let mut terminal = test_terminal(40, 10);
                         let rows = render(&mut terminal, &mut app);
+
                         let expected: Vec<_> = (0..index)
                             .map(Some)
                             .chain([None])
                             .chain((index..count).map(Some))
                             .collect();
+
                         assert_eq!(app.row_tasks, expected);
                         assert_eq!(app.tasks, original);
                         assert_eq!(app.list.selected(), selected);
                         assert!(!app.can_undo() && !app.can_redo());
                         assert_eq!(std::fs::read(fixture.task_path()).unwrap(), bytes);
+
                         let y = rows.y + index as u16;
                         let rendered = screen(&terminal);
                         assert!(
@@ -1612,6 +1828,7 @@ mod tests {
                                 .contains("  add › New task")
                         );
                         assert_eq!(rendered.matches('›').count(), 1);
+
                         let buffer = terminal.backend().buffer();
                         assert_eq!(buffer[(rows.x + 2, y)].fg, Color::Reset);
                         assert_eq!(buffer[(rows.x + 6, y)].fg, app.styles.accent.fg.unwrap());
@@ -1621,29 +1838,36 @@ mod tests {
                             terminal.backend().cursor_position(),
                             (rows.x + 16, y).into()
                         );
+
                         app.key(
                             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
                             &fixture.storage,
                         )
                         .unwrap();
+
                         assert_eq!(app.tasks[index].text, "New task");
                         assert!(!app.tasks[index].completed);
                         assert_eq!(app.list.selected(), Some(index));
                         assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+
                         let added = app.tasks.clone();
                         app.key(
                             KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
                             &fixture.storage,
                         )
                         .unwrap();
+
                         assert_eq!(app.tasks, original);
                         assert_eq!(app.list.selected(), selected);
+
                         app.key(
                             KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
                             &fixture.storage,
                         )
                         .unwrap();
+
                         assert_eq!(app.tasks, added);
+
                         render(&mut terminal, &mut app);
                         assert!(app.row_tasks.iter().all(Option::is_some));
                         assert!(!screen(&terminal).contains("add ›"));
@@ -1657,8 +1881,10 @@ mod tests {
     #[test]
     fn inline_edit_replaces_wrapped_rows_and_cancel_or_confirm_restores_layout() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
         for ending in [KeyCode::Esc, KeyCode::Enter] {
             let fixture = crate::storage::tests::Fixture::new();
+
             let mut app = App::new(vec![
                 Task {
                     carried: false,
@@ -1684,6 +1910,7 @@ mod tests {
             let bytes = std::fs::read(fixture.task_path()).unwrap();
             let mut terminal = test_terminal(26, 8);
             let mut rows = render(&mut terminal, &mut app);
+
             assert!(
                 app.row_tasks
                     .iter()
@@ -1691,17 +1918,20 @@ mod tests {
                     .count()
                     > usize::from(rows.height)
             );
+
             app.key(
                 KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
                 &fixture.storage,
             )
             .unwrap();
+
             if let Mode::Editing { input, .. } = &app.mode {
                 assert_eq!(input.text(), original[1].text);
                 assert_eq!(input.cursor(), input.text().len());
             } else {
                 panic!("expected editing");
             }
+
             rows = render(&mut terminal, &mut app);
             assert_eq!(app.row_tasks, [Some(0), Some(1), Some(2)]);
             assert!(screen(&terminal).contains("before"));
@@ -1710,6 +1940,7 @@ mod tests {
             assert!(screen(&terminal).contains("end"));
             assert_eq!(screen(&terminal).matches('›').count(), 1);
             assert_eq!(terminal.backend().cursor_position().y, rows.y + 1);
+
             app.key(
                 KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
                 &fixture.storage,
@@ -1717,17 +1948,22 @@ mod tests {
             .unwrap();
             app.paste("New\n");
             render(&mut terminal, &mut app);
+
             assert!(screen(&terminal).contains("edit › New original"));
             assert_eq!(app.tasks, original);
             assert_eq!(std::fs::read(fixture.task_path()).unwrap(), bytes);
             assert!(!app.can_undo());
+
             app.key(KeyEvent::new(ending, KeyModifiers::NONE), &fixture.storage)
                 .unwrap();
             rows = render(&mut terminal, &mut app);
+
             assert!(!screen(&terminal).contains("edit ›"));
             assert!(!terminal.backend().cursor_visible());
+
             let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
             assert!(app.row_tasks[app.scroll..end].contains(&Some(1)));
+
             if ending == KeyCode::Esc {
                 assert_eq!(app.tasks, original);
                 assert_eq!(std::fs::read(fixture.task_path()).unwrap(), bytes);
@@ -1735,20 +1971,25 @@ mod tests {
             } else {
                 assert_eq!(app.tasks[1].text, format!("New {}", original[1].text));
                 assert!(app.tasks[1].completed);
+
                 let edited = app.tasks.clone();
                 app.key(
                     KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
                     &fixture.storage,
                 )
                 .unwrap();
+
                 assert_eq!(app.tasks, original);
+
                 app.key(
                     KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
                     &fixture.storage,
                 )
                 .unwrap();
+
                 assert_eq!(app.tasks, edited);
             }
+
             assert_eq!(app.list.selected(), Some(1));
             assert_eq!(fixture.storage.load().unwrap(), app.tasks);
         }
@@ -1760,6 +2001,7 @@ mod tests {
             KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
         };
         let fixture = crate::storage::tests::Fixture::new();
+
         for key in ['a', 'o', 'O', 'e'] {
             let mut app = App::new(
                 (0..20)
@@ -1778,15 +2020,20 @@ mod tests {
                 &fixture.storage,
             )
             .unwrap();
+
             if key != 'e' {
                 app.paste("new e\u{301}界👩‍💻 text");
             }
+
             let mut terminal = test_terminal(40, 12);
+
             for wrap in [false, true] {
                 app.wrap = wrap;
+
                 for width in [0, 1, 2, 3, 8, 16, 40] {
                     for height in [0, 1, 2, 3, 6, 12] {
                         terminal.backend_mut().resize(width, height);
+
                         for movement in [KeyCode::Home, KeyCode::Right, KeyCode::End, KeyCode::Left]
                         {
                             app.key(
@@ -1797,23 +2044,28 @@ mod tests {
                             app.scroll = usize::MAX;
                             app.reveal_selection = false;
                             let rows = render(&mut terminal, &mut app);
+
                             assert!(
                                 app.row_tasks
                                     .iter()
                                     .flatten()
                                     .all(|&index| index < app.tasks.len())
                             );
+
                             if rows.is_empty() {
                                 assert!(!terminal.backend().cursor_visible());
                             } else {
                                 assert!(terminal.backend().cursor_visible());
+
                                 let cursor = terminal.backend().cursor_position();
                                 assert!(rows.contains(cursor));
+
                                 let visual_row = app.scroll + usize::from(cursor.y - rows.y);
                                 assert_eq!(
                                     app.row_tasks[visual_row],
                                     if key == 'e' { Some(18) } else { None }
                                 );
+
                                 for kind in [
                                     MouseEventKind::Down(MouseButton::Left),
                                     MouseEventKind::ScrollDown,
@@ -1835,6 +2087,7 @@ mod tests {
                     }
                 }
             }
+
             app.key(
                 KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                 &fixture.storage,
@@ -1843,6 +2096,7 @@ mod tests {
             terminal.backend_mut().resize(40, 12);
             let rows = render(&mut terminal, &mut app);
             let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
+
             assert!(app.row_tasks[app.scroll..end].contains(&Some(18)));
             assert_eq!(app.tasks, original);
             assert_eq!(app.list.selected(), Some(18));
@@ -1855,6 +2109,7 @@ mod tests {
     fn search_keeps_its_bottom_prompt_and_read_only_results_cursor() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
+
         let mut app = App::new(vec![
             Task {
                 carried: false,
@@ -1875,6 +2130,7 @@ mod tests {
         .unwrap();
         app.paste("needle");
         let mut terminal = test_terminal(40, 12);
+
         for results in [false, true] {
             let rows = render(&mut terminal, &mut app);
             assert_eq!(rows.height, 9);
@@ -1888,15 +2144,18 @@ mod tests {
             assert_eq!(app.row_tasks, [Some(0), Some(1)]);
             assert!(screen(&terminal).contains("■"));
             assert_eq!(terminal.backend().cursor_visible(), !results);
+
             if !results {
                 assert_eq!(terminal.backend().cursor_position().y, 11);
             }
+
             app.key(
                 KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
                 &fixture.storage,
             )
             .unwrap();
         }
+
         render(&mut terminal, &mut app);
         assert!(screen(&terminal).contains("[✓] needle"));
         assert!(!screen(&terminal).contains("search ›"));
@@ -1908,6 +2167,7 @@ mod tests {
     fn search_markers_highlights_and_exit_preserve_text_and_alignment() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
+
         let mut app = App::new(
             [
                 ("work: İfoo İFOO e\u{301} 👩‍💻", false),
@@ -1921,6 +2181,7 @@ mod tests {
             })
             .into(),
         );
+
         let original = app.tasks.clone();
         app.keybinds = false;
         app.list.select(Some(2));
@@ -1934,20 +2195,26 @@ mod tests {
         app.paste("i\u{307}foo");
         render(&mut terminal, &mut app);
         let buffer = terminal.backend().buffer();
+
         assert_eq!(buffer[(1, 1)].symbol(), "›");
         assert_eq!(buffer[(1, 3)].symbol(), " ");
+
         for y in [1, 2] {
             assert_eq!(buffer[(4, y)].symbol(), "■");
             assert_eq!(buffer[(4, y)].fg, app.styles.accent.fg.unwrap());
         }
+
         assert_eq!(buffer[(4, 3)].symbol(), "□");
         assert_eq!(buffer[(4, 3)].fg, Color::Reset);
         assert_eq!(buffer[(7, 1)].symbol(), "w");
         assert!(buffer[(7, 1)].modifier.contains(Modifier::BOLD));
+
         for (y, expected) in [(1, "İfooİFOO"), (2, "İfoo")] {
             let mut highlighted = String::new();
+
             for x in 7..39 {
                 let cell = &buffer[(x, y)];
+
                 if cell.modifier.contains(Modifier::REVERSED) {
                     highlighted.push_str(cell.symbol());
                     assert_eq!(cell.fg, Color::Reset);
@@ -1956,23 +2223,29 @@ mod tests {
                     assert_eq!(cell.modifier.contains(Modifier::CROSSED_OUT), y == 2);
                 }
             }
+
             assert_eq!(highlighted, expected);
         }
+
         key(&mut app, KeyCode::Enter);
         render(&mut terminal, &mut app);
         assert!(screen(&terminal).contains("search › i\u{307}foo"));
+
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Enter);
         render(&mut terminal, &mut app);
+
         assert_eq!(app.list.selected(), Some(1));
         assert_eq!(app.tasks, original);
         assert_eq!(terminal.backend().buffer()[(4, 1)].symbol(), " ");
         assert_eq!(terminal.backend().buffer()[(4, 2)].symbol(), "✓");
+
         for y in 1..4 {
             for x in 7..39 {
                 assert_eq!(terminal.backend().buffer()[(x, y)].bg, Color::Reset);
             }
         }
+
         assert!(!fixture.task_path().exists());
     }
 
@@ -1980,6 +2253,7 @@ mod tests {
     fn search_spanning_wrapped_rows_preserves_mapping_and_reveals_results_after_resize() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
+
         let mut app = App::new(vec![
             Task {
                 carried: false,
@@ -2009,7 +2283,9 @@ mod tests {
         .unwrap();
         app.paste("tag: abcd");
         render(&mut terminal, &mut app);
+
         assert_eq!(app.row_tasks, mapping);
+
         for (y, length) in [(1, 4), (2, 4)] {
             for x in 7..7 + length {
                 assert!(
@@ -2018,16 +2294,19 @@ mod tests {
                         .contains(Modifier::REVERSED)
                 );
             }
+
             assert_eq!(
                 terminal.backend().buffer()[(7 + length, y)].bg,
                 Color::Reset
             );
         }
+
         app.key(
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             &fixture.storage,
         )
         .unwrap();
+
         for (width, height, wrap) in [
             (18, 8, true),
             (40, 12, false),
@@ -2046,17 +2325,20 @@ mod tests {
             .unwrap();
             render(&mut terminal, &mut app);
             let selected = app.list.selected().unwrap();
+
             if app.viewport_height > 0 {
                 let end = (app.scroll + usize::from(app.viewport_height)).min(app.row_tasks.len());
                 assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
             }
         }
+
         app.key(
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
             &fixture.storage,
         )
         .unwrap();
         render(&mut terminal, &mut app);
+
         assert_eq!(app.list.selected(), Some(0));
         assert_eq!(app.tasks, original);
         assert!(!app.can_undo());
@@ -2066,6 +2348,7 @@ mod tests {
     #[test]
     fn search_feedback_and_legends_remain_compact() {
         let fixture = crate::storage::tests::Fixture::new();
+
         let mut app = App::new(vec![Task {
             carried: false,
             text: "ordinary".into(),
@@ -2078,9 +2361,11 @@ mod tests {
         app.list.select(None);
         let mut terminal = test_terminal(60, 12);
         render(&mut terminal, &mut app);
+
         assert!(screen(&terminal).contains("No matches"));
         assert_eq!(terminal.backend().buffer()[(1, 1)].symbol(), " ");
         assert_eq!(terminal.backend().buffer()[(4, 1)].symbol(), "□");
+
         for results in [false, true] {
             app.mode = if results {
                 Mode::SearchResults {
@@ -2093,23 +2378,29 @@ mod tests {
                     original: Some(0),
                 }
             };
+
             let text = shortcut_lines(&app, 80)
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(" ");
+
             assert!(text.contains("Esc") && text.contains("Cancel"));
             assert!(text.contains(if results { "Select" } else { "Results" }));
             assert!(!text.contains("Page"));
+
             for width in [0, 1, 12, 18, 30, 40, 60, 80] {
                 let lines = shortcut_lines(&app, width);
                 assert!(lines.len() <= 3);
                 assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
             }
+
             app.keybinds = false;
             assert!(shortcut_lines(&app, 80).is_empty());
+
             app.keybinds = true;
         }
+
         assert!(!fixture.task_path().exists());
     }
 
@@ -2117,6 +2408,7 @@ mod tests {
     fn redo_hint_is_contextual_and_restored_wrapped_selection_is_visible() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
+
         let mut app = App::new(vec![
             Task {
                 carried: false,
@@ -2139,36 +2431,46 @@ mod tests {
             app.key(KeyEvent::new(code, modifiers), &fixture.storage)
                 .unwrap()
         };
+
         assert!(
             !shortcut_lines(&app, 80)
                 .iter()
                 .any(|line| line.to_string().contains("Redo"))
         );
+
         key(&mut app, KeyCode::Char(' '), KeyModifiers::NONE);
         let modified = app.tasks.clone();
         key(&mut app, KeyCode::Char('u'), KeyModifiers::NONE);
+
         assert!(
             shortcut_lines(&app, 80)
                 .iter()
                 .any(|line| line.to_string().contains("Ctrl+R Redo"))
         );
+
         for width in [0, 1, 18, 40, 60, 80] {
             let lines = shortcut_lines(&app, width);
             assert!(lines.len() <= 3);
             assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
         }
+
         let mut terminal = test_terminal(18, 7);
         app.scroll = usize::MAX;
         key(&mut app, KeyCode::Char('r'), KeyModifiers::CONTROL);
+
         assert_eq!(app.tasks, modified);
+
         render(&mut terminal, &mut app);
         assert_eq!(app.list.selected(), Some(1));
         assert_eq!(app.row_tasks[app.scroll], Some(1));
         assert!(!app.can_redo());
+
         key(&mut app, KeyCode::Char('D'), KeyModifiers::NONE);
         key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
         key(&mut app, KeyCode::Char('u'), KeyModifiers::NONE);
+
         assert!(app.can_redo());
+
         app.keybinds = false;
         assert!(shortcut_lines(&app, 80).is_empty());
     }
@@ -2177,11 +2479,13 @@ mod tests {
     fn legends_follow_mode_availability_and_terminal_width() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
+
         let mut app = App::new(vec![Task {
             carried: false,
             text: "task".into(),
             completed: false,
         }]);
+
         let text = |app: &App, width| {
             shortcut_lines(app, width)
                 .iter()
@@ -2189,20 +2493,25 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
+
         assert!(!text(&app, 80).contains("Undo"));
         assert!(!text(&app, 80).contains("Clear done"));
+
         app.key(
             KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
             &fixture.storage,
         )
         .unwrap();
+
         for width in [80, 60, 40, 30, 18, 1, 0] {
             let lines = shortcut_lines(&app, width);
             assert!(lines.len() <= 3);
             assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
         }
+
         for width in [80, 60] {
             let normal = text(&app, width);
+
             for key in [
                 "j/k",
                 "g/G",
@@ -2217,10 +2526,12 @@ mod tests {
                 assert!(normal.contains(key), "{normal}");
             }
         }
+
         assert_eq!(
             text(&app, 40),
             " j/k Navigate    Space Toggle  w Wrap\n a/e Add/edit    d     Delete  u Undo\n x   Clear done  D     Clear   q Quit"
         );
+
         for mode in [
             Mode::Adding(TextInput::default(), AddPlacement::End),
             Mode::Editing {
@@ -2231,25 +2542,31 @@ mod tests {
             app.mode = mode;
             assert_eq!(text(&app, 40), " Enter Confirm  Esc Cancel");
         }
+
         app.mode = Mode::ConfirmClear;
         assert!(shortcut_lines(&app, 80).is_empty());
+
         let mut terminal = test_terminal(60, 12);
         let rows = render(&mut terminal, &mut app);
         assert_eq!(rows.height, 10);
         assert_eq!(screen(&terminal).matches("Confirm").count(), 1);
         assert_eq!(screen(&terminal).matches("Cancel").count(), 1);
+
         app.key(
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             &fixture.storage,
         )
         .unwrap();
+
         assert_eq!(text(&app, 40), " u Undo  w Wrap  q Quit  t/T Theme");
         assert_eq!(
             text(&App::new(Vec::new()), 40),
             " w Wrap  q Quit  t/T Theme"
         );
+
         app.keybinds = false;
         assert!(shortcut_lines(&app, 80).is_empty());
+
         app.mode = Mode::Adding(TextInput::default(), AddPlacement::End);
         assert!(shortcut_lines(&app, 80).is_empty());
     }
@@ -2258,6 +2575,7 @@ mod tests {
     fn legend_width_boundary_preserves_hint_order_and_viewport_height() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
+
         let mut app = App::new(
             ["first", "second"]
                 .map(|text| Task {
@@ -2267,6 +2585,7 @@ mod tests {
                 })
                 .into(),
         );
+
         for key in [' ', ' ', 'u'] {
             app.key(
                 KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
@@ -2274,23 +2593,29 @@ mod tests {
             )
             .unwrap();
         }
+
         app.list.select(Some(1));
         assert!(app.can_undo() && app.can_redo());
+
         for width in [53, 54, 55] {
             let lines = shortcut_lines(&app, width);
             assert_eq!(lines.len(), 3);
             assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
+
             let legend = lines
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join("\n");
+
             for label in ["Undo", "Clear done", "Clear"] {
                 assert!(legend.contains(label), "{width}: missing {label}");
             }
+
             for label in ["Redo", "Carry", "Theme"] {
                 assert_eq!(legend.contains(label), width == 53, "{width}: {label}");
             }
+
             let keys: Vec<_> = lines[0]
                 .spans
                 .iter()
@@ -2298,6 +2623,7 @@ mod tests {
                 .map(|span| span.content.trim())
                 .take(3)
                 .collect();
+
             assert_eq!(
                 keys,
                 if width == 53 {
@@ -2306,12 +2632,14 @@ mod tests {
                     ["j/k", "g/G", "J/K"]
                 }
             );
+
             // Suppressed footer, exact fit, spacer, and a comfortably tall viewport.
             for (height, task_height) in [(5, 3), (6, 1), (7, 1), (12, 6)] {
                 let mut terminal = test_terminal(width, height);
                 let rows = render(&mut terminal, &mut app);
                 assert_eq!(rows, Rect::new(1, 1, width - 2, task_height));
                 assert_eq!(screen(&terminal).contains("Quit"), height >= 6);
+
                 let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
                 assert!(app.row_tasks[app.scroll..end].contains(&Some(1)));
             }
@@ -2322,6 +2650,7 @@ mod tests {
     fn changing_footer_height_preserves_selection_and_mouse_mapping() {
         use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let fixture = crate::storage::tests::Fixture::new();
+
         let mut app = App::new(
             (0..12)
                 .map(|index| Task {
@@ -2331,9 +2660,11 @@ mod tests {
                 })
                 .collect(),
         );
+
         let mut terminal = test_terminal(60, 12);
         app.list.select(Some(11));
         let mut heights = Vec::new();
+
         for mode in [
             Mode::Normal,
             Mode::Adding(TextInput::default(), AddPlacement::End),
@@ -2347,7 +2678,9 @@ mod tests {
             let rows = render(&mut terminal, &mut app);
             heights.push(rows.height);
             let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
+
             assert!(app.row_tasks[app.scroll..end].contains(&Some(11)));
+
             if app.mode == Mode::Normal {
                 let index = app.row_tasks[app.scroll].unwrap();
                 let was_completed = app.tasks[index].completed;
@@ -2362,17 +2695,22 @@ mod tests {
                     &fixture.storage,
                 )
                 .unwrap();
+
                 assert_eq!(app.tasks[index].completed, !was_completed);
+
                 app.list.select(Some(11));
                 app.reveal_selection = true;
             }
         }
+
         assert!(heights[1] > heights[0]);
         assert_eq!(heights[1], heights[2]);
         assert_eq!(heights[0], heights[3]);
+
         app.keybinds = false;
         let mut rows = render(&mut terminal, &mut app);
         assert_eq!(rows.height, 10);
+
         app.mode = Mode::Adding(TextInput::default(), AddPlacement::End);
         rows = render(&mut terminal, &mut app);
         assert_eq!(rows.height, 10);
@@ -2381,6 +2719,7 @@ mod tests {
     #[test]
     fn tiny_terminals_and_resizing_are_safe_in_every_mode() {
         let mut terminal = test_terminal(40, 12);
+
         let mut app = App::new(vec![Task {
             carried: false,
             text: "日本語 🪷 ".repeat(8).trim_end().into(),
@@ -2391,9 +2730,11 @@ mod tests {
             &crate::config::StyleOverrides::default(),
             None,
         );
+
         for width in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 40, 60, 80] {
             for height in [0, 1, 2, 3, 6, 12] {
                 terminal.backend_mut().resize(width, height);
+
                 for mode in [
                     Mode::Normal,
                     Mode::Adding("Long input 日本語 🪷".into(), AddPlacement::End),
@@ -2414,6 +2755,7 @@ mod tests {
                     app.mode = mode;
                     let mut rows = Rect::default();
                     let completed = terminal.draw(|frame| rows = draw(frame, &mut app)).unwrap();
+
                     // TestBackend can retain stale placeholders after overlapping wide glyphs.
                     // Verify backgrounds on the authoritative completed frame instead.
                     assert!(
@@ -2425,7 +2767,9 @@ mod tests {
                     );
                     assert!(rows.right() <= width && rows.bottom() <= height);
                     assert!(app.row_tasks.iter().flatten().all(|&index| index == 0));
+
                     let buffer = terminal.backend().buffer();
+
                     if terminal.backend().cursor_visible() {
                         assert!(buffer.area.contains(terminal.backend().cursor_position()));
                     }
@@ -2439,6 +2783,7 @@ mod tests {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
         let mut terminal = test_terminal(18, 5);
+
         let mut app = App::new(
             [
                 "short",
@@ -2458,6 +2803,7 @@ mod tests {
         let mut rows = render(&mut terminal, &mut app);
         assert_eq!(rows.height, 3);
         assert_eq!(app.row_tasks, [0, 1, 1, 2, 3, 3, 3, 4].map(Some));
+
         for (code, selected) in [
             (KeyCode::PageDown, 2),
             (KeyCode::PageDown, 3),
@@ -2469,10 +2815,12 @@ mod tests {
             app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
                 .unwrap();
             assert_eq!(app.list.selected(), Some(selected));
+
             rows = render(&mut terminal, &mut app);
             let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
             assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
         }
+
         assert!(!fixture.task_path().exists());
     }
 
@@ -2481,6 +2829,7 @@ mod tests {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
         let mut terminal = test_terminal(40, 12);
+
         let mut app = App::new(
             (0..40)
                 .map(|index| Task {
@@ -2490,11 +2839,14 @@ mod tests {
                 })
                 .collect(),
         );
+
         // Include the real footer so page size excludes its rows as well as borders.
         let mut rows = render(&mut terminal, &mut app);
         assert_eq!(app.viewport_height, rows.height);
         assert!(rows.height < 10);
+
         let original = app.tasks.clone();
+
         let mut press = |app: &mut App, code, kind| {
             app.key(
                 KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind),
@@ -2503,27 +2855,36 @@ mod tests {
             .unwrap();
             rows = render(&mut terminal, app);
         };
+
         let height = usize::from(app.viewport_height);
         press(&mut app, KeyCode::PageDown, KeyEventKind::Press);
         assert_eq!(app.list.selected(), Some(height));
         assert_eq!(app.scroll, height);
+
         press(&mut app, KeyCode::PageDown, KeyEventKind::Repeat);
         assert_eq!(app.list.selected(), Some(2 * height));
+
         press(&mut app, KeyCode::PageUp, KeyEventKind::Repeat);
         assert_eq!(app.list.selected(), Some(height));
+
         press(&mut app, KeyCode::PageDown, KeyEventKind::Release);
         assert_eq!(app.list.selected(), Some(height));
+
         for _ in 0..50 {
             press(&mut app, KeyCode::PageDown, KeyEventKind::Press);
         }
+
         assert_eq!(app.list.selected(), Some(39));
+
         for _ in 0..50 {
             press(&mut app, KeyCode::PageUp, KeyEventKind::Press);
         }
+
         assert_eq!(app.list.selected(), Some(0));
         assert_eq!(app.tasks, original);
         assert!(!app.can_undo());
         assert!(!fixture.task_path().exists());
+
         drop(press);
 
         app.keybinds = false;
@@ -2533,17 +2894,22 @@ mod tests {
         let page = KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE);
         let up = KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE);
         app.key(page, &fixture.storage).unwrap();
+
         assert_eq!(app.list.selected(), Some(1));
+
         render(&mut terminal, &mut app);
         // Simulate reading partway through the oversized selected task with the mouse wheel.
         app.scroll += 5;
         app.reveal_selection = false;
         render(&mut terminal, &mut app);
         app.key(page, &fixture.storage).unwrap();
+
         assert_eq!(app.list.selected(), Some(2));
+
         render(&mut terminal, &mut app);
         app.key(up, &fixture.storage).unwrap();
         assert_eq!(app.list.selected(), Some(1));
+
         render(&mut terminal, &mut app);
         app.key(up, &fixture.storage).unwrap();
         assert_eq!(app.list.selected(), Some(0));
@@ -2557,18 +2923,22 @@ mod tests {
                 )
                 .unwrap();
             }
+
             app.list.select(Some(0));
             app.scroll = 0;
             terminal.backend_mut().resize(width, height);
             render(&mut terminal, &mut app);
             let expected = usize::from(app.viewport_height.max(1));
             app.key(page, &fixture.storage).unwrap();
+
             // Only task 1 wraps: with wrapping off, or a one-cell width, each task has one row.
             assert_eq!(
                 app.list.selected(),
                 Some(if wrap && width > 6 { 1 } else { expected })
             );
+
             rows = render(&mut terminal, &mut app);
+
             if rows.height > 0 {
                 let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
                 assert!(
@@ -2581,6 +2951,7 @@ mod tests {
     #[test]
     fn long_lists_scroll_to_selection_and_wrap_back_to_start() {
         let mut terminal = test_terminal(40, 10);
+
         let mut app = App::new(
             (0..1000)
                 .map(|index| Task {
@@ -2590,10 +2961,12 @@ mod tests {
                 })
                 .collect(),
         );
+
         app.navigate(false);
         render(&mut terminal, &mut app);
         assert!(app.scroll > 0);
         assert!(screen(&terminal).contains("task 999"));
+
         app.navigate(true);
         render(&mut terminal, &mut app);
         assert_eq!(app.scroll, 0);
@@ -2606,6 +2979,7 @@ mod tests {
             KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
         };
         let fixture = crate::storage::tests::Fixture::new();
+
         let mut app = App::new(vec![
             Task {
                 carried: false,
@@ -2639,18 +3013,22 @@ mod tests {
             &fixture.storage,
         )
         .unwrap();
+
         assert_eq!(app.list.selected(), Some(1));
         assert_eq!(app.tasks[1].text, original[0].text);
         assert!(app.tasks[1].completed);
+
         render(&mut terminal, &mut app);
         assert_eq!(app.row_tasks[app.scroll], Some(1));
         assert!(screen(&terminal).contains("› [✓] long"));
+
         app.key(
             KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
             &fixture.storage,
         )
         .unwrap();
         render(&mut terminal, &mut app);
+
         assert_eq!(app.list.selected(), Some(0));
         assert_eq!(app.tasks, original);
         assert_eq!(app.row_tasks[app.scroll], Some(0));
@@ -2677,6 +3055,7 @@ mod tests {
                         text: text.into(),
                         completed,
                     }]);
+
                     let original = app.tasks.clone();
                     app.keybinds = false;
                     app.wrap = wrap;
@@ -2684,20 +3063,25 @@ mod tests {
                     render(&mut terminal, &mut app);
                     let buffer = terminal.backend().buffer();
                     let mut bold = String::new();
+
                     for y in 1..19 {
                         for x in 7..width - 1 {
                             let cell = &buffer[(x, y)];
+
                             if cell.symbol() == " " {
                                 continue;
                             }
+
                             if cell.modifier.contains(Modifier::BOLD) {
                                 bold.push_str(cell.symbol());
                             }
+
                             assert_eq!(cell.fg, Color::Reset);
                             assert_eq!(cell.modifier.contains(Modifier::CROSSED_OUT), completed);
                             assert_eq!(cell.modifier.contains(Modifier::DIM), completed);
                         }
                     }
+
                     assert_eq!(bold, tag, "{text:?}, width={width}, wrap={wrap}");
                     assert!(!buffer[(3, 1)].modifier.contains(Modifier::BOLD));
                     assert_eq!(buffer[(1, 1)].fg, app.styles.accent.fg.unwrap());
@@ -2711,6 +3095,7 @@ mod tests {
     #[test]
     fn completed_text_stays_muted_with_accented_marker_and_checkbox() {
         let mut terminal = test_terminal(40, 10);
+
         let mut app = App::new(vec![Task {
             carried: false,
             text: "Completed".into(),
@@ -2722,6 +3107,7 @@ mod tests {
         let marker = &buffer[(1, 1)];
         let checkbox = &buffer[(3, 1)];
         let text = &buffer[(7, 1)];
+
         assert_eq!(marker.symbol(), "›");
         assert_eq!(marker.fg, app.styles.accent.fg.unwrap());
         assert_eq!(marker.bg, Color::Reset);
@@ -2737,6 +3123,7 @@ mod tests {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
         let mut terminal = test_terminal(12, 8);
+
         let mut app = App::new(vec![
             Task {
                 carried: false,
@@ -2749,17 +3136,22 @@ mod tests {
                 completed: false,
             },
         ]);
+
         let toggle = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
         app.key(toggle, &fixture.storage).unwrap();
         assert!(!app.wrap);
+
         app.mode = Mode::Adding("a long input ending in 界z".into(), AddPlacement::End);
         render(&mut terminal, &mut app);
         let rendered = screen(&terminal);
+
         assert!(rendered.contains("[ ] next"));
         assert!(rendered.contains("add › z"));
+
         app.mode = Mode::Normal;
         app.key(toggle, &fixture.storage).unwrap();
         assert!(app.wrap);
+
         render(&mut terminal, &mut app);
         assert!(app.row_tasks.len() > 2);
         assert_eq!(app.list.selected(), Some(0));
@@ -2771,6 +3163,7 @@ mod tests {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
         let text = format!("start {}end", "e\u{301}界👩‍💻 ".repeat(8));
+
         for edit in [false, true] {
             for width in [1, 2, 8, 16, 40] {
                 let mut app = App::new(vec![Task {
@@ -2787,6 +3180,7 @@ mod tests {
                     Mode::Adding(text.clone().into(), AddPlacement::End)
                 };
                 let mut terminal = test_terminal(width, 5);
+
                 for code in std::iter::repeat_n(KeyCode::Left, text.graphemes(true).count() + 2)
                     .chain(std::iter::repeat_n(
                         KeyCode::Right,
@@ -2801,19 +3195,24 @@ mod tests {
                     .unwrap();
                     render(&mut terminal, &mut app);
                     let cursor = terminal.get_cursor_position().unwrap();
+
                     assert!(cursor.x < width);
                     assert!(cursor.y < 5);
+
                     if width >= 16 && code == KeyCode::Home {
                         assert!(screen(&terminal).contains("start"));
                     }
+
                     if width >= 16 && code == KeyCode::End {
                         assert!(screen(&terminal).contains("end"));
                     }
                 }
+
                 assert_eq!(app.tasks[0].text, text);
                 assert!(!app.can_undo());
             }
         }
+
         assert!(!fixture.task_path().exists());
     }
 
@@ -2822,6 +3221,7 @@ mod tests {
         for label in ["add", "edit"] {
             let mut input = TextInput::from("hidden text e\u{301}界👩‍💻after");
             input.set_cursor("hidden text e\u{301}界".len());
+
             for width in 0..=30 {
                 let mut terminal = test_terminal(width, 1);
                 terminal
@@ -2829,25 +3229,31 @@ mod tests {
                         draw_input(frame, frame.area(), &input, label, &Styles::default())
                     })
                     .unwrap();
+
                 if width == 0 {
                     continue;
                 }
+
                 let position = terminal.get_cursor_position().unwrap();
                 let cursor = position.x;
                 assert_eq!(position.y, 0);
                 assert!(cursor < width);
+
                 if width >= 16 {
                     let rendered = screen(&terminal);
                     assert!(rendered.contains("界👩‍💻"), "{rendered}");
+
                     let before_cursor = rendered.split("👩‍💻").next().unwrap();
                     assert_eq!(usize::from(cursor), before_cursor.width());
                 }
             }
+
             input.set_cursor(0);
             let mut terminal = test_terminal(40, 1);
             terminal
                 .draw(|frame| draw_input(frame, frame.area(), &input, label, &Styles::default()))
                 .unwrap();
+
             assert_eq!(
                 usize::from(terminal.get_cursor_position().unwrap().x),
                 label.width() + 3
@@ -2880,8 +3286,10 @@ mod tests {
                         )
                     })
                     .unwrap();
+
                 assert_eq!(screen(&terminal).trim_end(), format!("{label} › {tail}"));
                 assert_eq!(terminal.get_cursor_position().unwrap(), (cursor, 0).into());
+
                 let buffer = terminal.backend().buffer();
                 assert_eq!(buffer[(cursor, 0)].symbol(), " ");
                 assert_eq!(buffer[(0, 0)].fg, Color::Reset);
@@ -2929,6 +3337,7 @@ mod tests {
         ] {
             for (width, expected) in expected_rows.into_iter().enumerate() {
                 let width = width as u16;
+
                 for height in 0..=1 {
                     let mut terminal = test_terminal(width, height);
                     terminal
@@ -2942,10 +3351,13 @@ mod tests {
                             )
                         })
                         .unwrap();
+
                     if width == 0 || height == 0 {
                         continue;
                     }
+
                     assert_eq!(screen(&terminal).trim_end(), expected);
+
                     let cursor = terminal.get_cursor_position().unwrap();
                     assert!(cursor.x < width);
                     assert_eq!(cursor.y, 0);
@@ -2994,6 +3406,7 @@ mod tests {
             KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
         };
         let fixture = crate::storage::tests::Fixture::new();
+
         let mut app = App::new(
             ["abcd \u{301}X", "last"]
                 .map(|text| Task {
@@ -3006,9 +3419,11 @@ mod tests {
         app.keybinds = false;
         let mut terminal = test_terminal(12, 5);
         let rows = render(&mut terminal, &mut app);
+
         assert_eq!(app.row_tasks, [0, 0, 1].map(Some));
         assert_eq!(terminal.backend().buffer()[(7, 2)].symbol(), " \u{301}");
         assert_eq!(terminal.backend().buffer()[(8, 2)].symbol(), "X");
+
         app.mouse(
             MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
@@ -3020,16 +3435,20 @@ mod tests {
             &fixture.storage,
         )
         .unwrap();
+
         assert!(app.tasks[0].completed);
         assert!(!app.tasks[1].completed);
         assert_eq!(fixture.storage.load().unwrap(), app.tasks);
         assert_eq!(app.tasks[0].text, "abcd \u{301}X");
+
         for (code, selected) in [(KeyCode::PageDown, 1), (KeyCode::PageUp, 0)] {
             app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
                 .unwrap();
             render(&mut terminal, &mut app);
+
             assert_eq!(app.list.selected(), Some(selected));
         }
+
         terminal.backend_mut().resize(13, 5);
         render(&mut terminal, &mut app);
         assert_eq!(app.row_tasks, [0, 0, 1].map(Some));
@@ -3041,6 +3460,7 @@ mod tests {
         use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let fixture = crate::storage::tests::Fixture::new();
         let mut terminal = test_terminal(18, 12);
+
         let mut app = App::new(vec![
             Task {
                 carried: false,
@@ -3053,8 +3473,10 @@ mod tests {
                 completed: false,
             },
         ]);
+
         let rows = render(&mut terminal, &mut app);
         assert_eq!(app.row_tasks, [0, 0, 0, 1].map(Some));
+
         let rendered = screen(&terminal);
         assert!(rendered.contains("› [ ] alpha beta"));
         assert!(rendered.contains("      gamma"));
@@ -3062,17 +3484,21 @@ mod tests {
         assert!(rendered.contains("  [ ] next"));
         assert_eq!(rendered.matches('›').count(), 1);
         assert_eq!(terminal.backend().buffer()[(1, 1)].fg, DEFAULT_ACCENT);
+
         let click = |row| MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 6,
             row,
             modifiers: KeyModifiers::NONE,
         };
+
         app.mouse(click(2), rows, &fixture.storage).unwrap();
         assert!(app.tasks[0].completed);
         assert!(!app.tasks[1].completed);
+
         app.mouse(click(4), rows, &fixture.storage).unwrap();
         assert!(app.tasks[1].completed);
+
         app.mouse(click(5), rows, &fixture.storage).unwrap();
         assert!(app.tasks.iter().all(|task| task.completed));
         assert_eq!(fixture.storage.load().unwrap(), app.tasks);
@@ -3083,6 +3509,7 @@ mod tests {
         use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
         let fixture = crate::storage::tests::Fixture::new();
         let mut terminal = test_terminal(18, 8);
+
         let mut app = App::new(vec![
             Task {
                 carried: false,
@@ -3095,28 +3522,35 @@ mod tests {
                 completed: false,
             },
         ]);
+
         let mut rows = render(&mut terminal, &mut app);
         let total = app.row_tasks.len();
         assert!(total > usize::from(rows.height));
+
         let wheel = MouseEvent {
             kind: MouseEventKind::ScrollDown,
             column: rows.x,
             row: rows.y,
             modifiers: KeyModifiers::NONE,
         };
+
         for _ in 0..total {
             app.mouse(wheel, rows, &fixture.storage).unwrap();
             rows = render(&mut terminal, &mut app);
         }
+
         assert!(screen(&terminal).contains("THE END"));
         assert!(screen(&terminal).contains("next"));
+
         app.navigate(true);
         render(&mut terminal, &mut app);
         assert_eq!(app.list.selected(), Some(1));
+
         app.navigate(false);
         render(&mut terminal, &mut app);
         assert_eq!(app.scroll, 0);
         assert!(screen(&terminal).contains("[ ] word"));
+
         terminal.backend_mut().resize(30, 12);
         render(&mut terminal, &mut app);
         assert!(app.row_tasks.len() < total);

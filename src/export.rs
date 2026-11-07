@@ -14,16 +14,20 @@ pub const USAGE: &str = "Usage: sati export [--output PATH | -o PATH] [--force]"
 
 pub fn markdown(tasks: &[Task]) -> String {
     let mut output = String::new();
+
     for task in tasks {
         output.push_str(if task.completed { "- [x] " } else { "- [ ] " });
+
         for character in task.text.chars() {
             if "\\`*_{}[]<>!&#|~+-.()".contains(character) {
                 output.push('\\');
             }
             output.push(character);
         }
+
         output.push('\n');
     }
+
     output
 }
 
@@ -32,18 +36,22 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<()> {
     let mut force = false;
     let mut help = false;
     let mut arguments = arguments.into_iter();
+
     while let Some(argument) = arguments.next() {
         if argument == "--output" || argument == "-o" {
             if output.is_some() {
                 return Err("output path specified more than once".into());
             }
+
             let value = arguments.next().ok_or("--output requires a path")?;
+
             if ["--force", "--output", "-o", "--help", "-h"]
                 .iter()
                 .any(|flag| value == *flag)
             {
                 return Err("--output requires a path".into());
             }
+
             output = Some(value.into());
         } else if argument == "--force" {
             force = true;
@@ -57,18 +65,22 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<()> {
             .into());
         }
     }
+
     if help {
         println!(
             "{USAGE}\n\nExport the current checklist as Markdown (stdout by default).\n--output, -o PATH  Write to a file.\n--force            Replace an existing output file."
         );
         return Ok(());
     }
+
     if force && output.is_none() {
         return Err("--force requires an output path".into());
     }
+
     let storage = Storage::discover()?;
     // Atomic task-file replacement allows a consistent read without the writer lock.
     let contents = markdown(&storage.load()?);
+
     if let Some(path) = output {
         let path = storage.export_path(&path)?;
         write_file(&path, contents.as_bytes(), force)
@@ -84,19 +96,24 @@ fn write_file(path: &Path, contents: &[u8], force: bool) -> Result<()> {
         .and_then(|name| name.to_str())
         .unwrap_or("sati-export");
     let (temporary, mut file) = storage::create_temporary(path.parent().unwrap(), name)?;
+
     let result = (|| -> io::Result<()> {
         file.write_all(contents)?;
         file.sync_all()?;
         drop(file);
+
         if force {
             fs::rename(&temporary, path)?;
         } else {
             // Unlike a pre-check followed by rename, this cannot replace a concurrent creation.
             fs::hard_link(&temporary, path)?;
         }
+
         Ok(())
     })();
+
     let _ = fs::remove_file(&temporary);
+
     result.map_err(|error| format!("could not export to {}: {error}", path.display()).into())
 }
 
@@ -104,6 +121,7 @@ pub fn copy(tasks: &[Task], output: &mut impl Write) -> io::Result<()> {
     const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let contents = markdown(tasks);
     let mut sequence = String::from("\x1b]52;c;");
+
     for chunk in contents.as_bytes().chunks(3) {
         let a = chunk[0];
         let b = chunk.get(1).copied().unwrap_or(0);
@@ -121,13 +139,16 @@ pub fn copy(tasks: &[Task], output: &mut impl Write) -> io::Result<()> {
             '='
         });
     }
+
     sequence.push('\x07');
+
     if let Err(error) = output.write_all(sequence.as_bytes()) {
         // Best effort: terminate any partial OSC before ordinary rendering resumes.
         let _ = output.write_all(b"\x07");
         let _ = output.flush();
         return Err(error);
     }
+
     output.flush()
 }
 
@@ -159,6 +180,7 @@ mod tests {
                 carried: false,
             },
         ];
+
         assert_eq!(
             markdown(&tasks),
             concat!(
@@ -189,18 +211,22 @@ mod tests {
                 Ok(())
             }
         }
+
         let tasks = [Task {
             text: "日本語".into(),
             completed: false,
             carried: true,
         }];
+
         let mut output = Output::default();
         copy(&tasks, &mut output).unwrap();
         assert_eq!(output.bytes, b"\x1b]52;c;LSBbIF0g5pel5pys6KqeCg==\x07");
         assert!(output.flushed);
+
         let mut empty = Vec::new();
         copy(&[], &mut empty).unwrap();
         assert_eq!(empty, b"\x1b]52;c;\x07");
+
         for (text, expected) in [
             ("a", "LSBbIF0gYQo="),
             ("ab", "LSBbIF0gYWIK"),
@@ -216,6 +242,7 @@ mod tests {
                 &mut output,
             )
             .unwrap();
+
             assert_eq!(output, format!("\x1b]52;c;{expected}\x07").as_bytes());
         }
     }
@@ -225,11 +252,14 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
         let output = fixture.directory.join("tasks.md");
         write_file(&output, b"first\n", false).unwrap();
+
         assert!(write_file(&output, b"second\n", false).is_err());
         assert_eq!(fs::read(&output).unwrap(), b"first\n");
+
         write_file(&output, b"second\n", true).unwrap();
         assert_eq!(fs::read(&output).unwrap(), b"second\n");
         assert!(write_file(&fixture.directory.join("missing/tasks.md"), b"new", false).is_err());
+
         let directory = fixture.directory.join("directory.md");
         fs::create_dir(&directory).unwrap();
         assert!(write_file(&directory, b"new", true).is_err());

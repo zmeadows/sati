@@ -9,6 +9,7 @@ fn version_succeeds_without_a_terminal_or_valid_storage_environment() {
         .stdin(Stdio::null())
         .output()
         .unwrap();
+
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
@@ -24,6 +25,7 @@ fn version_does_not_hide_invalid_arguments() {
         .stdin(Stdio::null())
         .output()
         .unwrap();
+
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("unknown argument: --unknown"));
@@ -35,11 +37,14 @@ fn deprecated_add_flag_is_an_undocumented_no_op() {
         let run = |legacy: bool| {
             let mut command = Command::new(env!("CARGO_BIN_EXE_sati"));
             command.arg(argument).stdin(Stdio::null());
+
             if legacy {
                 command.arg("--add-to-bottom");
             }
+
             command.output().unwrap()
         };
+
         let normal = run(false);
         let legacy = run(true);
         assert!(normal.status.success() && legacy.status.success());
@@ -56,14 +61,18 @@ fn ascii_markers_are_documented_and_combine_with_existing_options() {
         .stdin(Stdio::null())
         .output()
         .unwrap();
+
     assert!(output.status.success());
+
     let help = String::from_utf8(output.stdout).unwrap();
     assert!(help.contains("--ascii-markers") && help.contains("[x]") && help.contains("[>]"));
+
     let output = Command::new(env!("CARGO_BIN_EXE_sati"))
         .args(["--ascii-markers", "--no-wrap", "--version"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
+
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),

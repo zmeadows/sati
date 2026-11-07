@@ -65,6 +65,7 @@ fn background<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<Color>, D::Error> {
     let color = color(deserializer)?;
+
     match color {
         Some(Color::Rgb(..) | Color::Reset) => Ok(color),
         _ => Err(D::Error::custom(
@@ -78,6 +79,7 @@ fn modifiers<'de, D: Deserializer<'de>>(
 ) -> std::result::Result<Option<Modifier>, D::Error> {
     let names = Vec::<String>::deserialize(deserializer)?;
     let mut modifiers = Modifier::empty();
+
     for name in names {
         let modifier = match name.as_str() {
             "bold" => Modifier::BOLD,
@@ -87,11 +89,14 @@ fn modifiers<'de, D: Deserializer<'de>>(
             "crossed_out" => Modifier::CROSSED_OUT,
             _ => return Err(D::Error::custom(format!("unknown modifier: {name}"))),
         };
+
         if modifiers.contains(modifier) {
             return Err(D::Error::custom(format!("duplicate modifier: {name}")));
         }
+
         modifiers.insert(modifier);
     }
+
     Ok(Some(modifiers))
 }
 
@@ -99,25 +104,31 @@ fn accent_style<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<StyleOverride, D::Error> {
     let style = StyleOverride::deserialize(deserializer)?;
+
     if style.fg == Some(Color::Reset) {
         return Err(D::Error::custom("styles.accent.fg must not be reset"));
     }
+
     Ok(style)
 }
 
 impl Config {
     pub fn load(explicit: Option<&Path>) -> Result<Self> {
         let discovered;
+
         let path = match explicit {
             Some(path) => path,
             None => {
                 discovered = default_path(|name| env::var_os(name))?;
+
                 let Some(path) = discovered.as_deref() else {
                     return Ok(Self::default());
                 };
+
                 path
             }
         };
+
         let text = match fs::read_to_string(path) {
             Ok(text) => text,
             Err(error) if explicit.is_none() && error.kind() == io::ErrorKind::NotFound => {
@@ -129,6 +140,7 @@ impl Config {
                 );
             }
         };
+
         toml::from_str(&text)
             .map_err(|error| format!("invalid configuration {}: {error}", path.display()).into())
     }
@@ -136,20 +148,25 @@ impl Config {
 
 fn default_path(get: impl Fn(&str) -> Option<OsString>) -> Result<Option<PathBuf>> {
     let value = |name| get(name).filter(|value| !value.is_empty());
+
     #[cfg(not(any(target_os = "macos", windows)))]
     let base = if let Some(path) = value("XDG_CONFIG_HOME") {
         let path = PathBuf::from(path);
+
         if !path.is_absolute() {
             return Err("XDG_CONFIG_HOME must be an absolute path".into());
         }
+
         Some(path)
     } else {
         value("HOME").map(|home| PathBuf::from(home).join(".config"))
     };
+
     #[cfg(target_os = "macos")]
     let base = value("HOME").map(|home| PathBuf::from(home).join("Library/Application Support"));
     #[cfg(windows)]
     let base = value("APPDATA").map(PathBuf::from);
+
     // No discoverable native location means no optional default configuration.
     base.map(|base| {
         if !base.is_absolute() {
@@ -170,6 +187,7 @@ mod tests {
             for value in ["'#123456'", "'reset'"] {
                 assert!(toml::from_str::<Config>(&format!("[styles.{role}]\nbg={value}")).is_ok());
             }
+
             for value in ["'red'", "'3'", "'#123'", "12", "[]"] {
                 assert!(toml::from_str::<Config>(&format!("[styles.{role}]\nbg={value}")).is_err());
             }
@@ -184,6 +202,7 @@ mod tests {
                     toml::from_str::<Config>(&format!("[styles.{role}]\nfg='{value}'")).is_ok()
                 );
             }
+
             for property in [
                 "fg=12",
                 "fg='orange'",
@@ -198,6 +217,7 @@ mod tests {
                 assert!(toml::from_str::<Config>(&text).is_err(), "accepted {text}");
             }
         }
+
         assert!(toml::from_str::<Config>("[styles.accent]\nfg='reset'").is_err());
         assert!(toml::from_str::<Config>("[styles.normal]\nfg='reset'").is_ok());
         assert!(toml::from_str::<Config>("[styles.unknown]").is_err());
@@ -212,6 +232,7 @@ mod tests {
             toml::from_str::<Config>("").unwrap().display,
             Display::default()
         );
+
         for text in [
             "bad toml",
             "unknown = true",
@@ -231,14 +252,17 @@ mod tests {
         let path = default_path(|_| Some(root.clone().into_os_string()))
             .unwrap()
             .unwrap();
+
         let expected = if cfg!(target_os = "macos") {
             root.join("Library/Application Support/sati/config.toml")
         } else {
             root.join("sati/config.toml")
         };
+
         assert_eq!(path, expected);
         assert!(default_path(|_| None).unwrap().is_none());
         assert!(default_path(|_| Some("relative".into())).is_err());
+
         #[cfg(not(any(target_os = "macos", windows)))]
         {
             assert_eq!(

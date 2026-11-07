@@ -16,7 +16,9 @@ impl Fixture {
             std::process::id(),
             NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
         ));
+
         fs::create_dir(&path).unwrap();
+
         Self(path)
     }
 }
@@ -35,6 +37,7 @@ fn command() -> Command {
         .env_remove("HOME")
         .env_remove("APPDATA")
         .stdin(Stdio::null());
+
     command
 }
 
@@ -64,9 +67,11 @@ fn native_directory_reuses_existing_data() {
     let fixture = Fixture::new();
     let mut command = command();
     command.env("HOME", &fixture.0).env("APPDATA", &fixture.0);
+
     if cfg!(any(target_os = "macos", windows)) {
         command.env("XDG_DATA_HOME", "ignored-relative-xdg");
     }
+
     let data = if cfg!(target_os = "macos") {
         fixture.0.join("Library/Application Support/sati")
     } else if cfg!(windows) {
@@ -74,12 +79,14 @@ fn native_directory_reuses_existing_data() {
     } else {
         fixture.0.join(".local/share/sati")
     };
+
     assert_reuses_data(&mut command, &data);
 }
 
 #[test]
 fn missing_empty_or_relative_native_directory_is_an_error() {
     let variable = if cfg!(windows) { "APPDATA" } else { "HOME" };
+
     let missing = if cfg!(windows) {
         "APPDATA is not set"
     } else if cfg!(target_os = "macos") {
@@ -87,6 +94,7 @@ fn missing_empty_or_relative_native_directory_is_an_error() {
     } else {
         "neither XDG_DATA_HOME nor HOME is set"
     };
+
     assert_discovery_error(command().output().unwrap(), missing);
     assert_discovery_error(command().env(variable, "").output().unwrap(), missing);
     assert_discovery_error(
@@ -102,11 +110,14 @@ fn xdg_directory_takes_precedence_and_empty_xdg_uses_home() {
         let fixture = Fixture::new();
         let mut command = command();
         command.env("HOME", &fixture.0);
+
         if let Some(value) = xdg {
             command.env("XDG_DATA_HOME", value);
         }
+
         assert_reuses_data(&mut command, &fixture.0.join(".local/share/sati"));
     }
+
     let fixture = Fixture::new();
     let home = fixture.0.join("home");
     assert_reuses_data(
