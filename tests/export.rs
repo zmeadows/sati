@@ -140,6 +140,18 @@ fn missing_and_invalid_storage_never_get_created_or_repaired() {
             invalid
         );
     }
+
+    // A file from a newer sati is refused rather than misread.
+    let future = r#"{"schema_version":99,"tasks":[]}"#;
+    fs::write(fixture.data.join("tasks.json"), future).unwrap();
+    let output = fixture.run(&[]);
+
+    assert!(!output.status.success() && output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("schema version 99"));
+    assert_eq!(
+        fs::read_to_string(fixture.data.join("tasks.json")).unwrap(),
+        future
+    );
 }
 
 #[test]

@@ -10,10 +10,33 @@ use std::{
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::app::Task;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
+
+// The `tasks.json` format written by this build. Files without `schema_version` are version 0.
+const SCHEMA_VERSION: u64 = 1;
+
+// `MIGRATIONS[n]` upgrades a version `n` document to version `n + 1`. To change the format,
+// bump `SCHEMA_VERSION` and append one migration; the array length enforces the pairing.
+// Migrations run in memory on load; the upgraded document is written by the next save.
+const MIGRATIONS: [fn(Value) -> std::result::Result<Value, String>; SCHEMA_VERSION as usize] =
+    [v0_to_v1];
+
+// Version 0 is either a bare task array or an unversioned `{tasks, selected, section}` object.
+fn v0_to_v1(value: Value) -> std::result::Result<Value, String> {
+    let mut document = match value {
+        Value::Array(tasks) => serde_json::Map::from_iter([("tasks".to_owned(), tasks.into())]),
+        Value::Object(document) => document,
+        _ => return Err("expected a task list or an object".to_owned()),
+    };
+
+    document.insert("schema_version".to_owned(), 1.into());
+
+    Ok(Value::Object(document))
+}
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -182,25 +205,42 @@ impl Storage {
             )
         };
 
-        // Temporary compatibility: legacy arrays migrate on the next save or clean exit.
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Input {
-            Document(TaskDocument),
-            Legacy(Vec<Task>),
-        }
-        let input: Input =
+        let mut value: Value =
             serde_json::from_slice(&contents).map_err(|error| invalid_file(error.to_string()))?;
 
-        let mut document = match input {
-            Input::Document(document) => document,
-            Input::Legacy(tasks) => TaskDocument {
-                tasks,
-                selected: None,
-                section: None,
-                needs_migration: true,
+        let version = match &value {
+            Value::Object(document) => match document.get("schema_version") {
+                None => 0,
+                Some(version) => version.as_u64().ok_or_else(|| {
+                    invalid_file("schema_version must be a non-negative integer".to_owned())
+                })?,
             },
+            _ => 0,
         };
+
+        if version > SCHEMA_VERSION {
+            return Err(format!(
+                "task file {} uses schema version {version}, but this sati supports version {SCHEMA_VERSION}. The file has been left untouched; update sati to open it",
+                self.path.display()
+            )
+            .into());
+        }
+
+        // Upgrade in memory only; nothing is written until the next save.
+        for (from, migrate) in MIGRATIONS.iter().enumerate().skip(version as usize) {
+            value = migrate(value).map_err(|problem| {
+                invalid_file(format!("migrating from version {from}: {problem}"))
+            })?;
+        }
+
+        let Value::Object(mut fields) = value else {
+            return Err(invalid_file("expected an object".to_owned()).into());
+        };
+
+        fields.remove("schema_version");
+        let mut document: TaskDocument = serde_json::from_value(Value::Object(fields))
+            .map_err(|error| invalid_file(error.to_string()))?;
+        document.needs_migration = version < SCHEMA_VERSION;
 
         for (index, task) in document.tasks.iter().enumerate() {
             if let Some(problem) = task.validation_error() {
@@ -231,6 +271,7 @@ impl Storage {
     ) -> Result<()> {
         #[derive(Serialize)]
         struct Saved<'a> {
+            schema_version: u64,
             tasks: &'a [Task],
             selected: Option<usize>,
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -240,6 +281,7 @@ impl Storage {
         atomic_save(
             &self.path,
             &Saved {
+                schema_version: SCHEMA_VERSION,
                 tasks,
                 selected: valid_selection(tasks, selected),
                 section,
@@ -387,7 +429,7 @@ pub mod tests {
     }
 
     #[test]
-    fn task_documents_load_legacy_and_normalize_selection_without_writing() {
+    fn task_documents_load_every_version_and_normalize_selection_without_writing() {
         let fixture = Fixture::new();
         let absent = fixture.storage.load_document().unwrap();
         assert!(absent.tasks.is_empty() && !absent.needs_migration);
@@ -396,30 +438,46 @@ pub mod tests {
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
         let tasks = r#"[{"text":"first","completed":false},{"text":"second","completed":false}]"#;
 
-        for (json, selected, legacy) in [
+        // Bare arrays and unversioned objects are version 0 and migrate on the next save.
+        for (json, selected, needs_migration) in [
             (tasks.to_owned(), Some(0), true),
             (
                 format!(r#"{{"tasks":{tasks},"selected":1}}"#),
                 Some(1),
-                false,
+                true,
             ),
-            (format!(r#"{{"tasks":{tasks}}}"#), Some(0), false),
+            (format!(r#"{{"tasks":{tasks}}}"#), Some(0), true),
             (
                 format!(r#"{{"tasks":{tasks},"selected":null}}"#),
                 Some(0),
-                false,
+                true,
             ),
             (
                 format!(r#"{{"tasks":{tasks},"selected":99}}"#),
                 Some(0),
+                true,
+            ),
+            (r#"{"tasks":[],"selected":5}"#.into(), None, true),
+            (
+                format!(r#"{{"schema_version":0,"tasks":{tasks},"selected":1}}"#),
+                Some(1),
+                true,
+            ),
+            (
+                format!(r#"{{"schema_version":1,"tasks":{tasks},"selected":1}}"#),
+                Some(1),
                 false,
             ),
-            (r#"{"tasks":[],"selected":5}"#.into(), None, false),
         ] {
             fs::write(fixture.task_path(), &json).unwrap();
             let document = fixture.storage.load_document().unwrap();
+
+            assert_eq!(
+                document.tasks.len(),
+                if json.contains("first") { 2 } else { 0 }
+            );
             assert_eq!(document.selected, selected);
-            assert_eq!(document.needs_migration, legacy);
+            assert_eq!(document.needs_migration, needs_migration, "{json}");
             assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
         }
 
@@ -456,7 +514,91 @@ pub mod tests {
         let json: serde_json::Value =
             serde_json::from_slice(&fs::read(fixture.task_path()).unwrap()).unwrap();
 
-        assert_eq!(json, serde_json::json!({"tasks":[], "selected":null}));
+        assert_eq!(
+            json,
+            serde_json::json!({"schema_version": 1, "tasks":[], "selected":null})
+        );
+
+        // The version comes first so it is the first thing a reader sees.
+        let saved = fs::read_to_string(fixture.task_path()).unwrap();
+        assert!(saved.starts_with("{\n  \"schema_version\": 1,"), "{saved}");
+        assert!(!fixture.storage.load_document().unwrap().needs_migration);
+    }
+
+    fn saved_tasks(path: &Path) -> Vec<Task> {
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(saved["schema_version"], SCHEMA_VERSION);
+
+        serde_json::from_value(saved["tasks"].clone()).unwrap()
+    }
+
+    #[test]
+    fn unversioned_files_keep_their_data_through_migration() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+        let task = r#"{"text":"Work: keep","completed":false,"carried":true}"#;
+
+        let expected = Task {
+            text: "Work: keep".into(),
+            completed: false,
+            carried: true,
+        };
+
+        for json in [
+            format!("[{task}]"),
+            format!(r#"{{"tasks":[{task}],"selected":0,"section":"work"}}"#),
+        ] {
+            fs::write(fixture.task_path(), &json).unwrap();
+            let document = fixture.storage.load_document().unwrap();
+
+            assert_eq!(document.tasks, std::slice::from_ref(&expected));
+            assert_eq!(document.selected, Some(0));
+            assert_eq!(
+                document.section.as_deref(),
+                json.contains("section").then_some("work")
+            );
+            assert!(document.needs_migration);
+        }
+    }
+
+    #[test]
+    fn future_and_malformed_schema_versions_are_rejected_without_writing() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+
+        let future = r#"{"schema_version":2,"tasks":[],"future":"field"}"#;
+        fs::write(fixture.task_path(), future).unwrap();
+        let error = fixture
+            .storage
+            .load_document()
+            .err()
+            .expect("rejected")
+            .to_string();
+
+        assert!(error.contains("schema version 2"), "{error}");
+        assert!(error.contains("supports version 1"), "{error}");
+        assert!(error.contains("left untouched"), "{error}");
+        assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), future);
+
+        for json in [
+            r#"{"schema_version":"1","tasks":[]}"#,
+            r#"{"schema_version":-1,"tasks":[]}"#,
+            r#"{"schema_version":1.5,"tasks":[]}"#,
+            r#"{"schema_version":null,"tasks":[]}"#,
+            r#""text""#,
+            "42",
+        ] {
+            fs::write(fixture.task_path(), json).unwrap();
+            let error = fixture
+                .storage
+                .load_document()
+                .err()
+                .expect("rejected")
+                .to_string();
+
+            assert!(error.contains("invalid task file"), "{json}: {error}");
+            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
+        }
     }
 
     #[test]
@@ -922,12 +1064,7 @@ pub mod tests {
             fs::metadata(&temporary).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert_eq!(
-            serde_json::from_slice::<TaskDocument>(&fs::read(temporary).unwrap())
-                .unwrap()
-                .tasks,
-            tasks
-        );
+        assert_eq!(saved_tasks(&temporary), tasks);
     }
 
     #[test]
@@ -975,12 +1112,7 @@ pub mod tests {
             .find(|path| path.extension().is_some_and(|extension| extension == "tmp"))
             .unwrap();
 
-        assert_eq!(
-            serde_json::from_slice::<TaskDocument>(&fs::read(temporary).unwrap())
-                .unwrap()
-                .tasks,
-            replacement
-        );
+        assert_eq!(saved_tasks(&temporary), replacement);
     }
 
     #[test]

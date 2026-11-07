@@ -1744,6 +1744,10 @@ mod tests {
         assert!(!app.needs_migration && !app.can_undo());
         assert!(!fixture.storage.load_document().unwrap().needs_migration);
 
+        // A clean quit writes the migrated, versioned document.
+        let saved = std::fs::read_to_string(fixture.task_path()).unwrap();
+        assert!(saved.contains("\"schema_version\": 1"), "{saved}");
+
         app.list.select(Some(2));
         assert_eq!(fixture.storage.load_document().unwrap().selected, Some(0));
 

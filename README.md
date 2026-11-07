@@ -314,9 +314,16 @@ Tasks are saved automatically to `tasks.json`. Undo/redo history is session-only
 and is not preserved across restarts. Old `history.json` files are ignored and
 can be removed manually if desired.
 
-The task file stores the checklist and selected task. Navigation is saved on normal
-quit; a crash may lose selection changes since the last task save. Legacy task arrays
-are still accepted and converted to the new object format on the next save or normal quit.
+The task file stores the checklist, the selected task, and the current section tab.
+Navigation is saved on normal quit; a crash may lose selection changes since the last
+task save.
+
+The file starts with a `schema_version` (currently `1`). Older files without one,
+including the original bare task lists, are upgraded in memory when sati starts and
+written in the current format on the next save or normal quit; starting sati never
+rewrites the file by itself. A file written by a newer version of sati is refused and
+left untouched, as is any file that cannot be read or upgraded. Older versions of sati
+cannot open version 1 files.
 
 ## Credits
 
