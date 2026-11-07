@@ -160,6 +160,8 @@ pub struct App {
     pub view: SectionView,
     // Clickable tab regions from the last draw.
     pub tab_targets: Vec<(Rect, SectionView)>,
+    // The first visible tab when they overflow; kept between draws so tabs don't slide.
+    pub tab_scroll: usize,
     // A Vim-style count typed before a motion; transient and never saved.
     pending_count: Option<usize>,
     completion: Option<Completion>,
@@ -196,6 +198,7 @@ impl App {
             notification: None,
             view: SectionView::All,
             tab_targets: Vec::new(),
+            tab_scroll: 0,
             pending_count: None,
             completion: None,
             task_register: None,
@@ -246,8 +249,8 @@ impl App {
         Ok(())
     }
 
-    // Tabs in display order: [*], sections alphabetically, then [-] for unsectioned tasks.
-    // Empty when no task has a section, which hides the tab bar.
+    // Tabs in display order: [*], [-] when some tasks have no section, then sections
+    // alphabetically. Empty when no task has a section, which hides the tab bar.
     pub fn section_tabs(&self) -> Vec<(SectionView, String)> {
         let mut named: Vec<(String, &str)> = Vec::new();
         let mut unsectioned = false;
@@ -273,15 +276,16 @@ impl App {
         named.sort_by(|left, right| left.0.cmp(&right.0));
 
         let mut tabs = vec![(SectionView::All, "[*]".to_owned())];
+
+        if unsectioned {
+            tabs.push((SectionView::Unsectioned, "[-]".to_owned()));
+        }
+
         tabs.extend(
             named
                 .into_iter()
                 .map(|(key, label)| (SectionView::Named(key), label.to_owned())),
         );
-
-        if unsectioned {
-            tabs.push((SectionView::Unsectioned, "[-]".to_owned()));
-        }
 
         tabs
     }
@@ -2340,7 +2344,7 @@ mod tests {
     }
 
     #[test]
-    fn section_tabs_list_current_sections_alphabetically_between_all_and_unsectioned() {
+    fn section_tabs_list_all_then_unsectioned_then_sections_alphabetically() {
         let mut app = app_with_texts(&["work: a", "Home: b", "plain", "Work: c", "Errands: d"]);
 
         let labels: Vec<_> = app
@@ -2350,7 +2354,7 @@ mod tests {
             .collect();
 
         // Sections match case-insensitively and take the first spelling in the list.
-        assert_eq!(labels, ["[*]", "Errands", "Home", "work", "[-]"]);
+        assert_eq!(labels, ["[*]", "[-]", "Errands", "Home", "work"]);
 
         app.tasks.remove(2);
         let labels: Vec<_> = app
@@ -2371,12 +2375,12 @@ mod tests {
         app.list.select(Some(2));
 
         for (key, view, selected) in [
+            (KeyCode::Tab, SectionView::Unsectioned, 3),
             (KeyCode::Tab, SectionView::Named("home".into()), 1),
             (KeyCode::Tab, SectionView::Named("work".into()), 0),
-            (KeyCode::Tab, SectionView::Unsectioned, 3),
-            (KeyCode::Tab, SectionView::All, 3),
-            (KeyCode::BackTab, SectionView::Unsectioned, 3),
+            (KeyCode::Tab, SectionView::All, 0),
             (KeyCode::BackTab, SectionView::Named("work".into()), 0),
+            (KeyCode::BackTab, SectionView::Named("home".into()), 1),
         ] {
             press(&mut app, &fixture, key);
 
@@ -2387,16 +2391,16 @@ mod tests {
         // Shift+Tab and held keys also cycle; releases do nothing.
         let shift_tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT);
         press(&mut app, &fixture, shift_tab);
-        assert_eq!(app.view, SectionView::Named("home".into()));
+        assert_eq!(app.view, SectionView::Unsectioned);
 
         let held = KeyEvent::new_with_kind(KeyCode::Tab, KeyModifiers::NONE, KeyEventKind::Repeat);
         press(&mut app, &fixture, held);
-        assert_eq!(app.view, SectionView::Named("work".into()));
+        assert_eq!(app.view, SectionView::Named("home".into()));
 
         let released =
             KeyEvent::new_with_kind(KeyCode::Tab, KeyModifiers::NONE, KeyEventKind::Release);
         press(&mut app, &fixture, released);
-        assert_eq!(app.view, SectionView::Named("work".into()));
+        assert_eq!(app.view, SectionView::Named("home".into()));
 
         assert!(!app.can_undo());
         assert!(!fixture.task_path().exists());

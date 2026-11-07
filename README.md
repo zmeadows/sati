@@ -98,12 +98,13 @@ clipboard.
 
 Start a task with one word, a colon, and a space, such as `Work: Fix bug`, to put it in
 the `Work` section. Sections are optional: with none, sati looks exactly as before. Once
-any task has a section, a tab bar appears at the top:
+any task has a section, tabs appear on the top border, with the current one shown in
+the accent color:
 
 - `[*]` shows every task in your order, with each section prefix in bold.
-- Each section has its own tab, in alphabetical order. `Work:` and `work:` are the same
-  section, labelled with the first spelling in the list.
-- `[-]` shows tasks without a section, when there are any.
+- `[-]` comes next and shows tasks without a section, when there are any.
+- Each section follows with its own tab, in alphabetical order. `Work:` and `work:` are
+  the same section, labelled with the first spelling in the list.
 
 Press `Tab` / `Shift+Tab` or click a tab to switch. A section tab hides the shared prefix
 and keeps navigation, counts, reordering (`J` / `K`), and search within its own tasks.
