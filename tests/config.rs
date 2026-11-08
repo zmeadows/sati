@@ -163,6 +163,8 @@ fn invalid_style_theme_and_toml_files_are_reported_before_storage_and_stay_untou
         "[styles.muted]\nmodifiers=['typo']",
         "[styles.border]\nbg='red'",
         "[styles.typo]",
+        "[input]\nmouse='off'",
+        "[input]\ntypo=true",
         "bad toml",
     ] {
         fixture.config(text);

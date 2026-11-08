@@ -48,6 +48,7 @@ fn marker_styles_are_documented_and_combine_with_existing_options() {
     assert!(help.contains("--marker-style") && help.contains("[x]") && help.contains("[>]"));
     assert!(help.contains("--border-style") && help.contains("rounded"));
     assert!(help.contains("--status-messages") && help.contains("--no-status-messages"));
+    assert!(help.contains("Input:") && help.contains("--mouse") && help.contains("--no-mouse"));
 
     let output = Command::new(env!("CARGO_BIN_EXE_sati"))
         .args(["--marker-style", "ascii", "--no-wrap", "--version"])

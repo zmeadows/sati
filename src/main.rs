@@ -54,6 +54,7 @@ const HELP_STYLES: Styles = Styles::styled()
     .placeholder(AnsiColor::Cyan.on_default());
 
 const DISPLAY_HEADING: &str = "Display";
+const INPUT_HEADING: &str = "Input";
 
 const CONFIG_HELP: &str = concat!(
     "Settings can also come from config.toml; command-line options take precedence.\n",
@@ -79,6 +80,7 @@ struct Options {
     theme: themes::BuiltinTheme,
     style_overrides: config::StyleOverrides,
     cli_accent: Option<Color>,
+    mouse: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -108,7 +110,7 @@ enum CliCommand {
     Export,
 }
 
-// Each on/off display pair overrides the other, so the last flag given wins.
+// Each on/off pair overrides the other, so the last flag given wins.
 #[derive(Debug, Args)]
 struct CliOptions {
     /// Read settings from this file instead of the default config.toml
@@ -156,6 +158,14 @@ struct CliOptions {
     /// Hide brief status messages; errors are still shown
     #[arg(long, overrides_with = "status_messages", help_heading = DISPLAY_HEADING)]
     no_status_messages: bool,
+
+    /// Capture the mouse to click tasks and tabs and scroll with the wheel (default)
+    #[arg(long, overrides_with = "no_mouse", help_heading = INPUT_HEADING)]
+    mouse: bool,
+
+    /// Leave the mouse to the terminal, e.g. for selecting text; keys work as usual
+    #[arg(long, overrides_with = "mouse", help_heading = INPUT_HEADING)]
+    no_mouse: bool,
 }
 
 impl CliOptions {
@@ -189,6 +199,9 @@ impl CliOptions {
             theme,
             style_overrides: config.styles,
             cli_accent: self.accent,
+            mouse: chosen_flag(self.mouse, self.no_mouse)
+                .or(config.input.mouse)
+                .unwrap_or(true),
         }
     }
 }
@@ -287,7 +300,7 @@ fn run() -> Result<()> {
         // The capability probe retries reader errors internally; validate input first.
         event::poll(std::time::Duration::ZERO)?;
         let enhanced = keyboard_support(terminal::supports_keyboard_enhancement())?;
-        modes.enable_input(&mut io::stdout(), enhanced)?;
+        modes.enable_input(&mut io::stdout(), enhanced, options.mouse)?;
 
         let mut background = None;
         let mut rendered_theme = app.theme;
@@ -418,8 +431,17 @@ impl TerminalModes {
         Ok(())
     }
 
-    fn enable_input(&self, output: &mut impl io::Write, enhanced: bool) -> io::Result<()> {
-        enable_optional(output, &self.mouse, EnableMouseCapture)?;
+    fn enable_input(
+        &self,
+        output: &mut impl io::Write,
+        enhanced: bool,
+        mouse: bool,
+    ) -> io::Result<()> {
+        // With mouse capture off, `self.mouse` stays false, so cleanup never disables it either.
+        if mouse {
+            enable_optional(output, &self.mouse, EnableMouseCapture)?;
+        }
+
         // Crossterm's Windows console reader does not emit Paste events.
         #[cfg(unix)]
         enable_optional(output, &self.paste, EnableBracketedPaste)?;
@@ -1150,7 +1172,10 @@ mod tests {
         };
 
         assert_eq!(
-            modes.enable_input(&mut output, true).unwrap_err().kind(),
+            modes
+                .enable_input(&mut output, true, true)
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::BrokenPipe
         );
 
@@ -1161,7 +1186,7 @@ mod tests {
         assert!(!restored.contains("\x1b[<1u"));
 
         let modes = TerminalModes::default();
-        modes.enable_input(&mut Vec::new(), true).unwrap();
+        modes.enable_input(&mut Vec::new(), true, true).unwrap();
         let mut output = FailOnce {
             write_remaining: Some(0),
             ..FailOnce::default()
@@ -1283,28 +1308,95 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn input_cleanup_matches_enabled_modes_and_is_not_repeated() {
-        for enhanced in [false, true] {
-            let modes = TerminalModes::default();
-            let mut output = Vec::new();
-            modes.enable_input(&mut output, enhanced).unwrap();
-            let enabled = String::from_utf8(output).unwrap();
+        let mut enable_mouse = String::new();
+        EnableMouseCapture.write_ansi(&mut enable_mouse).unwrap();
 
-            assert!(enabled.contains("\x1b[?1006h"));
-            assert!(enabled.contains("\x1b[?2004h"));
-            assert_eq!(enabled.contains("\x1b[>15u"), enhanced);
+        let mut disable_mouse = String::new();
+        DisableMouseCapture.write_ansi(&mut disable_mouse).unwrap();
 
-            let mut restored = Vec::new();
-            modes.restore(&mut restored).unwrap();
-            let restored = String::from_utf8(restored).unwrap();
+        for mouse in [false, true] {
+            for enhanced in [false, true] {
+                let modes = TerminalModes::default();
+                let mut output = Vec::new();
+                modes.enable_input(&mut output, enhanced, mouse).unwrap();
+                let enabled = String::from_utf8(output).unwrap();
 
-            assert!(restored.contains("\x1b[?2004l"));
-            assert!(restored.contains("\x1b[?1006l"));
-            assert_eq!(restored.contains("\x1b[<1u"), enhanced);
+                assert_eq!(enabled.contains(&enable_mouse), mouse);
+                assert_eq!(enabled.contains("\x1b[?1000h"), mouse);
+                assert!(enabled.contains("\x1b[?2004h"));
+                assert_eq!(enabled.contains("\x1b[>15u"), enhanced);
+                assert_eq!(modes.mouse.load(Ordering::Relaxed), mouse);
 
-            let mut repeated = Vec::new();
-            modes.restore(&mut repeated).unwrap();
-            assert!(repeated.is_empty());
+                let mut restored = Vec::new();
+                modes.restore(&mut restored).unwrap();
+                let restored = String::from_utf8(restored).unwrap();
+
+                assert!(restored.contains("\x1b[?2004l"));
+                assert_eq!(restored.contains(&disable_mouse), mouse);
+                assert_eq!(restored.contains("\x1b[?1000l"), mouse);
+                assert_eq!(restored.contains("\x1b[<1u"), enhanced);
+
+                let mut repeated = Vec::new();
+                modes.restore(&mut repeated).unwrap();
+                assert!(repeated.is_empty());
+            }
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failed_setup_without_mouse_restores_paste_but_never_touches_mouse_reporting() {
+        let modes = TerminalModes::default();
+        let mut output = FailOnce {
+            write_remaining: Some("\x1b[?2004h".len()),
+            ..FailOnce::default()
+        };
+
+        assert_eq!(
+            modes
+                .enable_input(&mut output, true, false)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        assert_eq!(output.bytes, b"\x1b[?2004h");
+
+        output.bytes.clear();
+        modes.restore(&mut output).unwrap();
+
+        assert_eq!(output.bytes, b"\x1b[?2004l");
+    }
+
+    #[test]
+    fn mouse_capture_defaults_on_and_cli_overrides_toml_in_both_directions() {
+        assert!(resolve_defaults(&[]).mouse);
+
+        for configured in [true, false] {
+            let text = format!("[input]\nmouse = {configured}");
+            let config = || toml::from_str::<config::Config>(&text).unwrap();
+
+            assert_eq!(parse_cli(&[]).unwrap().resolve(config()).mouse, configured);
+
+            for (flag, expected) in [("--mouse", true), ("--no-mouse", false)] {
+                let options = parse_cli(&[flag]).unwrap().resolve(config());
+
+                assert_eq!(options.mouse, expected, "{flag} over {configured}");
+            }
+        }
+
+        // The last flag of the pair wins, and mouse flags leave display options alone.
+        assert!(!resolve_defaults(&["--mouse", "--no-mouse"]).mouse);
+        assert!(resolve_defaults(&["--no-mouse", "--mouse"]).mouse);
+        assert_eq!(
+            resolve_defaults(&["--no-mouse"]),
+            Options {
+                mouse: false,
+                ..resolve_defaults(&[])
+            }
+        );
+        assert!(parse_cli(&["--no-mouse=true"]).is_err());
+        assert!(Cli::try_parse_from(["sati", "export", "--no-mouse"]).is_err());
+        assert!(Cli::try_parse_from(["sati", "--no-mouse", "export"]).is_err());
     }
 
     #[test]

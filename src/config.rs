@@ -18,6 +18,8 @@ pub struct Config {
     pub display: Display,
     #[serde(default)]
     pub styles: StyleOverrides,
+    #[serde(default)]
+    pub input: Input,
 }
 
 #[derive(Debug, Default, PartialEq, Deserialize)]
@@ -30,6 +32,12 @@ pub struct Display {
     // Total lifetime of a status message; serde rejects zero, negatives, and non-integers.
     pub status_message_duration_ms: Option<NonZeroU64>,
     pub show_help_hint: Option<bool>,
+}
+
+#[derive(Debug, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Input {
+    pub mouse: Option<bool>,
 }
 
 // Shared by config.toml, the command line, and the app, so each value is spelled one way.
@@ -335,6 +343,35 @@ mod tests {
         assert_eq!(config.display.show_help_hint, Some(false));
         assert!(toml::from_str::<Config>("[display]\nshow_help_hint = 'no'").is_err());
         assert!(toml::from_str::<Config>("[display]\nhelp_hint = false").is_err());
+    }
+
+    #[test]
+    fn input_mouse_is_an_optional_strict_boolean() {
+        assert_eq!(
+            toml::from_str::<Config>("").unwrap().input,
+            Input::default()
+        );
+
+        for value in [true, false] {
+            let config: Config = toml::from_str(&format!("[input]\nmouse = {value}")).unwrap();
+
+            assert_eq!(config.input.mouse, Some(value));
+        }
+
+        for text in [
+            "[input]\nmouse = 'false'",
+            "[input]\nmouse = 0",
+            "[input]\nmouse_capture = false",
+            "[input]\nkeybinds = {}",
+            "[display]\nmouse = false",
+            "mouse = false",
+        ] {
+            assert!(toml::from_str::<Config>(text).is_err(), "accepted {text}");
+        }
+
+        let error = toml::from_str::<Config>("[input]\nmouse = 'no'").unwrap_err();
+
+        assert!(error.to_string().contains("invalid type"), "{error}");
     }
 
     #[test]

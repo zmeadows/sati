@@ -20,7 +20,7 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 
 - **One local list.** Changes are saved automatically, without accounts or synchronization. A muted `? for help` in the bottom-right corner is the only on-screen hint.
 - **Shortcuts on demand.** Press `?` for a keyboard reference instead of a permanent shortcut footer.
-- **Keyboard-first, with mouse support.** Navigate, reorder, and complete tasks from the keyboard. Click a task to toggle it, or scroll with the mouse wheel.
+- **Keyboard-first, with optional mouse support.** Navigate, reorder, and complete tasks from the keyboard. Click a task to toggle it, or scroll with the mouse wheel; `--no-mouse` leaves the mouse to your terminal.
 - **Search in place.** Find tasks as you type, see matching text highlighted, and jump to a result without filtering or rearranging the list.
 - **Sections.** Start a task with `Name: ` to group it; a tab bar then lets you focus on one section at a time.
 - **Carryover.** Mark unfinished tasks with `m` (`[↪]`) to keep them when clearing the list.
@@ -215,6 +215,7 @@ adds nothing.
 | `--border-style square\|rounded` | Draw square (default) or rounded border corners. |
 | `--marker-style unicode\|ascii` | Use Unicode (default) or ASCII task markers. |
 | `--status-messages` / `--no-status-messages` | Show / hide brief status messages on the border. |
+| `--mouse` / `--no-mouse` | Enable (default) / disable mouse capture. |
 | `--accent COLOR` | Override the theme/TOML accent foreground: ANSI name, hex RGB, or palette index 0–255. |
 
 Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--marker-style ascii` uses `>`, `[ ]`, `[x]`, and `[>]`; it changes only task markers, and other UI symbols remain Unicode.
@@ -256,6 +257,9 @@ status_messages = true
 status_message_duration_ms = 3560
 show_help_hint = true
 
+[input]
+mouse = true
+
 [styles.normal]
 fg = "reset"
 bg = "#20242d"
@@ -283,6 +287,12 @@ Two display preferences exist only in the configuration file, without command-li
   status message, including errors that are shown even with `status_messages = false`.
 - `show_help_hint` (default `true`) shows the muted `? for help` in the bottom-right corner.
   Set it to `false` to hide that hint; `?` still opens the keyboard reference.
+
+`[input] mouse` (default `true`) lets sati capture the mouse: clicking a task toggles it,
+clicking a tab switches to it, and the wheel scrolls the checklist and the keyboard reference.
+Set it to `false` (or pass `--no-mouse`; `--mouse` turns it back on) to stop sati from
+requesting mouse reporting at all. The mouse then behaves as in any other terminal program,
+so you can select and copy text with it, and every action stays available from the keyboard.
 
 Use `sati --config ./sati.toml` for another file. sati never creates or edits
 configuration files. A missing default file is harmless; an explicit file must
