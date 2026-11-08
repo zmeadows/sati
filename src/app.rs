@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::{Duration, Instant};
 
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
@@ -18,6 +19,10 @@ const HISTORY_LIMIT: usize = 256;
 
 // The name the section picker matches [-] by.
 const UNSECTIONED_NAME: &str = "unsectioned";
+
+// A count or `s` prefix is forgotten this long after its last key, so a stray digit typed
+// now cannot turn a much later `j` into a jump.
+const PREFIX_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -393,10 +398,12 @@ pub struct App {
     pub tab_targets: Vec<(Rect, SectionView)>,
     // The first visible tab when they overflow; kept between draws so tabs don't slide.
     pub tab_scroll: usize,
-    // A Vim-style count typed before a motion; transient and never saved.
-    pending_count: Option<usize>,
-    // Set by `s` / Alt+S: the next key picks a tab by number. Transient and never saved.
-    pending_section_jump: bool,
+    // A Vim-style count typed before a motion, with when its last digit was typed; transient
+    // and never saved.
+    pending_count: Option<(usize, Instant)>,
+    // Set by `s` / Alt+S, with when it was typed: the next key picks a tab by number.
+    // Transient and never saved.
+    pending_section_jump: Option<Instant>,
     completion: Option<Completion>,
     task_register: Option<String>,
     history: VecDeque<UndoState>,
@@ -436,7 +443,7 @@ impl App {
             tab_targets: Vec::new(),
             tab_scroll: 0,
             pending_count: None,
-            pending_section_jump: false,
+            pending_section_jump: None,
             completion: None,
             task_register: None,
             history: VecDeque::new(),
@@ -1035,7 +1042,15 @@ impl App {
     }
 
     pub fn section_jump_pending(&self) -> bool {
-        self.pending_section_jump
+        self.section_jump_expires_in(Instant::now()).is_some()
+    }
+
+    // How long a pending `s` prefix has left, so the event loop can redraw without its hint.
+    pub fn section_jump_expires_in(&self, now: Instant) -> Option<Duration> {
+        let typed_at = self.pending_section_jump?;
+        let remaining = PREFIX_TIMEOUT.saturating_sub(now.saturating_duration_since(typed_at));
+
+        (!remaining.is_zero()).then_some(remaining)
     }
 
     pub fn search_query(&self) -> Option<&str> {
@@ -1582,12 +1597,22 @@ impl App {
 
         self.notification = None;
 
-        // Every accepted key consumes a pending count, even shortcuts that ignore it.
-        let count = self.pending_count.take();
+        // Every accepted key consumes a pending count, even shortcuts that ignore it. An
+        // expired count is simply gone, so the key acts as if none was typed.
+        let now = Instant::now();
+        let count = self
+            .pending_count
+            .take()
+            .filter(|(_, typed_at)| now.saturating_duration_since(*typed_at) < PREFIX_TIMEOUT)
+            .map(|(count, _)| count);
 
         // After `s` / Alt+S, a digit picks a tab. Any other key only cancels the jump, so a
-        // mistyped follow-up never runs its own, possibly destructive, shortcut.
-        if std::mem::take(&mut self.pending_section_jump) {
+        // mistyped follow-up never runs its own, possibly destructive, shortcut. An expired
+        // jump is forgotten, and the key runs normally.
+        let section_jump = self.section_jump_expires_in(now).is_some();
+        self.pending_section_jump = None;
+
+        if section_jump {
             if let KeyCode::Char(digit @ '0'..='9') = key.code
                 && key.modifiers.is_empty()
             {
@@ -1769,7 +1794,7 @@ impl App {
                 KeyCode::Char('f' | 'F') => self.cycle_section(true, None),
                 KeyCode::Char('p' | 'P') => self.move_section(false, 1, storage)?,
                 KeyCode::Char('n' | 'N') => self.move_section(true, 1, storage)?,
-                KeyCode::Char('s' | 'S') => self.pending_section_jump = true,
+                KeyCode::Char('s' | 'S') => self.pending_section_jump = Some(Instant::now()),
                 _ => {}
             }
 
@@ -2007,7 +2032,7 @@ impl App {
             KeyCode::Char(digit @ '0'..='9') if digit != '0' || count.is_some() => {
                 let value = digit.to_digit(10).unwrap() as usize;
                 let count = count.unwrap_or(0).saturating_mul(10).saturating_add(value);
-                self.pending_count = Some(count);
+                self.pending_count = Some((count, Instant::now()));
             }
             KeyCode::Char('/') => self.start_search(),
             KeyCode::Char('`') => self.start_section_picker(),
@@ -2061,7 +2086,7 @@ impl App {
             }
             KeyCode::Char('h') => self.cycle_section(false, count),
             KeyCode::Char('l') => self.cycle_section(true, count),
-            KeyCode::Char('s') => self.pending_section_jump = true,
+            KeyCode::Char('s') => self.pending_section_jump = Some(Instant::now()),
             KeyCode::Tab | KeyCode::BackTab
                 if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
             {
@@ -2173,7 +2198,7 @@ impl App {
     pub fn paste(&mut self, text: &str) {
         self.notification = None;
         self.pending_count = None;
-        self.pending_section_jump = false;
+        self.pending_section_jump = None;
         self.accept_completion();
         let previous_query = self.search_query().map(str::to_owned);
 
@@ -2200,7 +2225,7 @@ impl App {
     pub fn mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
         self.notification = None;
         self.pending_count = None;
-        self.pending_section_jump = false;
+        self.pending_section_jump = None;
 
         if self.mode == Mode::Normal
             && event.kind == MouseEventKind::Down(MouseButton::Left)
@@ -6641,6 +6666,46 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Char('j'));
 
         assert_eq!(app.list.selected(), Some(5));
+    }
+
+    // Pretends the pending count and `s` prefix were typed a full timeout ago.
+    fn let_prefixes_expire(app: &mut App) {
+        let expired = Instant::now()
+            .checked_sub(PREFIX_TIMEOUT)
+            .expect("the clock is past the prefix timeout");
+
+        app.pending_count = app.pending_count.map(|(count, _)| (count, expired));
+        app.pending_section_jump = app.pending_section_jump.map(|_| expired);
+    }
+
+    #[test]
+    fn a_count_left_pending_past_the_timeout_is_forgotten() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(10);
+        type_keys(&mut app, &fixture, "4");
+
+        let_prefixes_expire(&mut app);
+        press(&mut app, &fixture, KeyCode::Char('j'));
+
+        assert_eq!(app.list.selected(), Some(1));
+    }
+
+    #[test]
+    fn an_s_prefix_left_pending_past_the_timeout_is_forgotten() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c"]);
+        press(&mut app, &fixture, KeyCode::Char('s'));
+        assert!(app.section_jump_pending());
+
+        let_prefixes_expire(&mut app);
+
+        assert!(!app.section_jump_pending());
+
+        // The digit starts an ordinary count instead of jumping to a tab.
+        type_keys(&mut app, &fixture, "2j");
+
+        assert_eq!(app.view, SectionView::All);
+        assert_eq!(app.list.selected(), Some(2));
     }
 
     #[test]

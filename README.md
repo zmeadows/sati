@@ -92,7 +92,7 @@ down five tasks, `3K` moves the selected task up three, `3l` switches three sect
 right, and `2H` moves the current section two places left. Counts also work with the
 arrow and `Ctrl+N` / `Ctrl+P` aliases of `j` / `k`, and counted moves stop at the first
 or last task or tab instead of wrapping. A counted reorder is a single change for `u`.
-`Esc` cancels a count.
+`Esc` cancels a count, and sati forgets one after two seconds without another key.
 
 Holding a key repeats navigation (`j` / `k`, `h` / `l`, arrows, `Tab`, `Alt+B` / `Alt+F`,
 Page Up/Down), but commands that change tasks or section order, such as `d`, `J` / `K`,
@@ -120,7 +120,8 @@ Press `l` / `h` (or `Tab` / `Shift+Tab`, `Alt+F` / `Alt+B`) or click a tab to sw
 ends wrap around. `s` followed by a digit jumps straight to a tab by position: `s1` is
 `[*]`, `s2` the next tab, and `s0` the tenth. `Alt+S` works the same way. While sati waits
 for the digit, each of the first ten tabs shows its number just below its name. A digit
-past the last tab does nothing, and any other key after `s` just cancels the jump.
+past the last tab does nothing, and any other key after `s` just cancels the jump. After
+two seconds without a digit, the jump is forgotten and the numbers disappear.
 
 Press `` ` `` to find a section by name. `[*]` turns into a small input, and the tabs to
 its right narrow to the sections that fuzzy-match what you type (`wl` finds `Wishlist`),

@@ -203,11 +203,19 @@ fn run() -> Result<()> {
             let mut rows = ratatui::layout::Rect::default();
             terminal.draw(|frame| rows = ui::draw(frame, &mut app))?;
 
-            // Without a notification to animate, block until the next input event.
-            if let Some(wait) = app
+            // Wake to animate a notification or to hide an expired `s` hint; otherwise block
+            // until the next input event.
+            let notification_redraw = app
                 .notification
                 .as_ref()
-                .and_then(|notice| notice.next_redraw(draw_started))
+                .and_then(|notice| notice.next_redraw(draw_started));
+            let section_jump_redraw = app.section_jump_expires_in(draw_started);
+            let next_redraw = [notification_redraw, section_jump_redraw]
+                .into_iter()
+                .flatten()
+                .min();
+
+            if let Some(wait) = next_redraw
                 && !event::poll(wait.saturating_sub(draw_started.elapsed()))?
             {
                 continue;
