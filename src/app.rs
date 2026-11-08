@@ -351,6 +351,20 @@ pub enum Mode {
     },
 }
 
+impl Mode {
+    // The single-line input that each typing mode edits.
+    fn text_input_mut(&mut self) -> Option<&mut TextInput> {
+        match self {
+            Mode::Adding(input, _)
+            | Mode::Editing { input, .. }
+            | Mode::Searching { input, .. }
+            | Mode::RenamingSection { input }
+            | Mode::FuzzySection { input, .. } => Some(input),
+            Mode::Normal | Mode::ConfirmClear | Mode::Help { .. } => None,
+        }
+    }
+}
+
 // Where navigation stood when the section picker opened. Previews change the view,
 // selection, and scrolling freely; cancelling puts all of them back.
 #[derive(Debug, PartialEq)]
@@ -1671,40 +1685,29 @@ impl App {
             return Ok(false);
         }
 
-        // Modifier shortcuts edit the input directly, so a pending suggestion is dropped.
-        if key
-            .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
-        {
-            self.completion = None;
-        }
-
         let previous_query = self.search_query().map(str::to_owned);
 
-        if self.consume_modified_key(key, storage)? {
-            self.refresh_search(previous_query.as_deref());
-            self.refresh_section_picker();
-            self.explain_rename_problem();
-            return Ok(false);
-        }
-
-        let quit = match self.mode {
-            Mode::Normal => self.handle_normal_key(key, count, storage)?,
-            Mode::Adding(_, _)
-            | Mode::Editing { .. }
-            | Mode::Searching { .. }
-            | Mode::RenamingSection { .. }
-            | Mode::FuzzySection { .. } => {
-                self.handle_text_input_key(key, storage)?;
-                false
-            }
-            Mode::ConfirmClear => {
-                self.handle_confirm_clear_key(key, storage)?;
-                false
-            }
-            Mode::Help { .. } => {
-                self.handle_help_key(key);
-                false
+        let quit = if self.handle_modified_key(key, storage)? {
+            false
+        } else {
+            match self.mode {
+                Mode::Normal => self.handle_normal_key(key, count, storage)?,
+                Mode::Adding(_, _)
+                | Mode::Editing { .. }
+                | Mode::Searching { .. }
+                | Mode::RenamingSection { .. }
+                | Mode::FuzzySection { .. } => {
+                    self.handle_text_input_key(key, storage)?;
+                    false
+                }
+                Mode::ConfirmClear => {
+                    self.handle_confirm_clear_key(key, storage)?;
+                    false
+                }
+                Mode::Help { .. } => {
+                    self.handle_help_key(key);
+                    false
+                }
             }
         };
 
@@ -1842,121 +1845,92 @@ impl App {
         }
     }
 
-    // Returns true when the event was consumed, including ignored modifier combinations.
-    fn consume_modified_key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
-        // Windows reports AltGr text as Ctrl+Alt; the backend cannot distinguish
-        // it from a literal Ctrl+Alt character shortcut. Accept it only in input modes.
-        if cfg!(windows)
-            && key.modifiers.difference(KeyModifiers::SHIFT)
-                == (KeyModifiers::CONTROL | KeyModifiers::ALT)
-            && let (
-                Mode::Adding(input, _)
-                | Mode::Editing { input, .. }
-                | Mode::Searching { input, .. }
-                | Mode::RenamingSection { input }
-                | Mode::FuzzySection { input, .. },
-                KeyCode::Char(character),
-            ) = (&mut self.mode, key.code)
-            && !character.is_control()
+    // Every key held with Control, Alt, or Super ends here, listed or not, so the mode handlers
+    // only see plain and Shift keys: an unlisted chord such as Ctrl+J does nothing rather than
+    // acting as `j`. Returns false for keys without those modifiers.
+    fn handle_modified_key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
+        if !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
         {
-            input.insert(single_line_character(character).encode_utf8(&mut [0; 4]));
-            return Ok(true);
+            return Ok(false);
         }
 
-        if key.modifiers == KeyModifiers::ALT
-            && matches!(
-                key.code,
-                KeyCode::Char('b' | 'B' | 'f' | 'F' | 'd' | 'D') | KeyCode::Backspace
-            )
-            && let Mode::Adding(input, _)
-            | Mode::Editing { input, .. }
-            | Mode::Searching { input, .. }
-            | Mode::RenamingSection { input }
-            | Mode::FuzzySection { input, .. } = &mut self.mode
-        {
-            match key.code {
-                KeyCode::Char('b' | 'B') => input.move_word_left(),
-                KeyCode::Char('f' | 'F') => input.move_word_right(),
-                KeyCode::Char('d' | 'D') => input.delete_word_after(),
-                KeyCode::Backspace => input.delete_word_before(),
-                _ => unreachable!(),
-            }
+        // These shortcuts edit the input directly, so a pending suggestion is dropped.
+        self.completion = None;
 
-            return Ok(true);
-        }
+        if self.mode == Mode::Normal {
+            let half_page = usize::from(self.viewport_height / 2);
 
-        // Outside text input, Alt+B/F switch sections the way they move between words.
-        if self.mode == Mode::Normal && key.modifiers == KeyModifiers::ALT {
-            match key.code {
-                KeyCode::Char('w' | 'W') => self.yank_task(),
-                KeyCode::Char('b' | 'B') => self.cycle_section(false, None),
-                KeyCode::Char('f' | 'F') => self.cycle_section(true, None),
-                KeyCode::Char('p' | 'P') => self.move_section(false, 1, storage)?,
-                KeyCode::Char('n' | 'N') => self.move_section(true, 1, storage)?,
-                KeyCode::Char('s' | 'S') => self.pending_section_jump = Some(Instant::now()),
+            // Alt+B/F switch sections the way they move between words in text inputs, where
+            // Ctrl+D/U delete text instead of moving half a page.
+            match (key.modifiers, key.code) {
+                (KeyModifiers::ALT, KeyCode::Char('w' | 'W')) => self.yank_task(),
+                (KeyModifiers::ALT, KeyCode::Char('b' | 'B')) => self.cycle_section(false, None),
+                (KeyModifiers::ALT, KeyCode::Char('f' | 'F')) => self.cycle_section(true, None),
+                (KeyModifiers::ALT, KeyCode::Char('p' | 'P')) => {
+                    self.move_section(false, 1, storage)?
+                }
+                (KeyModifiers::ALT, KeyCode::Char('n' | 'N')) => {
+                    self.move_section(true, 1, storage)?
+                }
+                (KeyModifiers::ALT, KeyCode::Char('s' | 'S')) => {
+                    self.pending_section_jump = Some(Instant::now())
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('z' | 'Z')) => self.undo(storage)?,
+                (KeyModifiers::CONTROL, KeyCode::Char('r' | 'R')) => self.redo(storage)?,
+                (KeyModifiers::CONTROL, KeyCode::Char('y' | 'Y')) => {
+                    self.paste_task(AddPlacement::Below, storage)?
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('f' | 'F' | 's' | 'S')) => {
+                    self.start_search()
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('d' | 'D')) => self.page(true, half_page),
+                (KeyModifiers::CONTROL, KeyCode::Char('u' | 'U')) => self.page(false, half_page),
                 _ => {}
             }
 
             return Ok(true);
         }
 
-        // Only the explicitly supported input shortcuts may consume other Control events.
-        if key
-            .modifiers
-            .intersects(KeyModifiers::ALT | KeyModifiers::SUPER)
-        {
+        // The clear confirmation and the keyboard reference ignore modified keys.
+        let Some(input) = self.mode.text_input_mut() else {
             return Ok(true);
-        }
+        };
 
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            if key.modifiers == KeyModifiers::CONTROL {
-                if self.mode == Mode::Normal {
-                    match key.code {
-                        KeyCode::Char('z' | 'Z') => self.undo(storage)?,
-                        KeyCode::Char('r' | 'R') => self.redo(storage)?,
-                        KeyCode::Char('y' | 'Y') => {
-                            self.paste_task(AddPlacement::Below, storage)?
-                        }
-                        KeyCode::Char('f' | 'F' | 's' | 'S') => self.start_search(),
-                        // In text inputs, Ctrl+D/U delete text instead.
-                        KeyCode::Char('d' | 'D') => {
-                            self.page(true, usize::from(self.viewport_height / 2))
-                        }
-                        KeyCode::Char('u' | 'U') => {
-                            self.page(false, usize::from(self.viewport_height / 2))
-                        }
-                        _ => {}
-                    }
-
-                    return Ok(true);
-                }
-
-                if let Mode::Adding(input, _)
-                | Mode::Editing { input, .. }
-                | Mode::Searching { input, .. }
-                | Mode::RenamingSection { input }
-                | Mode::FuzzySection { input, .. } = &mut self.mode
-                {
-                    match key.code {
-                        KeyCode::Char('a' | 'A') => input.set_cursor(0),
-                        KeyCode::Char('e' | 'E') => input.set_cursor(input.text().len()),
-                        KeyCode::Left => input.move_word_left(),
-                        KeyCode::Right => input.move_word_right(),
-                        KeyCode::Backspace | KeyCode::Char('w' | 'W') => input.delete_word_before(),
-                        KeyCode::Char('b' | 'B') => input.move_left(),
-                        KeyCode::Char('f' | 'F') => input.move_right(),
-                        KeyCode::Char('d' | 'D') => input.delete_after(),
-                        KeyCode::Char('k' | 'K') => input.delete_to_end(),
-                        KeyCode::Char('u' | 'U') => input.delete_to_start(),
-                        _ => {}
-                    }
-                }
+        match (key.modifiers, key.code) {
+            (KeyModifiers::ALT, KeyCode::Char('b' | 'B')) => input.move_word_left(),
+            (KeyModifiers::ALT, KeyCode::Char('f' | 'F')) => input.move_word_right(),
+            (KeyModifiers::ALT, KeyCode::Char('d' | 'D')) => input.delete_word_after(),
+            (KeyModifiers::ALT, KeyCode::Backspace) => input.delete_word_before(),
+            (KeyModifiers::CONTROL, KeyCode::Char('a' | 'A')) => input.set_cursor(0),
+            (KeyModifiers::CONTROL, KeyCode::Char('e' | 'E')) => {
+                input.set_cursor(input.text().len())
             }
-
-            return Ok(true);
+            (KeyModifiers::CONTROL, KeyCode::Left) => input.move_word_left(),
+            (KeyModifiers::CONTROL, KeyCode::Right) => input.move_word_right(),
+            (KeyModifiers::CONTROL, KeyCode::Backspace | KeyCode::Char('w' | 'W')) => {
+                input.delete_word_before()
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('b' | 'B')) => input.move_left(),
+            (KeyModifiers::CONTROL, KeyCode::Char('f' | 'F')) => input.move_right(),
+            (KeyModifiers::CONTROL, KeyCode::Char('d' | 'D')) => input.delete_after(),
+            (KeyModifiers::CONTROL, KeyCode::Char('k' | 'K')) => input.delete_to_end(),
+            (KeyModifiers::CONTROL, KeyCode::Char('u' | 'U')) => input.delete_to_start(),
+            // Windows reports AltGr text as Ctrl+Alt, which the backend cannot tell apart from
+            // a literal Ctrl+Alt shortcut, so it is accepted as typed text in inputs only.
+            (modifiers, KeyCode::Char(character))
+                if cfg!(windows)
+                    && modifiers.difference(KeyModifiers::SHIFT)
+                        == (KeyModifiers::CONTROL | KeyModifiers::ALT)
+                    && !character.is_control() =>
+            {
+                input.insert(single_line_character(character).encode_utf8(&mut [0; 4]));
+            }
+            _ => {}
         }
 
-        Ok(false)
+        Ok(true)
     }
 
     fn handle_text_input_key(&mut self, key: KeyEvent, storage: &Storage) -> Result<()> {
@@ -2050,12 +2024,7 @@ impl App {
 
         let renaming = matches!(self.mode, Mode::RenamingSection { .. });
 
-        let (Mode::Adding(input, _)
-        | Mode::Editing { input, .. }
-        | Mode::Searching { input, .. }
-        | Mode::RenamingSection { input }
-        | Mode::FuzzySection { input, .. }) = &mut self.mode
-        else {
+        let Some(input) = self.mode.text_input_mut() else {
             unreachable!("text input mode");
         };
 
@@ -2325,12 +2294,7 @@ impl App {
         self.accept_completion();
         let previous_query = self.search_query().map(str::to_owned);
 
-        if let Mode::Adding(input, _)
-        | Mode::Editing { input, .. }
-        | Mode::Searching { input, .. }
-        | Mode::RenamingSection { input }
-        | Mode::FuzzySection { input, .. } = &mut self.mode
-        {
+        if let Some(input) = self.mode.text_input_mut() {
             let normalized: String = text
                 .replace("\r\n", "\n")
                 .chars()
