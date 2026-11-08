@@ -1027,84 +1027,59 @@ type HelpRow = (&'static str, &'static str, &'static str);
 // The `?` keyboard reference: headed groups of (action, keys, Ctrl/Alt alternative). Keep it
 // in sync with the key dispatch in app.rs. Page Up/Down and Ctrl+V/Alt+V are deliberately
 // left out, like everywhere else on screen.
+#[rustfmt::skip]
 const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
-    (
-        "Tasks",
-        &[
-            ("Next / previous task", "j / k, ↓ / ↑", "Ctrl+N / Ctrl+P"),
-            ("First / last task", "g / G, Home / End", ""),
-            ("Half screen down / up", "", "Ctrl+D / Ctrl+U"),
-            ("Repeat a move", "count first, e.g. 5j", ""),
-        ],
-    ),
-    (
-        "Sections",
-        &[
-            (
-                "Next / previous tab",
-                "l / h, Tab / Shift+Tab",
-                "Alt+F / Alt+B",
-            ),
-            ("Go to tab 1–10", "s1 … s9, s0", "Alt+S, digit"),
-            ("Find tab by name", "`", "Alt+G"),
-            ("Move tab right / left", "L / H", "Alt+N / Alt+P"),
-            ("Rename section", "E", ""),
-        ],
-    ),
-    (
-        "Changing tasks",
-        &[
-            ("Check / uncheck", "Space, Enter", ""),
-            ("Append task", "a", ""),
-            ("Add task below", "o", "Ctrl+O"),
-            ("Add task above", "O", ""),
-            ("Edit task", "e", "Alt+E"),
-            ("Move task down / up", "J / K", "Alt+↓ / Alt+↑"),
-            ("Toggle carryover", "m", ""),
-            ("Delete task", "d, Delete", ""),
-            ("Clear completed", "X", ""),
-            ("Clear unmarked", "D", ""),
-        ],
-    ),
-    (
-        "Copy and undo",
-        &[
-            ("Copy task", "y", "Alt+W"),
-            ("Paste below / above", "p / P", "Ctrl+Y (below)"),
-            ("Undo", "u", "Ctrl+Z"),
-            ("Redo", "", "Ctrl+R"),
-            ("Copy list as Markdown", "c", ""),
-        ],
-    ),
-    (
-        "Other",
-        &[
-            ("Search", "/", "Ctrl+F, Ctrl+S"),
-            ("Toggle wrapping", "w", ""),
-            ("Next / previous theme", "t / T", ""),
-            ("Keyboard shortcuts", "?", ""),
-            ("Quit", "q", ""),
-        ],
-    ),
-    (
-        "While typing",
-        &[
-            ("Move cursor", "← / →", "Ctrl+B / Ctrl+F"),
-            ("Start / end of text", "Home / End", "Ctrl+A / Ctrl+E"),
-            ("Previous / next word", "Ctrl+← / Ctrl+→", "Alt+B / Alt+F"),
-            ("Delete previous word", "Ctrl/Alt+Backspace", "Ctrl+W"),
-            ("Delete next word", "", "Alt+D"),
-            ("Delete character", "Delete", "Ctrl+D"),
-            ("Delete to end / start", "", "Ctrl+K / Ctrl+U"),
-            (
-                "Next / previous match",
-                "Tab / Shift+Tab",
-                "Ctrl+N / Ctrl+P",
-            ),
-            ("Confirm", "Enter", ""),
-            ("Cancel", "Esc", "Ctrl+G"),
-        ],
-    ),
+    ("Tasks", &[
+        ("Next / previous task", "j / k, ↓ / ↑", "Ctrl+N / Ctrl+P"),
+        ("First / last task", "g / G, Home / End", ""),
+        ("Half screen down / up", "", "Ctrl+D / Ctrl+U"),
+        ("Repeat a move", "count first, e.g. 5j", ""),
+    ]),
+    ("Sections", &[
+        ("Next / previous tab", "l / h, Tab / Shift+Tab", "Alt+F / Alt+B"),
+        ("Go to tab 1–10", "s1 … s9, s0", "Alt+S, digit"),
+        ("Find tab by name", "`", "Alt+G"),
+        ("Move tab right / left", "L / H", "Alt+N / Alt+P"),
+        ("Rename section", "E", ""),
+    ]),
+    ("Changing tasks", &[
+        ("Check / uncheck", "Space, Enter", ""),
+        ("Append task", "a", ""),
+        ("Add task below", "o", "Ctrl+O"),
+        ("Add task above", "O", ""),
+        ("Edit task", "e", "Alt+E"),
+        ("Move task down / up", "J / K", "Alt+↓ / Alt+↑"),
+        ("Toggle carryover", "m", ""),
+        ("Delete task", "d, Delete", ""),
+        ("Clear completed", "X", ""),
+        ("Clear unmarked", "D", ""),
+    ]),
+    ("Copy and undo", &[
+        ("Copy task", "y", "Alt+W"),
+        ("Paste below / above", "p / P", "Ctrl+Y (below)"),
+        ("Undo", "u", "Ctrl+Z"),
+        ("Redo", "", "Ctrl+R"),
+        ("Copy list as Markdown", "c", ""),
+    ]),
+    ("Other", &[
+        ("Search", "/", "Ctrl+F, Ctrl+S"),
+        ("Toggle wrapping", "w", ""),
+        ("Next / previous theme", "t / T", ""),
+        ("Keyboard shortcuts", "?", ""),
+        ("Quit", "q", ""),
+    ]),
+    ("While typing", &[
+        ("Move cursor", "← / →", "Ctrl+B / Ctrl+F"),
+        ("Start / end of text", "Home / End", "Ctrl+A / Ctrl+E"),
+        ("Previous / next word", "Ctrl+← / Ctrl+→", "Alt+B / Alt+F"),
+        ("Delete previous word", "Ctrl/Alt+Backspace", "Ctrl+W"),
+        ("Delete next word", "", "Alt+D"),
+        ("Delete character", "Delete", "Ctrl+D"),
+        ("Delete to end / start", "", "Ctrl+K / Ctrl+U"),
+        ("Next / previous match", "Tab / Shift+Tab", "Ctrl+N / Ctrl+P"),
+        ("Confirm", "Enter", ""),
+        ("Cancel", "Esc", "Ctrl+G"),
+    ]),
 ];
 
 // The side-by-side reference needs this many columns: its widest row and borders. Below it,

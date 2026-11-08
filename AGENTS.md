@@ -63,6 +63,8 @@ Use Rust's ownership, enums, and `Result` to express actual constraints. Do not 
 
 Use whitespace to mark meaningful phases of an operation—validation, computation, persistence, state commit, and UI feedback, for example. Keep closely related statements together. Do not follow mechanical blank-line counts, split every expression, or force every function into a prescribed shape. Follow `.editorconfig` and `rustfmt.toml` (UTF-8, LF, four-space Rust indentation, 100-column formatting).
 
+Format genuinely table-like code—static tables, lookup definitions, palettes, and other sequences of structurally similar entries—with exactly one entry per line so rows can be scanned and compared; long lines are acceptable there. Preserve that layout with `#[rustfmt::skip]` on the smallest enclosing item or `let` statement that supports it (attributes on `match` or `for` expressions do not compile on stable), never on unrelated code or whole modules, and leave `rustfmt.toml` alone. Do not flatten procedural code or expressions whose readability depends on line breaks; rustfmt governs everything else.
+
 Comments should explain constraints, invariants, surprising behavior, and ordering requirements—especially the reason behind a non-obvious choice. Do not narrate obvious statements or leave commented-out alternatives. Prefer a readable implementation over a long explanatory comment compensating for opaque code.
 
 Do not introduce unexplained magic values when a named constant would clarify a real meaning. Do not create constants for obvious local literals simply to eliminate literals.
