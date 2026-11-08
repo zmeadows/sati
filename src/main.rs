@@ -36,7 +36,7 @@ use ratatui::crossterm::event::EnableBracketedPaste;
 use app::App;
 use storage::{Result, Storage};
 
-const USAGE: &str = "Usage: sati [--theme NAME] [--config PATH] [--wrap | --no-wrap] [--keybinds | --no-keybinds] [--round-corners | --square-corners] [--ascii-markers | --unicode-markers] [--notifications | --no-notifications] [--accent COLOR] [--version]\n       sati export";
+const USAGE: &str = "Usage: sati [--theme NAME] [--config PATH] [--wrap | --no-wrap] [--round-corners | --square-corners] [--ascii-markers | --unicode-markers] [--notifications | --no-notifications] [--accent COLOR] [--version]\n       sati export";
 
 // Report repeats for plain characters and Enter too; alternate keys preserve shifted text.
 const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
@@ -49,7 +49,6 @@ const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
 struct Options {
     wrap: bool,
     notifications: bool,
-    keybinds: bool,
     rounded: bool,
     ascii_markers: bool,
     styles: styles::Styles,
@@ -76,11 +75,6 @@ impl CliOptions {
                 .display
                 .notifications
                 .or(config.display.notifications)
-                .unwrap_or(true),
-            keybinds: self
-                .display
-                .keybinds
-                .or(config.display.keybinds)
                 .unwrap_or(true),
             rounded: self
                 .display
@@ -128,7 +122,7 @@ fn run() -> Result<()> {
 
     let Some(cli) = parse_arguments(arguments)? else {
         println!(
-            "{USAGE}\n\n--theme NAME      Select a built-in theme (available: {available_themes}; default: default).\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--keybinds / --no-keybinds  Show / hide shortcut hints.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--notifications / --no-notifications  Show / hide brief confirmation messages.\n--accent COLOR    Override theme/TOML accent foreground: ANSI name, #RRGGBB, or index 0-255.\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, keybinds, rounded_corners, ascii_markers, notifications.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg, bg (#RRGGBB or reset), and modifiers. --accent overrides only the accent foreground.\n\nexport             Write the checklist as Markdown to stdout.",
+            "{USAGE}\n\n--theme NAME      Select a built-in theme (available: {available_themes}; default: default).\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--notifications / --no-notifications  Show / hide brief confirmation messages.\n--accent COLOR    Override theme/TOML accent foreground: ANSI name, #RRGGBB, or index 0-255.\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, rounded_corners, ascii_markers, notifications.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg, bg (#RRGGBB or reset), and modifiers. --accent overrides only the accent foreground.\n\nexport             Write the checklist as Markdown to stdout.",
             available_themes = themes::BuiltinTheme::names(),
         );
         return Ok(());
@@ -150,7 +144,6 @@ fn run() -> Result<()> {
     let mut app = App::from_document(storage.load_document()?);
     app.wrap = options.wrap;
     app.notifications = options.notifications;
-    app.keybinds = options.keybinds;
     app.rounded = options.rounded;
     app.unicode_markers = !options.ascii_markers;
     app.styles = options.styles;
@@ -432,9 +425,6 @@ fn parse_arguments(
                 &mut options.display.notifications,
                 flag == "--notifications",
             )),
-            "--keybinds" | "--no-keybinds" => {
-                Some((&mut options.display.keybinds, flag == "--keybinds"))
-            }
             "--round-corners" | "--square-corners" => Some((
                 &mut options.display.rounded_corners,
                 flag == "--round-corners",
@@ -902,17 +892,10 @@ mod tests {
 
     #[test]
     fn display_precedence_and_conflicts_cover_both_boolean_directions() {
-        let fields = [
-            "wrap",
-            "keybinds",
-            "rounded_corners",
-            "ascii_markers",
-            "notifications",
-        ];
+        let fields = ["wrap", "rounded_corners", "ascii_markers", "notifications"];
 
         let flags = [
             ("--wrap", "--no-wrap"),
-            ("--keybinds", "--no-keybinds"),
             ("--round-corners", "--square-corners"),
             ("--ascii-markers", "--unicode-markers"),
             ("--notifications", "--no-notifications"),
@@ -921,7 +904,6 @@ mod tests {
         let values = |options: Options| {
             [
                 options.wrap,
-                options.keybinds,
                 options.rounded,
                 options.ascii_markers,
                 options.notifications,
@@ -1286,7 +1268,6 @@ mod tests {
     fn wrapping_is_enabled_by_default_and_can_be_disabled() {
         let defaults = parse_arguments([]).unwrap().unwrap();
         assert!(defaults.wrap);
-        assert!(defaults.keybinds);
         assert!(!defaults.rounded);
         assert!(!defaults.ascii_markers);
         assert!(defaults.notifications);
@@ -1299,12 +1280,10 @@ mod tests {
         assert_eq!(defaults.styles.accent.fg, Some(styles::DEFAULT_ACCENT));
         assert!(!defaults.print_version);
         assert!(!parse_arguments(["--no-wrap".into()]).unwrap().unwrap().wrap);
-        assert!(
-            !parse_arguments(["--no-keybinds".into()])
-                .unwrap()
-                .unwrap()
-                .keybinds
-        );
+
+        for removed in ["--keybinds", "--no-keybinds"] {
+            assert!(parse_arguments([removed.into()]).is_err());
+        }
 
         let options = parse_arguments(["--round-corners"].map(Into::into))
             .unwrap()

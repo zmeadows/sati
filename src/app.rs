@@ -376,7 +376,6 @@ pub struct App {
     pub mode: Mode,
     pub wrap: bool,
     pub notifications: bool,
-    pub keybinds: bool,
     pub rounded: bool,
     pub unicode_markers: bool,
     pub styles: crate::styles::Styles,
@@ -422,7 +421,6 @@ impl App {
             mode: Mode::Normal,
             wrap: true,
             notifications: true,
-            keybinds: true,
             rounded: false,
             unicode_markers: true,
             styles: crate::styles::Styles::default(),
@@ -1020,10 +1018,12 @@ impl App {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn can_undo(&self) -> bool {
         !self.history.is_empty()
     }
 
+    #[cfg(test)]
     pub fn can_redo(&self) -> bool {
         !self.redo_history.is_empty()
     }
@@ -4188,7 +4188,6 @@ mod tests {
                         }
 
                         app.list.select(selected);
-                        app.keybinds = false;
 
                         app
                     };
@@ -4303,7 +4302,6 @@ mod tests {
                             KeyEventKind::Release,
                         ] {
                             let mut app = app_with_tasks(1);
-                            app.keybinds = false;
                             let mut input = TextInput::from(text);
                             input.set_cursor(cursor);
                             let mut expected = input.clone();
@@ -7583,7 +7581,6 @@ mod tests {
                 assert_eq!(app.history.len(), 1);
                 assert!(app.reveal_selection);
 
-                app.keybinds = false;
                 let mut terminal =
                     ratatui::Terminal::new(ratatui::backend::TestBackend::new(18, 3)).unwrap();
                 terminal

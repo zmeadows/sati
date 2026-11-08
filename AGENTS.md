@@ -17,13 +17,13 @@
 - `src/main.rs`: CLI arguments (hand-parsed, no CLI framework), `export` subcommand dispatch, startup, applying the effective configuration, terminal lifecycle, event loop, and platform-specific terminal capabilities.
 - `src/app.rs`: `Task`, application modes, key/mouse dispatch, task mutations, selection, scrolling, and bounded undo history.
 - `src/input.rs`: single-line, grapheme-aware `TextInput`; cursor is a UTF-8 byte offset kept at a grapheme boundary.
-- `src/ui.rs`: layout, wrapping, drawing, context-sensitive shortcut legends, mouse row mapping, and input cursor placement.
+- `src/ui.rs`: layout, wrapping, drawing, mouse row mapping, and input cursor placement.
 - `src/storage.rs`: platform data paths, exclusive instance lock, JSON loading/validation, schema versioning and migrations, and atomic replacement saves.
 - `src/config.rs`: TOML config discovery (`$XDG_CONFIG_HOME`/`~/.config`, macOS Application Support, `%APPDATA%`), reading, and parsing through `Config::load`. A missing default file means defaults; an explicit `--config` file must exist. Unknown keys and invalid files are errors; sati never writes config files. Precedence is CLI > TOML > defaults; contradictory CLI flag pairs are rejected.
 - `src/themes.rs` / `src/styles.rs`: built-in theme palettes and the resolved `Styles` (theme + TOML overrides + `--accent`).
 - `src/search.rs`: search matching and highlight ranges for `Searching`.
 - `src/export.rs`: Markdown rendering shared by `sati export` (stdout only) and the `c` OSC 52 clipboard copy. Export runs without taking the instance lock (it works while the TUI is open) and never writes files.
-- `src/notification.rs`: timed footer notifications (e.g. theme name after `t` / `T`).
+- `src/notification.rs`: timed notifications on the checklist's bottom border (e.g. theme name after `t` / `T`).
 - Unit tests live in `#[cfg(test)] mod tests` inside each module; `tests/` holds integration tests that run the binary (`cli`, `config`, `directories`, `export`, `locking`). Integration tests isolate data/config by overriding `HOME`, `XDG_DATA_HOME`, and `APPDATA`; never point tests at the real user data directory. They run the binary without a terminal, so every run must fail or exit before terminal setup (invalid configuration stops startup before storage, and an invalid `tasks.json` stops it after a valid configuration); otherwise crossterm can take over the developer's `/dev/tty`.
 
 ## Behavioral invariants
@@ -60,7 +60,7 @@
 - Modes are `Normal`, `Adding`, `Editing`, `Searching`, `RenamingSection`, `FuzzySection`, and `ConfirmClear`. Keep shortcuts mode-specific; accidental key repeats and key releases must not trigger destructive actions.
 - Text editing is deliberately **single-line**. Respect Unicode grapheme boundaries when moving, inserting, deleting, pasting, wrapping, and positioning the cursor. Use terminal-cell width, not byte or character count, for layout.
 - Task wrapping affects visual-row scrolling, Page Up/Down, mouse hit mapping, and selection visibility. Account for narrow/short windows and tasks taller than the viewport.
-- Keep footer hints contextual and compact. **Do not advertise Page Up/Down in the bottom shortcut legend**; those are intentionally unlisted convenience shortcuts.
+- There is no persistent on-screen shortcut legend. Keep contextual hints (such as search's `Tab to cycle` and the section-jump digits) compact, and **do not advertise Page Up/Down on screen**; those are intentionally unlisted convenience shortcuts.
 - Preserve raw-mode, alternate-screen, keyboard enhancement, paste, and mouse setup/cleanup. The terminal should be restored on normal exit, errors, and panic paths; unsupported optional features should degrade gracefully.
 - Respect the existing CLI flags and subdued styling. The `default` theme inherits terminal foreground/background colors; the 15 named themes supply RGB foregrounds and backgrounds. TOML can override foregrounds, backgrounds, and modifiers for `normal`, `muted`, `completed`, `border`, and `accent`; `--accent` overrides only the resolved accent foreground.
 - Apply the resolved normal background through Ratatui cells and, for RGB colors, OSC 11 (including terminal padding). Use OSC 111 to restore the terminal's configured default when Sati changed it. Runtime `t` / `T` theme cycling is session-only, preserves TOML style and CLI accent overrides, and is reset on restart.

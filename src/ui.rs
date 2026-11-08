@@ -20,23 +20,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let searching = matches!(app.mode, Mode::Searching { .. });
     // Only search uses a separate input row; add/edit live inside the checklist.
     let input_height = u16::from(searching && area.height > 0);
-    let mut shortcuts = shortcut_lines(app, area.width);
-    let available = usize::from(area.height.saturating_sub(3 + input_height));
-
-    if shortcuts.len() > available {
-        shortcuts.clear();
-    } else if !shortcuts.is_empty() && shortcuts.len() < available {
-        shortcuts.insert(0, Line::raw(""));
-    }
-
-    let legend_height = shortcuts.len() as u16;
-
-    let sections = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(input_height),
-        Constraint::Length(legend_height),
-    ])
-    .split(area);
+    let sections =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(input_height)]).split(area);
 
     let tabs = app.section_tabs();
     app.tab_targets.clear();
@@ -154,11 +139,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
             );
         }
     }
-
-    frame.render_widget(
-        Paragraph::new(shortcuts).style(app.styles.muted),
-        sections[2],
-    );
 
     if app.mode == Mode::ConfirmClear {
         let section = app.scope_label().map(|label| format!("{label} "));
@@ -842,265 +822,6 @@ fn task_spans(
     spans
 }
 
-fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
-    if !app.keybinds || width == 0 || app.mode == Mode::ConfirmClear {
-        return Vec::new();
-    }
-
-    let keys = app.styles.normal.add_modifier(Modifier::BOLD);
-
-    // The full aligned legend occupies 54 columns; pack smaller contexts by action.
-    let mut lines = if app.mode == Mode::Normal && !app.tasks.is_empty() && width >= 54 {
-        aligned_shortcuts(app, width)
-    } else {
-        compact_shortcuts(app, width)
-    };
-
-    if app.mode == Mode::Normal {
-        let can_carry = app
-            .list
-            .selected()
-            .is_some_and(|index| app.tasks[index].status != TaskStatus::Completed);
-
-        for (key, label, available) in [
-            ("h/l", "Section", !app.section_tabs().is_empty()),
-            (
-                "H/L",
-                "Move section",
-                matches!(app.view, SectionView::Named(_)),
-            ),
-            (
-                "E",
-                "Rename section",
-                matches!(app.view, SectionView::Named(_)),
-            ),
-            ("Ctrl+R", "Redo", app.can_redo()),
-            ("m", "Carry", can_carry),
-            ("t/T", "Theme", true),
-            ("`", "Find section", !app.section_tabs().is_empty()),
-        ] {
-            if available {
-                append_shortcut(&mut lines, (key, label), width, keys);
-            }
-        }
-    }
-
-    // While a tab number is pending, only digits act. Pad to the usual height so the task
-    // list doesn't shift for a single keystroke.
-    if showing_section_jump(app) {
-        let usual_height = lines.len();
-        let jump_keys = [vec![("0-9", "Go to section"), ("Esc", "Cancel")]];
-
-        lines = wrap_shortcuts(&jump_keys, width, &app.styles);
-
-        if lines.len() < usual_height {
-            lines.resize(usual_height, Line::raw(""));
-        }
-    }
-
-    lines
-}
-
-fn shortcut_available(app: &App, key: &str) -> bool {
-    // Clearing applies to the current tab, so offer it only for tasks shown there.
-    let visible = |index: &usize| app.is_visible(*index);
-
-    match key {
-        "D" => (0..app.tasks.len())
-            .filter(visible)
-            .any(|index| app.tasks[index].status != TaskStatus::Carried),
-        "u" => app.can_undo(),
-        "x" => (0..app.tasks.len())
-            .filter(visible)
-            .any(|index| app.tasks[index].status == TaskStatus::Completed),
-        _ => true,
-    }
-}
-
-fn compact_shortcuts(app: &App, width: u16) -> Vec<Line<'static>> {
-    let mut rows: Vec<Vec<(&str, &str)>> = match app.mode {
-        Mode::Searching { .. } => vec![vec![
-            ("Tab/Shift+Tab", "Next/prev"),
-            ("Enter", "Select"),
-            ("Esc", "Cancel"),
-        ]],
-        Mode::Adding(_, _) | Mode::Editing { .. } => {
-            vec![vec![("Enter", "Confirm"), ("Esc", "Cancel")]]
-        }
-        Mode::RenamingSection { .. } => vec![vec![("Enter", "Rename"), ("Esc", "Cancel")]],
-        Mode::FuzzySection { .. } => vec![vec![
-            ("Tab/Shift+Tab", "Next/prev"),
-            ("Enter", "Select"),
-            ("Esc", "Cancel"),
-        ]],
-        _ if app.tasks.is_empty() => vec![vec![("u", "Undo"), ("w", "Wrap"), ("q", "Quit")]],
-        _ => vec![
-            vec![("j/k", "Navigate"), ("Space", "Toggle"), ("w", "Wrap")],
-            vec![("a/e", "Add/edit"), ("d", "Delete"), ("u", "Undo")],
-            vec![("x", "Clear done"), ("D", "Clear"), ("q", "Quit")],
-        ],
-    };
-
-    for row in &mut rows {
-        row.retain(|(key, _)| shortcut_available(app, key));
-    }
-
-    let mut lines = wrap_shortcuts(&rows, width, &app.styles);
-
-    // Keep at most three hint rows, dropping secondary actions first.
-    for omit in ["x", "D", "w", "u", "d", "j/k"] {
-        if lines.len() <= 3 {
-            break;
-        }
-
-        for row in &mut rows {
-            row.retain(|(key, _)| *key != omit);
-        }
-
-        lines = wrap_shortcuts(&rows, width, &app.styles);
-    }
-
-    lines
-}
-
-fn aligned_shortcuts(app: &App, width: u16) -> Vec<Line<'static>> {
-    let keys = app.styles.normal.add_modifier(Modifier::BOLD);
-
-    let columns = [
-        [("j/k", "Navigate"), ("a", "Add"), ("d", "Delete")],
-        [("g/G", "First/last"), ("e", "Edit"), ("x", "Clear done")],
-        [("J/K", "Move"), ("Space", "Toggle"), ("D", "Clear")],
-        [("w", "Wrap"), ("u", "Undo"), ("q", "Quit")],
-    ];
-
-    let mut lines = vec![Line::raw(" "); 3];
-    let column_count = columns.len();
-
-    for (index, column) in columns.into_iter().enumerate() {
-        let gap = if index + 1 == column_count { "" } else { "  " };
-        let key_width = column.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
-
-        let label_width = column
-            .iter()
-            .map(|(_, label)| label.len())
-            .max()
-            .unwrap_or(0);
-
-        for (line, (key, label)) in lines.iter_mut().zip(column) {
-            if !shortcut_available(app, key) {
-                line.push_span(Span::raw(
-                    " ".repeat(key_width + 1 + label_width + gap.len()),
-                ));
-                continue;
-            }
-
-            line.push_span(Span::styled(format!("{key:<key_width$}"), keys));
-            line.push_span(Span::raw(format!(" {label:<label_width$}{gap}")));
-        }
-    }
-
-    append_shortcut(&mut lines[..1], ("/", "Search"), width, keys);
-
-    lines
-}
-
-fn append_shortcut(
-    lines: &mut [Line<'static>],
-    (key, label): (&'static str, &'static str),
-    width: u16,
-    keys: Style,
-) {
-    let extra_width = 2 + key.width() + 1 + label.width();
-
-    if let Some(line) = lines
-        .iter_mut()
-        .find(|line| line.width() + extra_width <= usize::from(width))
-    {
-        line.push_span(Span::raw("  "));
-        line.push_span(Span::styled(key, keys));
-        line.push_span(Span::raw(format!(" {label}")));
-    }
-}
-
-fn wrap_shortcuts(rows: &[Vec<(&str, &str)>], width: u16, styles: &Styles) -> Vec<Line<'static>> {
-    let keys = styles.normal.add_modifier(Modifier::BOLD);
-    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
-
-    if column_count == 0 {
-        return Vec::new();
-    }
-
-    let mut widths = vec![(0, 0); column_count];
-
-    for row in rows {
-        for (column, (key, label)) in row.iter().enumerate() {
-            widths[column].0 = widths[column].0.max(key.width());
-            widths[column].1 = widths[column].1.max(label.width());
-        }
-    }
-
-    let aligned_width = 1
-        + widths
-            .iter()
-            .map(|(key, label)| key + 1 + label)
-            .sum::<usize>()
-        + 2 * (column_count - 1);
-
-    if aligned_width <= usize::from(width) {
-        return rows
-            .iter()
-            .filter(|row| !row.is_empty())
-            .map(|row| {
-                let mut line = Line::raw(" ");
-
-                for (column, (key, label)) in row.iter().enumerate() {
-                    let (key_width, label_width) = widths[column];
-                    line.push_span(Span::styled(format!("{key:<key_width$}"), keys));
-                    line.push_span(Span::raw(format!(" {label}")));
-
-                    if column + 1 < row.len() {
-                        line.push_span(Span::raw(" ".repeat(label_width - label.width() + 2)));
-                    }
-                }
-
-                line
-            })
-            .collect();
-    }
-
-    let mut lines = Vec::new();
-
-    for row in rows {
-        let mut line = Line::raw(" ");
-
-        for &(key, label) in row {
-            let pair_width = key.width() + 1 + label.width();
-
-            if pair_width + 1 > usize::from(width) {
-                continue;
-            }
-
-            let gap = if line.width() > 1 { "  " } else { "" };
-
-            if line.width() + gap.len() + pair_width > usize::from(width) {
-                lines.push(line);
-                line = Line::raw(" ");
-            } else {
-                line.push_span(Span::raw(gap));
-            }
-
-            line.push_span(Span::styled(key.to_owned(), keys));
-            line.push_span(Span::raw(format!(" {label}")));
-        }
-
-        if line.width() > 1 {
-            lines.push(line);
-        }
-    }
-
-    lines
-}
-
 fn draw_input_line(
     frame: &mut Frame,
     area: Rect,
@@ -1301,7 +1022,6 @@ mod tests {
     #[test]
     fn section_tabs_sit_on_the_top_border_in_fixed_positions() {
         let mut plain = app_with_texts(&["plain", "https://example.com"]);
-        plain.keybinds = false;
         let mut terminal = test_terminal(40, 8);
         let rows = render(&mut terminal, &mut plain);
 
@@ -1311,7 +1031,6 @@ mod tests {
         assert!(row_text(&terminal, 0).starts_with("┌──────"));
 
         let mut app = app_with_texts(&["Work: a", "home: b", "plain"]);
-        app.keybinds = false;
         app.styles.accent = app.styles.accent.fg(Color::Rgb(20, 40, 60));
         let rows = render(&mut terminal, &mut app);
 
@@ -1346,7 +1065,6 @@ mod tests {
     #[test]
     fn a_section_tab_shows_only_its_tasks_without_the_prefix() {
         let mut app = app_with_texts(&["Work: fix bug", "Home: laundry", "Work: email"]);
-        app.keybinds = false;
         app.show_section(crate::app::SectionView::Named("work".into()));
         let mut terminal = test_terminal(40, 8);
         render(&mut terminal, &mut app);
@@ -1381,7 +1099,6 @@ mod tests {
         let texts: Vec<String> = (0..8).map(|index| format!("S{index}: task")).collect();
         let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
         let mut app = app_with_texts(&texts);
-        app.keybinds = false;
         let mut terminal = test_terminal(24, 8);
 
         app.show_section(crate::app::SectionView::Named("s0".into()));
@@ -1409,27 +1126,12 @@ mod tests {
     }
 
     #[test]
-    fn the_move_section_legend_appears_only_on_a_section_tab() {
-        let mut app = app_with_texts(&["Work: a", "plain"]);
-        let mut terminal = test_terminal(80, 12);
-
-        render(&mut terminal, &mut app);
-        assert!(screen(&terminal).contains("h/l Section"));
-        assert!(!screen(&terminal).contains("Move section"));
-
-        app.show_section(SectionView::Named("work".into()));
-        render(&mut terminal, &mut app);
-        assert!(screen(&terminal).contains("H/L Move section"));
-    }
-
-    #[test]
     fn overflowing_tabs_scroll_only_to_keep_the_active_tab_visible() {
         let texts: Vec<String> = (0..12)
             .map(|index| format!("Section{index:02}: task"))
             .collect();
         let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
         let mut app = app_with_texts(&texts);
-        app.keybinds = false;
         let mut terminal = test_terminal(30, 8);
 
         render(&mut terminal, &mut app);
@@ -1500,19 +1202,13 @@ mod tests {
     }
 
     #[test]
-    fn clearing_hints_and_the_confirmation_follow_the_current_tab() {
+    fn the_clear_confirmation_names_the_current_tab() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b"]);
         app.tasks[1].status = TaskStatus::Completed;
         let mut terminal = test_terminal(80, 14);
 
-        render(&mut terminal, &mut app);
-        assert!(screen(&terminal).contains("Clear done"));
-
         app.show_section(crate::app::SectionView::Named("work".into()));
-        render(&mut terminal, &mut app);
-        assert!(!screen(&terminal).contains("Clear done"));
-
         app.key(
             ratatui::crossterm::event::KeyEvent::new(
                 ratatui::crossterm::event::KeyCode::Char('D'),
@@ -1530,7 +1226,6 @@ mod tests {
     fn a_suggested_section_is_drawn_dim_after_the_cursor() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b"]);
-        app.keybinds = false;
         app.show_section(crate::app::SectionView::Named("work".into()));
         app.key(
             ratatui::crossterm::event::KeyEvent::new(
@@ -1564,7 +1259,6 @@ mod tests {
 
     fn renaming_app(texts: &[&str], name: &str) -> App {
         let mut app = app_with_texts(texts);
-        app.keybinds = false;
         app.show_section(SectionView::Named("work".into()));
         app.mode = Mode::RenamingSection { input: name.into() };
 
@@ -1621,25 +1315,6 @@ mod tests {
         assert!(cursor.x < 15);
     }
 
-    #[test]
-    fn the_rename_legend_appears_only_on_a_section_tab() {
-        let mut app = app_with_texts(&["Work: a", "plain"]);
-        let mut terminal = test_terminal(90, 12);
-
-        render(&mut terminal, &mut app);
-        assert!(!screen(&terminal).contains("Rename section"));
-
-        app.show_section(SectionView::Named("work".into()));
-        render(&mut terminal, &mut app);
-        assert!(screen(&terminal).contains("E Rename section"));
-
-        app.mode = Mode::RenamingSection {
-            input: "Work".into(),
-        };
-        render(&mut terminal, &mut app);
-        assert!(screen(&terminal).contains("Enter Rename"));
-    }
-
     fn press_keys(app: &mut App, fixture: &crate::storage::tests::Fixture, keys: &str) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
@@ -1653,7 +1328,6 @@ mod tests {
     fn a_pending_section_jump_numbers_the_tabs_under_their_names() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b", "plain"]);
-        app.keybinds = false;
         let mut terminal = test_terminal(40, 8);
 
         press_keys(&mut app, &fixture, "s");
@@ -1676,7 +1350,6 @@ mod tests {
     fn section_jump_numbers_disappear_after_the_next_key() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b"]);
-        app.keybinds = false;
         let mut terminal = test_terminal(40, 8);
 
         press_keys(&mut app, &fixture, "sx");
@@ -1696,7 +1369,6 @@ mod tests {
             .collect();
         let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
         let mut app = app_with_texts(&texts);
-        app.keybinds = false;
         let mut terminal = test_terminal(80, 8);
 
         press_keys(&mut app, &fixture, "s");
@@ -1716,7 +1388,6 @@ mod tests {
     fn section_jump_numbers_are_hidden_when_there_is_no_blank_row_under_the_tabs() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b"]);
-        app.keybinds = false;
         let mut terminal = test_terminal(40, 3);
 
         press_keys(&mut app, &fixture, "s");
@@ -1726,25 +1397,9 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_section_jump_replaces_the_legend_without_changing_its_height() {
-        let fixture = crate::storage::tests::Fixture::new();
-        let mut app = app_with_texts(&["Work: a", "Home: b"]);
-        let mut terminal = test_terminal(80, 12);
-
-        let usual_rows = render(&mut terminal, &mut app);
-        press_keys(&mut app, &fixture, "s");
-        let jump_rows = render(&mut terminal, &mut app);
-
-        assert_eq!(jump_rows, usual_rows);
-        assert!(screen(&terminal).contains("0-9 Go to section"));
-        assert!(!screen(&terminal).contains("Navigate"));
-    }
-
-    #[test]
     fn the_section_picker_replaces_all_with_its_input_and_follows_it_with_matches() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b"]);
-        app.keybinds = false;
         let mut terminal = test_terminal(40, 8);
 
         press_keys(&mut app, &fixture, "`");
@@ -1786,7 +1441,6 @@ mod tests {
             "Echo: e",
             "Foxtrot: f",
         ]);
-        app.keybinds = false;
         let mut terminal = test_terminal(30, 8);
 
         press_keys(&mut app, &fixture, "`");
@@ -1815,7 +1469,6 @@ mod tests {
     fn a_long_picker_query_stays_within_its_share_of_a_narrow_tab_bar() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = app_with_texts(&["Alphabetical: a", "Alpaca: b"]);
-        app.keybinds = false;
         let mut terminal = test_terminal(30, 8);
 
         press_keys(&mut app, &fixture, "`alphabetical");
@@ -1838,7 +1491,6 @@ mod tests {
     fn a_long_focused_match_is_shortened_beside_the_picker_input() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = app_with_texts(&["Supercalifragilistic: a", "Home: b"]);
-        app.keybinds = false;
         let mut terminal = test_terminal(24, 8);
 
         press_keys(&mut app, &fixture, "`sup");
@@ -1853,7 +1505,6 @@ mod tests {
     #[test]
     fn a_long_active_section_tab_is_shortened_on_a_narrow_terminal() {
         let mut app = app_with_texts(&["Supercalifragilistic: a", "Home: b"]);
-        app.keybinds = false;
         app.show_section(SectionView::Named("supercalifragilistic".into()));
         let mut terminal = test_terminal(16, 8);
 
@@ -1904,27 +1555,6 @@ mod tests {
         assert!(matches!(app.mode, Mode::FuzzySection { .. }));
     }
 
-    #[test]
-    fn the_picker_legend_and_find_section_hint_follow_the_mode() {
-        let fixture = crate::storage::tests::Fixture::new();
-        let mut terminal = test_terminal(90, 12);
-
-        let mut plain = app_with_texts(&["plain"]);
-        render(&mut terminal, &mut plain);
-        assert!(!screen(&terminal).contains("Find section"));
-
-        let mut app = app_with_texts(&["Work: a", "plain"]);
-        render(&mut terminal, &mut app);
-        assert!(screen(&terminal).contains("` Find section"));
-
-        press_keys(&mut app, &fixture, "`");
-        render(&mut terminal, &mut app);
-
-        let screen = screen(&terminal);
-        assert!(screen.contains("Tab/Shift+Tab Next/prev"), "{screen}");
-        assert!(screen.contains("Enter Select") && screen.contains("Esc Cancel"));
-    }
-
     fn thumb_rows(terminal: &Terminal<TestBackend>, x: u16) -> Vec<u16> {
         let buffer = terminal.backend().buffer();
 
@@ -1942,7 +1572,6 @@ mod tests {
                 .map(|index| Task::new(format!("task {index}")))
                 .collect(),
         );
-        few.keybinds = false;
         render(&mut terminal, &mut few);
 
         assert!(thumb_rows(&terminal, 29).is_empty());
@@ -1952,7 +1581,6 @@ mod tests {
                 .map(|index| Task::new(format!("task {index}")))
                 .collect(),
         );
-        app.keybinds = false;
         let rows = render(&mut terminal, &mut app);
         let first = rows.y;
         let last = rows.bottom() - 1;
@@ -1998,7 +1626,6 @@ mod tests {
                 .map(|_| Task::new("wrapped words ".repeat(12).trim_end()))
                 .collect(),
         );
-        wrapped.keybinds = false;
         render(&mut terminal, &mut wrapped);
         assert!(!thumb_rows(&terminal, 29).is_empty());
 
@@ -2008,7 +1635,6 @@ mod tests {
                 .map(|index| Task::new(format!("Work: task {index}")))
                 .collect(),
         );
-        sectioned.keybinds = false;
         let rows = render(&mut terminal, &mut sectioned);
 
         assert_eq!(rows.y, 2);
@@ -2016,13 +1642,11 @@ mod tests {
     }
 
     #[test]
-    fn clicking_a_tab_shows_that_section_and_the_legend_mentions_section_keys() {
+    fn clicking_a_tab_shows_that_section() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b"]);
         let mut terminal = test_terminal(80, 12);
         let rows = render(&mut terminal, &mut app);
-
-        assert!(screen(&terminal).contains("h/l Section"));
 
         let (area, view) = app.tab_targets[1].clone();
         assert_eq!(view, crate::app::SectionView::Named("home".into()));
@@ -2049,10 +1673,6 @@ mod tests {
                 .all(|task| task.status != TaskStatus::Completed)
         );
         assert!(!fixture.task_path().exists());
-
-        let mut plain = app_with_texts(&["plain"]);
-        render(&mut terminal, &mut plain);
-        assert!(!screen(&terminal).contains("Section"));
     }
 
     #[test]
@@ -2323,71 +1943,68 @@ mod tests {
     #[test]
     fn copy_feedback_uses_the_border_without_changing_the_viewport_or_counter() {
         for width in [0, 1, 2, 8, 15, 17, 24, 32, 80] {
-            for keybinds in [false, true] {
-                for rounded in [false, true] {
-                    let mut app = App::new(Vec::new());
-                    app.keybinds = keybinds;
-                    app.rounded = rounded;
-                    let mut terminal = test_terminal(width, 12);
-                    let before = render(&mut terminal, &mut app);
-                    app.copy_markdown(&mut Vec::new());
+            for rounded in [false, true] {
+                let mut app = App::new(Vec::new());
+                app.rounded = rounded;
+                let mut terminal = test_terminal(width, 12);
+                let before = render(&mut terminal, &mut app);
+                app.copy_markdown(&mut Vec::new());
 
-                    for notice in [
-                        "Copy sent to terminal",
-                        "Copy failed: output unavailable",
-                        "Copied task",
-                        "Theme: Everforest Dark / Medium (everforest-medium)",
-                        "Theme: Rosé Pine (rose-pine)",
-                        "Theme: Default (default)",
-                    ] {
-                        app.notification = Some(crate::notification::Notification::new(notice));
-                        let after = render(&mut terminal, &mut app);
-                        assert_eq!(before, after);
+                for notice in [
+                    "Copy sent to terminal",
+                    "Copy failed: output unavailable",
+                    "Copied task",
+                    "Theme: Everforest Dark / Medium (everforest-medium)",
+                    "Theme: Rosé Pine (rose-pine)",
+                    "Theme: Default (default)",
+                ] {
+                    app.notification = Some(crate::notification::Notification::new(notice));
+                    let after = render(&mut terminal, &mut app);
+                    assert_eq!(before, after);
 
-                        let text = screen(&terminal);
+                    let text = screen(&terminal);
 
-                        if width >= 7 {
-                            assert!(text.contains("[0/0]"));
-                        }
+                    if width >= 7 {
+                        assert!(text.contains("[0/0]"));
+                    }
 
-                        if width == 80 {
-                            assert!(text.contains(notice));
-                        } else if width == 24 || width == 32 {
-                            let compact = app.notification.as_ref().unwrap().compact_message();
+                    if width == 80 {
+                        assert!(text.contains(notice));
+                    } else if width == 24 || width == 32 {
+                        let compact = app.notification.as_ref().unwrap().compact_message();
 
-                            if notice.starts_with("Theme: ") {
-                                assert_eq!(
-                                    text.contains(compact),
-                                    compact.width() <= usize::from(width) - 8
-                                );
+                        if notice.starts_with("Theme: ") {
+                            assert_eq!(
+                                text.contains(compact),
+                                compact.width() <= usize::from(width) - 8
+                            );
+                        } else {
+                            assert!(text.contains(if notice == "Copied task" {
+                                "Copied task"
+                            } else if notice.starts_with("Copy failed") {
+                                "Copy failed"
                             } else {
-                                assert!(text.contains(if notice == "Copied task" {
-                                    "Copied task"
-                                } else if notice.starts_with("Copy failed") {
-                                    "Copy failed"
-                                } else {
-                                    "Copy sent"
-                                }));
-                            }
-                        }
-
-                        if width >= 2 {
-                            let buffer = terminal.backend().buffer();
-                            assert_eq!(
-                                buffer[(0, after.bottom())].symbol(),
-                                if rounded { "╰" } else { "└" }
-                            );
-                            assert_eq!(
-                                buffer[(width - 1, after.bottom())].symbol(),
-                                if rounded { "╯" } else { "┘" }
-                            );
+                                "Copy sent"
+                            }));
                         }
                     }
 
-                    app.notification = None;
-                    render(&mut terminal, &mut app);
-                    assert!(!screen(&terminal).contains("Copy"));
+                    if width >= 2 {
+                        let buffer = terminal.backend().buffer();
+                        assert_eq!(
+                            buffer[(0, after.bottom())].symbol(),
+                            if rounded { "╰" } else { "└" }
+                        );
+                        assert_eq!(
+                            buffer[(width - 1, after.bottom())].symbol(),
+                            if rounded { "╯" } else { "┘" }
+                        );
+                    }
                 }
+
+                app.notification = None;
+                render(&mut terminal, &mut app);
+                assert!(!screen(&terminal).contains("Copy"));
             }
         }
     }
@@ -2402,79 +2019,73 @@ mod tests {
             (9, 12, true, "[9/12]"),
         ] {
             for rounded in [false, true] {
-                for keybinds in [false, true] {
-                    for mode in 0..6 {
-                        if mode == 2 && total == 0 {
+                for mode in 0..6 {
+                    if mode == 2 && total == 0 {
+                        continue;
+                    }
+
+                    for width in [0, 1, 2, 6, 7, 8, 24] {
+                        let mut app = App::new(
+                            (0..total)
+                                .map(|index| Task {
+                                    status: if index < completed {
+                                        TaskStatus::Completed
+                                    } else if carried && index == total - 1 {
+                                        TaskStatus::Carried
+                                    } else {
+                                        TaskStatus::Pending
+                                    },
+                                    ..Task::new(format!("task {index}"))
+                                })
+                                .collect(),
+                        );
+                        app.rounded = rounded;
+                        app.mode = match mode {
+                            0 => Mode::Normal,
+                            1 => Mode::Adding("draft".into(), AddPlacement::End),
+                            2 => Mode::Editing {
+                                index: 0,
+                                input: "edited".into(),
+                            },
+                            3 => Mode::Searching {
+                                input: "task".into(),
+                                original: Some(0),
+                            },
+                            4 => Mode::Searching {
+                                input: "".into(),
+                                original: Some(0),
+                            },
+                            _ => Mode::ConfirmClear,
+                        };
+                        let mut terminal = test_terminal(width, 12);
+                        let rows = render(&mut terminal, &mut app);
+
+                        if mode == 5 {
                             continue;
-                        }
+                        } // The existing dialog may cover the border.
 
-                        for width in [0, 1, 2, 6, 7, 8, 24] {
-                            let mut app = App::new(
-                                (0..total)
-                                    .map(|index| Task {
-                                        status: if index < completed {
-                                            TaskStatus::Completed
-                                        } else if carried && index == total - 1 {
-                                            TaskStatus::Carried
-                                        } else {
-                                            TaskStatus::Pending
-                                        },
-                                        ..Task::new(format!("task {index}"))
-                                    })
-                                    .collect(),
+                        if width >= 2 {
+                            let y = rows.bottom();
+                            let buffer = terminal.backend().buffer();
+                            assert_eq!(buffer[(0, y)].symbol(), if rounded { "╰" } else { "└" });
+                            assert_eq!(
+                                buffer[(width - 1, y)].symbol(),
+                                if rounded { "╯" } else { "┘" }
                             );
-                            app.rounded = rounded;
-                            app.keybinds = keybinds;
-                            app.mode = match mode {
-                                0 => Mode::Normal,
-                                1 => Mode::Adding("draft".into(), AddPlacement::End),
-                                2 => Mode::Editing {
-                                    index: 0,
-                                    input: "edited".into(),
-                                },
-                                3 => Mode::Searching {
-                                    input: "task".into(),
-                                    original: Some(0),
-                                },
-                                4 => Mode::Searching {
-                                    input: "".into(),
-                                    original: Some(0),
-                                },
-                                _ => Mode::ConfirmClear,
-                            };
-                            let mut terminal = test_terminal(width, 12);
-                            let rows = render(&mut terminal, &mut app);
 
-                            if mode == 5 {
-                                continue;
-                            } // The existing dialog may cover the border.
+                            let fits = expected.width() + 2 <= usize::from(width);
 
-                            if width >= 2 {
-                                let y = rows.bottom();
-                                let buffer = terminal.backend().buffer();
-                                assert_eq!(
-                                    buffer[(0, y)].symbol(),
-                                    if rounded { "╰" } else { "└" }
-                                );
-                                assert_eq!(
-                                    buffer[(width - 1, y)].symbol(),
-                                    if rounded { "╯" } else { "┘" }
-                                );
+                            if fits {
+                                let start = width - 1 - expected.len() as u16;
 
-                                let fits = expected.width() + 2 <= usize::from(width);
-
-                                if fits {
-                                    let start = width - 1 - expected.len() as u16;
-
-                                    for (offset, character) in expected.chars().enumerate() {
-                                        let cell = &buffer[(start + offset as u16, y)];
-                                        assert_eq!(cell.symbol(), character.to_string());
-                                        assert_eq!(cell.fg, Color::Reset);
-                                    }
-                                } else {
-                                    for x in 1..width - 1 {
-                                        assert_eq!(buffer[(x, y)].symbol(), "─");
-                                    }
+                                for (offset, character) in expected.chars().enumerate() {
+                                    let cell = &buffer[(start + offset as u16, y)];
+                                    assert_eq!(cell.symbol(), character.to_string());
+                                    assert_eq!(cell.fg, Color::Reset);
+                                }
+                            } else {
+                                for x in 1..width - 1 {
+                                    assert_eq!(buffer[(x, y)].symbol(), "─");
                                 }
                             }
                         }
@@ -2508,7 +2119,6 @@ mod tests {
                 ..Task::new("carried")
             },
         ]);
-        app.keybinds = false;
         let mut terminal = test_terminal(30, 10);
 
         let mut check = |app: &mut App, expected: &str| {
@@ -2579,7 +2189,6 @@ mod tests {
                     })
                     .collect(),
             );
-            app.keybinds = false;
             let original = app.tasks.clone();
             let mut terminal = test_terminal(24, 6);
             render(&mut terminal, &mut app);
@@ -2695,7 +2304,6 @@ mod tests {
                     app.mode = mode;
                     app.list.select(Some(1));
                     app.wrap = wrap;
-                    app.keybinds = false;
                     app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
                     let mut terminal = test_terminal(width, 12);
                     let rows = render(&mut terminal, &mut app);
@@ -2743,7 +2351,6 @@ mod tests {
             status: TaskStatus::Carried,
             ..Task::new("carry words across wrapped lines")
         }]);
-        app.keybinds = false;
         app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
         let mut terminal = test_terminal(24, 12);
         render(&mut terminal, &mut app);
@@ -2779,20 +2386,6 @@ mod tests {
         assert_eq!(app.row_tasks, mapping);
         assert!(screen(&terminal).contains("[↪]"));
         assert_eq!(app.tasks[0].status, TaskStatus::Carried);
-
-        app.keybinds = true;
-
-        for width in [1, 18, 40, 60, 80] {
-            let lines = shortcut_lines(&app, width);
-            assert!(lines.len() <= 3);
-            assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
-        }
-
-        assert!(
-            shortcut_lines(&app, 80)
-                .iter()
-                .any(|line| line.to_string().contains("m Carry"))
-        );
         assert!(!fixture.task_path().exists());
     }
 
@@ -2819,7 +2412,6 @@ mod tests {
                     );
                     app.list.select(selected);
                     app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
-                    app.keybinds = false;
                     fixture.storage.save(&app.tasks).unwrap();
                     let original = app.tasks.clone();
                     let bytes = std::fs::read(fixture.task_path()).unwrap();
@@ -2922,7 +2514,6 @@ mod tests {
                     ..Task::new("after")
                 },
             ]);
-            app.keybinds = false;
             app.list.select(Some(1));
             fixture.storage.save(&app.tasks).unwrap();
             let original = app.tasks.clone();
@@ -3137,7 +2728,6 @@ mod tests {
                 ..Task::new("another needle")
             },
         ]);
-        app.keybinds = false;
         app.key(
             KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
             &fixture.storage,
@@ -3184,7 +2774,6 @@ mod tests {
     #[test]
     fn tab_hint_sits_at_the_right_of_the_search_row_only_when_it_fits_after_the_query() {
         let mut app = App::new(vec![Task::new("needle")]);
-        app.keybinds = false;
 
         for (width, query, shown) in [
             (40, "", true),
@@ -3239,7 +2828,6 @@ mod tests {
         );
 
         let original = app.tasks.clone();
-        app.keybinds = false;
         app.list.select(Some(2));
         app.styles.accent = app.styles.accent.fg(Color::Rgb(20, 40, 60));
         let mut terminal = test_terminal(40, 10);
@@ -3318,7 +2906,6 @@ mod tests {
                 ..Task::new(format!("{}tag: abcdef", "long ".repeat(50)))
             },
         ]);
-        app.keybinds = false;
         let original = app.tasks.clone();
         let mut terminal = test_terminal(14, 9);
         render(&mut terminal, &mut app);
@@ -3394,7 +2981,7 @@ mod tests {
     }
 
     #[test]
-    fn search_feedback_and_legends_remain_compact() {
+    fn search_without_matches_says_so_and_keeps_markers_aligned() {
         let fixture = crate::storage::tests::Fixture::new();
 
         let mut app = App::new(vec![Task {
@@ -3412,40 +2999,11 @@ mod tests {
         assert!(screen(&terminal).contains("No matches"));
         assert_eq!(terminal.backend().buffer()[(1, 1)].symbol(), " ");
         assert_eq!(terminal.backend().buffer()[(4, 1)].symbol(), "□");
-
-        for query in ["", "ordinary"] {
-            app.mode = Mode::Searching {
-                input: query.into(),
-                original: Some(0),
-            };
-
-            let text = shortcut_lines(&app, 80)
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            assert!(text.contains("Esc") && text.contains("Cancel"));
-            assert!(text.contains("Tab/Shift+Tab") && text.contains("Select"));
-            assert!(!text.contains("Page"));
-
-            for width in [0, 1, 12, 18, 30, 40, 60, 80] {
-                let lines = shortcut_lines(&app, width);
-                assert!(lines.len() <= 3);
-                assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
-            }
-
-            app.keybinds = false;
-            assert!(shortcut_lines(&app, 80).is_empty());
-
-            app.keybinds = true;
-        }
-
         assert!(!fixture.task_path().exists());
     }
 
     #[test]
-    fn redo_hint_is_contextual_and_restored_wrapped_selection_is_visible() {
+    fn redo_restores_a_wrapped_selection_into_view() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
 
@@ -3462,27 +3020,10 @@ mod tests {
                 .unwrap()
         };
 
-        assert!(
-            !shortcut_lines(&app, 80)
-                .iter()
-                .any(|line| line.to_string().contains("Redo"))
-        );
-
         key(&mut app, KeyCode::Char(' '), KeyModifiers::NONE);
         let modified = app.tasks.clone();
         key(&mut app, KeyCode::Char('u'), KeyModifiers::NONE);
-
-        assert!(
-            shortcut_lines(&app, 80)
-                .iter()
-                .any(|line| line.to_string().contains("Ctrl+R Redo"))
-        );
-
-        for width in [0, 1, 18, 40, 60, 80] {
-            let lines = shortcut_lines(&app, width);
-            assert!(lines.len() <= 3);
-            assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
-        }
+        assert!(app.can_redo());
 
         let mut terminal = test_terminal(18, 7);
         app.scroll = usize::MAX;
@@ -3500,172 +3041,10 @@ mod tests {
         key(&mut app, KeyCode::Char('u'), KeyModifiers::NONE);
 
         assert!(app.can_redo());
-
-        app.keybinds = false;
-        assert!(shortcut_lines(&app, 80).is_empty());
     }
 
     #[test]
-    fn legends_follow_mode_availability_and_terminal_width() {
-        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        let fixture = crate::storage::tests::Fixture::new();
-
-        let mut app = App::new(vec![Task::new("task")]);
-
-        let text = |app: &App, width| {
-            shortcut_lines(app, width)
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-
-        assert!(!text(&app, 80).contains("Undo"));
-        assert!(!text(&app, 80).contains("Clear done"));
-
-        app.key(
-            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
-            &fixture.storage,
-        )
-        .unwrap();
-
-        for width in [80, 60, 40, 30, 18, 1, 0] {
-            let lines = shortcut_lines(&app, width);
-            assert!(lines.len() <= 3);
-            assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
-        }
-
-        for width in [80, 60] {
-            let normal = text(&app, width);
-
-            for key in [
-                "j/k",
-                "g/G",
-                "J/K",
-                "Space",
-                "Undo",
-                "Clear done",
-                "Clear",
-                "Quit",
-                "Wrap",
-            ] {
-                assert!(normal.contains(key), "{normal}");
-            }
-        }
-
-        assert_eq!(
-            text(&app, 40),
-            " j/k Navigate    Space Toggle  w Wrap\n a/e Add/edit    d     Delete  u Undo\n x   Clear done  D     Clear   q Quit"
-        );
-
-        for mode in [
-            Mode::Adding(TextInput::default(), AddPlacement::End),
-            Mode::Editing {
-                index: 0,
-                input: "task".into(),
-            },
-        ] {
-            app.mode = mode;
-            assert_eq!(text(&app, 40), " Enter Confirm  Esc Cancel");
-        }
-
-        app.mode = Mode::ConfirmClear;
-        assert!(shortcut_lines(&app, 80).is_empty());
-
-        let mut terminal = test_terminal(60, 12);
-        let rows = render(&mut terminal, &mut app);
-        assert_eq!(rows.height, 10);
-        assert_eq!(screen(&terminal).matches("Confirm").count(), 1);
-        assert_eq!(screen(&terminal).matches("Cancel").count(), 1);
-
-        app.key(
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-            &fixture.storage,
-        )
-        .unwrap();
-
-        assert_eq!(text(&app, 40), " u Undo  w Wrap  q Quit  t/T Theme");
-        assert_eq!(
-            text(&App::new(Vec::new()), 40),
-            " w Wrap  q Quit  t/T Theme"
-        );
-
-        app.keybinds = false;
-        assert!(shortcut_lines(&app, 80).is_empty());
-
-        app.mode = Mode::Adding(TextInput::default(), AddPlacement::End);
-        assert!(shortcut_lines(&app, 80).is_empty());
-    }
-
-    #[test]
-    fn legend_width_boundary_preserves_hint_order_and_viewport_height() {
-        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        let fixture = crate::storage::tests::Fixture::new();
-
-        let mut app = App::new(["first", "second"].map(Task::new).into());
-
-        for key in [' ', ' ', 'u'] {
-            app.key(
-                KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
-                &fixture.storage,
-            )
-            .unwrap();
-        }
-
-        app.list.select(Some(1));
-        assert!(app.can_undo() && app.can_redo());
-
-        for width in [53, 54, 55] {
-            let lines = shortcut_lines(&app, width);
-            assert_eq!(lines.len(), 3);
-            assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
-
-            let legend = lines
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            for label in ["Undo", "Clear done", "Clear"] {
-                assert!(legend.contains(label), "{width}: missing {label}");
-            }
-
-            for label in ["Redo", "Carry", "Theme"] {
-                assert_eq!(legend.contains(label), width == 53, "{width}: {label}");
-            }
-
-            let keys: Vec<_> = lines[0]
-                .spans
-                .iter()
-                .filter(|span| span.style.add_modifier.contains(Modifier::BOLD))
-                .map(|span| span.content.trim())
-                .take(3)
-                .collect();
-
-            assert_eq!(
-                keys,
-                if width == 53 {
-                    ["j/k", "Space", "w"]
-                } else {
-                    ["j/k", "g/G", "J/K"]
-                }
-            );
-
-            // Suppressed footer, exact fit, spacer, and a comfortably tall viewport.
-            for (height, task_height) in [(5, 3), (6, 1), (7, 1), (12, 6)] {
-                let mut terminal = test_terminal(width, height);
-                let rows = render(&mut terminal, &mut app);
-                assert_eq!(rows, Rect::new(1, 1, width - 2, task_height));
-                assert_eq!(screen(&terminal).contains("Quit"), height >= 6);
-
-                let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
-                assert!(app.row_tasks[app.scroll..end].contains(&Some(1)));
-            }
-        }
-    }
-
-    #[test]
-    fn changing_footer_height_preserves_selection_and_mouse_mapping() {
+    fn inline_inputs_keep_the_viewport_height_selection_and_mouse_mapping() {
         use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let fixture = crate::storage::tests::Fixture::new();
 
@@ -3717,17 +3096,8 @@ mod tests {
             }
         }
 
-        assert!(heights[1] > heights[0]);
-        assert_eq!(heights[1], heights[2]);
-        assert_eq!(heights[0], heights[3]);
-
-        app.keybinds = false;
-        let mut rows = render(&mut terminal, &mut app);
-        assert_eq!(rows.height, 10);
-
-        app.mode = Mode::Adding(TextInput::default(), AddPlacement::End);
-        rows = render(&mut terminal, &mut app);
-        assert_eq!(rows.height, 10);
+        // Add and edit live inside the checklist, so only the borders take rows.
+        assert_eq!(heights, [10, 10, 10, 10]);
     }
 
     #[test]
@@ -3801,7 +3171,6 @@ mod tests {
             .map(Task::new)
             .into(),
         );
-        app.keybinds = false;
         let mut rows = render(&mut terminal, &mut app);
         assert_eq!(rows.height, 3);
         assert_eq!(app.row_tasks, [0, 1, 1, 2, 3, 3, 3, 4].map(Some));
@@ -3838,10 +3207,10 @@ mod tests {
                 .collect(),
         );
 
-        // Include the real footer so page size excludes its rows as well as borders.
+        // Page size excludes the borders.
         let mut rows = render(&mut terminal, &mut app);
         assert_eq!(app.viewport_height, rows.height);
-        assert!(rows.height < 10);
+        assert_eq!(rows.height, 10);
 
         let original = app.tasks.clone();
 
@@ -3885,7 +3254,6 @@ mod tests {
 
         drop(press);
 
-        app.keybinds = false;
         app.tasks[1].text = "word ".repeat(60);
         terminal.backend_mut().resize(18, 8);
         render(&mut terminal, &mut app);
@@ -3989,7 +3357,6 @@ mod tests {
                     }]);
 
                     let original = app.tasks.clone();
-                    app.keybinds = false;
                     app.wrap = wrap;
                     let mut terminal = test_terminal(width, 20);
                     render(&mut terminal, &mut app);
@@ -4349,7 +3716,6 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
 
         let mut app = App::new(["abcd \u{301}X", "last"].map(Task::new).into());
-        app.keybinds = false;
         let mut terminal = test_terminal(12, 5);
         let rows = render(&mut terminal, &mut app);
 

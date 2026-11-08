@@ -183,7 +183,6 @@ adds nothing.
 | `--theme NAME` | Select a built-in theme (listed below). |
 | `--config PATH` | Use an explicit configuration file. |
 | `--wrap` / `--no-wrap` | Enable / disable task wrapping. |
-| `--keybinds` / `--no-keybinds` | Show / hide shortcut hints. |
 | `--round-corners` / `--square-corners` | Use rounded / sharp borders. |
 | `--ascii-markers` / `--unicode-markers` | Use ASCII / Unicode task markers. |
 | `--notifications` / `--no-notifications` | Show / hide brief confirmation messages. |
@@ -221,7 +220,6 @@ theme = "default"
 
 [display]
 wrap = true
-keybinds = true
 rounded_corners = false
 ascii_markers = false
 notifications = true
