@@ -28,11 +28,12 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn new(text: String) -> Self {
+    // A new, unfinished, uncarried task with a fresh UUID v4 and the current time.
+    pub fn new(text: impl Into<String>) -> Self {
         Self {
             id: Uuid::new_v4(),
             created_at: current_time(),
-            text,
+            text: text.into(),
             completed: false,
             carried: false,
         }
@@ -1687,12 +1688,7 @@ mod tests {
     fn app_with_tasks(count: usize) -> App {
         App::new(
             (0..count)
-                .map(|index| Task {
-                    carried: false,
-                    text: format!("task {index}"),
-                    completed: false,
-                    ..Task::new(String::new())
-                })
+                .map(|index| Task::new(format!("task {index}")))
                 .collect(),
         )
     }
@@ -1700,17 +1696,7 @@ mod tests {
     // KeyCode means an unmodified press; explicit events retain modifiers and kind.
     #[track_caller]
     fn app_with_texts(texts: &[&str]) -> App {
-        App::new(
-            texts
-                .iter()
-                .map(|text| Task {
-                    carried: false,
-                    text: (*text).into(),
-                    completed: false,
-                    ..Task::new(String::new())
-                })
-                .collect(),
-        )
+        App::new(texts.iter().map(|text| Task::new(*text)).collect())
     }
 
     fn texts(app: &App) -> Vec<&str> {
@@ -2144,10 +2130,9 @@ mod tests {
                 ] {
                     let mut app = app_with_tasks(3);
                     app.tasks[2] = Task {
-                        text: text.into(),
                         completed,
                         carried,
-                        ..Task::new(String::new())
+                        ..Task::new(text)
                     };
                     app.list.select(Some(2));
                     fixture.storage.save(&app.tasks).unwrap();
@@ -4010,10 +3995,8 @@ mod tests {
                 ("alpha last", true),
             ]
             .map(|(text, completed)| Task {
-                carried: false,
-                text: text.into(),
                 completed,
-                ..Task::new(String::new())
+                ..Task::new(text)
             })
             .into(),
         );
@@ -4735,7 +4718,7 @@ mod tests {
         assert_eq!(now.offset(), time::UtcOffset::UTC);
         assert_eq!(now.nanosecond(), 0);
 
-        let written = serde_json::to_value(Task::new("new".into())).unwrap();
+        let written = serde_json::to_value(Task::new("new")).unwrap();
         let written = written["created_at"].as_str().unwrap();
         assert!(written.len() == 20 && written.ends_with('Z'), "{written}");
     }
@@ -6128,15 +6111,7 @@ mod tests {
                 app.list.select(selected);
                 let original = app.tasks.clone();
                 let mut expected = original.clone();
-                expected.insert(
-                    expected_index,
-                    Task {
-                        carried: false,
-                        text: "New task".into(),
-                        completed: false,
-                        ..Task::new(String::new())
-                    },
-                );
+                expected.insert(expected_index, Task::new("New task"));
                 press(&mut app, &fixture, KeyCode::Char(key));
                 app.paste("New task");
                 press(&mut app, &fixture, KeyCode::Enter);

@@ -598,10 +598,8 @@ pub mod tests {
             ("active 2", false),
         ]
         .map(|(text, completed)| Task {
-            carried: false,
-            text: text.into(),
             completed,
-            ..Task::new(String::new())
+            ..Task::new(text)
         })
         .into();
 
@@ -903,15 +901,7 @@ pub mod tests {
             let fixture = Fixture::new();
             fs::set_permissions(&fixture.directory, fs::Permissions::from_mode(0o755)).unwrap();
             let _held = with_lock.then(|| fixture.storage.lock().unwrap());
-            fixture
-                .storage
-                .save(&[Task {
-                    carried: false,
-                    text: "Private task".into(),
-                    completed: false,
-                    ..Task::new(String::new())
-                }])
-                .unwrap();
+            fixture.storage.save(&[Task::new("Private task")]).unwrap();
             let directory = fixture.task_path().parent().unwrap();
 
             assert_eq!(
@@ -1026,12 +1016,7 @@ pub mod tests {
                 .contains("already running")
         );
 
-        let tasks = vec![Task {
-            carried: false,
-            text: "Keep me".into(),
-            completed: false,
-            ..Task::new(String::new())
-        }];
+        let tasks = vec![Task::new("Keep me")];
 
         fixture.storage.save(&tasks).unwrap();
         fixture.storage.save(&[]).unwrap();
@@ -1117,17 +1102,10 @@ pub mod tests {
         assert!(fixture.storage.load().unwrap().is_empty());
 
         let tasks = vec![
+            Task::new("Read 日本語 🪷"),
             Task {
-                carried: false,
-                text: "Read 日本語 🪷".into(),
-                completed: false,
-                ..Task::new(String::new())
-            },
-            Task {
-                carried: false,
-                text: "Keep this position".into(),
                 completed: true,
-                ..Task::new(String::new())
+                ..Task::new("Keep this position")
             },
         ];
 
@@ -1163,10 +1141,8 @@ pub mod tests {
         let fixture = Fixture::new();
 
         let tasks = vec![Task {
-            carried: false,
-            text: "Keep the original".into(),
             completed: true,
-            ..Task::new(String::new())
+            ..Task::new("Keep the original")
         }];
 
         fixture.storage.save(&tasks).unwrap();
@@ -1242,17 +1218,10 @@ pub mod tests {
 
         for text in invalid {
             let tasks = vec![
+                Task::new("valid"),
                 Task {
-                    carried: false,
-                    text: "valid".into(),
-                    completed: false,
-                    ..Task::new(String::new())
-                },
-                Task {
-                    carried: false,
-                    text,
                     completed: true,
-                    ..Task::new(String::new())
+                    ..Task::new(text)
                 },
             ];
 
@@ -1286,11 +1255,13 @@ pub mod tests {
         let fixture = Fixture::new();
 
         let tasks = vec![
-            Task { carried: false,
-                text: "日本語 e\u{301} 👩‍💻 👍🏽 — [punctuation!]  spaces\u{a0}inside\u{2003}text\u{2009}and\u{202f}text".into(),
-                completed: true, ..Task::new(String::new())
+            Task {
+                completed: true,
+                ..Task::new(
+                    "日本語 e\u{301} 👩‍💻 👍🏽 — [punctuation!]  spaces\u{a0}inside\u{2003}text\u{2009}and\u{202f}text",
+                )
             },
-            Task { carried: false, text: "long🪷".repeat(100_000), completed: false, ..Task::new(String::new()) },
+            Task::new("long🪷".repeat(100_000)),
         ];
 
         fixture.storage.save(&tasks).unwrap();
@@ -1304,12 +1275,7 @@ pub mod tests {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path()).unwrap();
 
-        let tasks = vec![Task {
-            carried: false,
-            text: "Recover me".into(),
-            completed: false,
-            ..Task::new(String::new())
-        }];
+        let tasks = vec![Task::new("Recover me")];
 
         let error = fixture.storage.save(&tasks).unwrap_err().to_string();
         assert!(error.contains("fully written temporary file remains"));
@@ -1338,10 +1304,8 @@ pub mod tests {
         fixture
             .storage
             .save(&[Task {
-                carried: false,
-                text: "Original tasks".into(),
                 completed: true,
-                ..Task::new(String::new())
+                ..Task::new("Original tasks")
             }])
             .unwrap();
         let original = fs::read(fixture.task_path()).unwrap();
@@ -1353,12 +1317,7 @@ pub mod tests {
             .open(fixture.task_path())
             .unwrap();
 
-        let replacement = vec![Task {
-            carried: false,
-            text: "Recover me".into(),
-            completed: false,
-            ..Task::new(String::new())
-        }];
+        let replacement = vec![Task::new("Recover me")];
 
         let error = fixture.storage.save(&replacement).unwrap_err().to_string();
         drop(held);
@@ -1383,15 +1342,7 @@ pub mod tests {
     #[cfg(unix)]
     fn directory_sync_failure_reports_visible_replacement_and_uncertain_durability() {
         let fixture = Fixture::new();
-        fixture
-            .storage
-            .save(&[Task {
-                carried: false,
-                text: "Old list".into(),
-                completed: false,
-                ..Task::new(String::new())
-            }])
-            .unwrap();
+        fixture.storage.save(&[Task::new("Old list")]).unwrap();
         let directory = fixture.task_path().parent().unwrap();
         // Write/search permission permits replacement, but opening the directory for sync fails.
         fs::set_permissions(directory, fs::Permissions::from_mode(0o300)).unwrap();
@@ -1403,10 +1354,8 @@ pub mod tests {
         }
 
         let replacement = vec![Task {
-            carried: false,
-            text: "New list".into(),
             completed: true,
-            ..Task::new(String::new())
+            ..Task::new("New list")
         }];
 
         let result = fixture.storage.save(&replacement);

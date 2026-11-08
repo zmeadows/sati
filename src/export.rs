@@ -159,30 +159,16 @@ mod tests {
     #[test]
     fn markdown_is_literal_ordered_unicode_and_independent_of_carryover() {
         let tasks = [
+            Task::new("Buy groceries"),
             Task {
-                text: "Buy groceries".into(),
-                completed: false,
-                carried: false,
-                ..Task::new(String::new())
-            },
-            Task {
-                text: "Walk the dog".into(),
                 completed: true,
-                carried: false,
-                ..Task::new(String::new())
+                ..Task::new("Walk the dog")
             },
             Task {
-                text: "Work: Review *PR* & <notes> [x] \\ `code`".into(),
-                completed: false,
                 carried: true,
-                ..Task::new(String::new())
+                ..Task::new("Work: Review *PR* & <notes> [x] \\ `code`")
             },
-            Task {
-                text: "1. nested 日本語 👩‍💻 e\u{301}".into(),
-                completed: false,
-                carried: false,
-                ..Task::new(String::new())
-            },
+            Task::new("1. nested 日本語 👩‍💻 e\u{301}"),
         ];
 
         assert_eq!(
@@ -217,10 +203,8 @@ mod tests {
         }
 
         let tasks = [Task {
-            text: "日本語".into(),
-            completed: false,
             carried: true,
-            ..Task::new(String::new())
+            ..Task::new("日本語")
         }];
 
         let mut output = Output::default();
@@ -238,16 +222,7 @@ mod tests {
             ("abc", "LSBbIF0gYWJjCg=="),
         ] {
             let mut output = Vec::new();
-            copy(
-                &[Task {
-                    text: text.into(),
-                    completed: false,
-                    carried: false,
-                    ..Task::new(String::new())
-                }],
-                &mut output,
-            )
-            .unwrap();
+            copy(&[Task::new(text)], &mut output).unwrap();
 
             assert_eq!(output, format!("\x1b]52;c;{expected}\x07").as_bytes());
         }

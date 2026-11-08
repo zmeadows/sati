@@ -1061,17 +1061,7 @@ mod tests {
     }
 
     fn app_with_texts(texts: &[&str]) -> App {
-        App::new(
-            texts
-                .iter()
-                .map(|text| Task {
-                    carried: false,
-                    text: (*text).into(),
-                    completed: false,
-                    ..Task::new(String::new())
-                })
-                .collect(),
-        )
+        App::new(texts.iter().map(|text| Task::new(*text)).collect())
     }
 
     #[test]
@@ -1303,12 +1293,7 @@ mod tests {
         let mut terminal = test_terminal(30, 8);
         let mut few = App::new(
             (0..3)
-                .map(|index| Task {
-                    carried: false,
-                    text: format!("task {index}"),
-                    completed: false,
-                    ..Task::new(String::new())
-                })
+                .map(|index| Task::new(format!("task {index}")))
                 .collect(),
         );
         few.keybinds = false;
@@ -1318,12 +1303,7 @@ mod tests {
 
         let mut app = App::new(
             (0..20)
-                .map(|index| Task {
-                    carried: false,
-                    text: format!("task {index}"),
-                    completed: false,
-                    ..Task::new(String::new())
-                })
+                .map(|index| Task::new(format!("task {index}")))
                 .collect(),
         );
         app.keybinds = false;
@@ -1369,12 +1349,7 @@ mod tests {
         // Rows, not task counts: two long wrapped tasks overflow a six-row list.
         let mut wrapped = App::new(
             (0..2)
-                .map(|_| Task {
-                    carried: false,
-                    text: "wrapped words ".repeat(12).trim_end().into(),
-                    completed: false,
-                    ..Task::new(String::new())
-                })
+                .map(|_| Task::new("wrapped words ".repeat(12).trim_end()))
                 .collect(),
         );
         wrapped.keybinds = false;
@@ -1384,12 +1359,7 @@ mod tests {
         // With section tabs, the thumb stays beside task rows, below the blank row.
         let mut sectioned = App::new(
             (0..20)
-                .map(|index| Task {
-                    carried: false,
-                    text: format!("Work: task {index}"),
-                    completed: false,
-                    ..Task::new(String::new())
-                })
+                .map(|index| Task::new(format!("Work: task {index}")))
                 .collect(),
         );
         sectioned.keybinds = false;
@@ -1457,10 +1427,8 @@ mod tests {
             );
 
             let mut app = App::new(vec![Task {
-                text: "Work: text".into(),
                 completed: true,
-                carried: false,
-                ..Task::new(String::new())
+                ..Task::new("Work: text")
             }]);
             app.styles.accent = app.styles.accent.fg(accent);
             app.mode = Mode::SearchResults {
@@ -1516,12 +1484,7 @@ mod tests {
     fn focus_is_bold_accented_in_both_marker_modes_without_bolding_task() {
         for unicode in [false, true] {
             for accent in [DEFAULT_ACCENT, Color::Indexed(3), Color::Rgb(12, 34, 56)] {
-                let mut app = App::new(vec![Task {
-                    text: "ordinary text".into(),
-                    completed: false,
-                    carried: false,
-                    ..Task::new(String::new())
-                }]);
+                let mut app = App::new(vec![Task::new("ordinary text")]);
                 app.unicode_markers = unicode;
                 app.styles.accent = app.styles.accent.fg(accent);
                 let mut terminal = test_terminal(40, 10);
@@ -1543,17 +1506,10 @@ mod tests {
     #[test]
     fn rendering_uses_resolved_roles_without_reconstructing_defaults() {
         let mut app = App::new(vec![
+            Task::new("ordinary"),
             Task {
-                text: "ordinary".into(),
-                completed: false,
-                carried: false,
-                ..Task::new(String::new())
-            },
-            Task {
-                text: "completed".into(),
                 completed: true,
-                carried: false,
-                ..Task::new(String::new())
+                ..Task::new("completed")
             },
         ]);
         app.styles.normal = app.styles.normal.fg(Color::Red);
@@ -1599,10 +1555,8 @@ mod tests {
             let config: crate::config::Config = toml::from_str(&format!("[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nmodifiers=['italic']\n[styles.completed]\nfg='red'\nmodifiers={modifiers}\n[styles.accent]\nfg='blue'\nmodifiers=['italic','underlined']")).unwrap();
 
             let mut app = App::new(vec![Task {
-                text: "Work: task".into(),
                 completed: true,
-                carried: false,
-                ..Task::new(String::new())
+                ..Task::new("Work: task")
             }]);
             app.styles = Styles::resolve(config.theme, &config.styles, None);
             let mut terminal = test_terminal(40, 12);
@@ -1650,10 +1604,8 @@ mod tests {
         for mode in 0..6 {
             for width in [1, 12, 60] {
                 let mut app = App::new(vec![Task {
-                    text: "Work: long wrapped task words".into(),
                     completed: true,
-                    carried: false,
-                    ..Task::new(String::new())
+                    ..Task::new("Work: long wrapped task words")
                 }]);
 
                 let config: crate::config::Config =
@@ -1804,10 +1756,9 @@ mod tests {
                             let mut app = App::new(
                                 (0..total)
                                     .map(|index| Task {
-                                        text: format!("task {index}"),
                                         completed: index < completed,
                                         carried: carried && index == total - 1,
-                                        ..Task::new(String::new())
+                                        ..Task::new(format!("task {index}"))
                                     })
                                     .collect(),
                             );
@@ -1886,23 +1837,14 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
 
         let mut app = App::new(vec![
+            Task::new("ordinary"),
             Task {
-                text: "ordinary".into(),
-                completed: false,
-                carried: false,
-                ..Task::new(String::new())
-            },
-            Task {
-                text: "done".into(),
                 completed: true,
-                carried: false,
-                ..Task::new(String::new())
+                ..Task::new("done")
             },
             Task {
-                text: "carried".into(),
-                completed: false,
                 carried: true,
-                ..Task::new(String::new())
+                ..Task::new("carried")
             },
         ]);
         app.keybinds = false;
@@ -1971,14 +1913,12 @@ mod tests {
             let mut app = App::new(
                 (0..20)
                     .map(|index| Task {
-                        text: if index == 19 || (!single && index == 0) {
+                        completed: index >= 10,
+                        ..Task::new(if index == 19 || (!single && index == 0) {
                             "needle words ".repeat(10).trim().into()
                         } else {
                             format!("task {index}")
-                        },
-                        completed: index >= 10,
-                        carried: false,
-                        ..Task::new(String::new())
+                        })
                     })
                     .collect(),
             );
@@ -2071,10 +2011,8 @@ mod tests {
             let mut app = App::new(
                 (0..20)
                     .map(|index| Task {
-                        text: format!("{}end", format!("task {index} ").repeat(12)),
                         completed: index >= 10,
-                        carried: false,
-                        ..Task::new(String::new())
+                        ..Task::new(format!("{}end", format!("task {index} ").repeat(12)))
                     })
                     .collect(),
             );
@@ -2168,23 +2106,14 @@ mod tests {
         assert_eq!(focus_marker(true), "\u{203a}");
 
         let tasks = vec![
+            Task::new("ordinary task wraps here"),
             Task {
-                text: "ordinary task wraps here".into(),
-                completed: false,
-                carried: false,
-                ..Task::new(String::new())
-            },
-            Task {
-                text: "done task wraps here".into(),
                 completed: true,
-                carried: false,
-                ..Task::new(String::new())
+                ..Task::new("done task wraps here")
             },
             Task {
-                text: "carried task wraps here".into(),
-                completed: false,
                 carried: true,
-                ..Task::new(String::new())
+                ..Task::new("carried task wraps here")
             },
         ];
 
@@ -2265,10 +2194,8 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
 
         let mut app = App::new(vec![Task {
-            text: "carry words across wrapped lines".into(),
-            completed: false,
             carried: true,
-            ..Task::new(String::new())
+            ..Task::new("carry words across wrapped lines")
         }]);
         app.keybinds = false;
         app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
@@ -2339,10 +2266,8 @@ mod tests {
                     let mut app = App::new(
                         (0..count)
                             .map(|index| Task {
-                                carried: false,
-                                text: format!("task {index}"),
                                 completed: index % 2 == 0,
-                                ..Task::new(String::new())
+                                ..Task::new(format!("task {index}"))
                             })
                             .collect(),
                     );
@@ -2441,23 +2366,14 @@ mod tests {
             let fixture = crate::storage::tests::Fixture::new();
 
             let mut app = App::new(vec![
+                Task::new("before"),
                 Task {
-                    carried: false,
-                    text: "before".into(),
-                    completed: false,
-                    ..Task::new(String::new())
+                    completed: true,
+                    ..Task::new(format!("{} end", "original e\u{301}界👩‍💻 ".repeat(30)))
                 },
                 Task {
-                    carried: false,
-                    text: format!("{} end", "original e\u{301}界👩‍💻 ".repeat(30)),
                     completed: true,
-                    ..Task::new(String::new())
-                },
-                Task {
-                    carried: false,
-                    text: "after".into(),
-                    completed: true,
-                    ..Task::new(String::new())
+                    ..Task::new("after")
                 },
             ]);
             app.keybinds = false;
@@ -2563,10 +2479,8 @@ mod tests {
             let mut app = App::new(
                 (0..20)
                     .map(|index| Task {
-                        carried: false,
-                        text: format!("task {index} {}end", "e\u{301}界👩‍💻 ".repeat(12)),
                         completed: index >= 10,
-                        ..Task::new(String::new())
+                        ..Task::new(format!("task {index} {}end", "e\u{301}界👩‍💻 ".repeat(12)))
                     })
                     .collect(),
             );
@@ -2669,16 +2583,12 @@ mod tests {
 
         let mut app = App::new(vec![
             Task {
-                carried: false,
-                text: "needle".into(),
                 completed: true,
-                ..Task::new(String::new())
+                ..Task::new("needle")
             },
             Task {
-                text: "another needle".into(),
-                carried: false,
                 completed: true,
-                ..Task::new(String::new())
+                ..Task::new("another needle")
             },
         ]);
         app.keybinds = false;
@@ -2734,10 +2644,8 @@ mod tests {
                 ("unrelated", false),
             ]
             .map(|(text, completed)| Task {
-                carried: false,
-                text: text.into(),
                 completed,
-                ..Task::new(String::new())
+                ..Task::new(text)
             })
             .into(),
         );
@@ -2816,23 +2724,11 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
 
         let mut app = App::new(vec![
+            Task::new("tag: abCDef abcdef"),
+            Task::new("nonmatching"),
             Task {
-                carried: false,
-                text: "tag: abCDef abcdef".into(),
-                completed: false,
-                ..Task::new(String::new())
-            },
-            Task {
-                carried: false,
-                text: "nonmatching".into(),
-                completed: false,
-                ..Task::new(String::new())
-            },
-            Task {
-                carried: false,
-                text: format!("{}tag: abcdef", "long ".repeat(50)),
                 completed: true,
-                ..Task::new(String::new())
+                ..Task::new(format!("{}tag: abcdef", "long ".repeat(50)))
             },
         ]);
         app.keybinds = false;
@@ -2915,10 +2811,8 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
 
         let mut app = App::new(vec![Task {
-            carried: false,
-            text: "ordinary".into(),
             completed: true,
-            ..Task::new(String::new())
+            ..Task::new("ordinary")
         }]);
         app.mode = Mode::Searching {
             input: "missing".into(),
@@ -2976,23 +2870,11 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
 
         let mut app = App::new(vec![
+            Task::new("wrapped task ".repeat(40).trim_end()),
+            Task::new("other active task"),
             Task {
-                carried: false,
-                text: "wrapped task ".repeat(40).trim_end().into(),
-                completed: false,
-                ..Task::new(String::new())
-            },
-            Task {
-                carried: false,
-                text: "other active task".into(),
-                completed: false,
-                ..Task::new(String::new())
-            },
-            Task {
-                carried: false,
-                text: "done".into(),
                 completed: true,
-                ..Task::new(String::new())
+                ..Task::new("done")
             },
         ]);
         let key = |app: &mut App, code, modifiers| {
@@ -3048,12 +2930,7 @@ mod tests {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
 
-        let mut app = App::new(vec![Task {
-            carried: false,
-            text: "task".into(),
-            completed: false,
-            ..Task::new(String::new())
-        }]);
+        let mut app = App::new(vec![Task::new("task")]);
 
         let text = |app: &App, width| {
             shortcut_lines(app, width)
@@ -3145,16 +3022,7 @@ mod tests {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
 
-        let mut app = App::new(
-            ["first", "second"]
-                .map(|text| Task {
-                    text: text.into(),
-                    completed: false,
-                    carried: false,
-                    ..Task::new(String::new())
-                })
-                .into(),
-        );
+        let mut app = App::new(["first", "second"].map(Task::new).into());
 
         for key in [' ', ' ', 'u'] {
             app.key(
@@ -3223,12 +3091,7 @@ mod tests {
 
         let mut app = App::new(
             (0..12)
-                .map(|index| Task {
-                    carried: false,
-                    text: format!("task {index} {}", "wrapped words ".repeat(4)),
-                    completed: false,
-                    ..Task::new(String::new())
-                })
+                .map(|index| Task::new(format!("task {index} {}", "wrapped words ".repeat(4))))
                 .collect(),
         );
 
@@ -3291,12 +3154,7 @@ mod tests {
     fn tiny_terminals_and_resizing_are_safe_in_every_mode() {
         let mut terminal = test_terminal(40, 12);
 
-        let mut app = App::new(vec![Task {
-            carried: false,
-            text: "日本語 🪷 ".repeat(8).trim_end().into(),
-            completed: false,
-            ..Task::new(String::new())
-        }]);
+        let mut app = App::new(vec![Task::new("日本語 🪷 ".repeat(8).trim_end())]);
         app.styles = Styles::resolve(
             crate::themes::BuiltinTheme::Nord,
             &crate::config::StyleOverrides::default(),
@@ -3364,12 +3222,7 @@ mod tests {
                 "abcd abcd abcd abcd abcd",
                 "short",
             ]
-            .map(|text| Task {
-                carried: false,
-                text: text.into(),
-                completed: false,
-                ..Task::new(String::new())
-            })
+            .map(Task::new)
             .into(),
         );
         app.keybinds = false;
@@ -3405,12 +3258,7 @@ mod tests {
 
         let mut app = App::new(
             (0..40)
-                .map(|index| Task {
-                    carried: false,
-                    text: format!("task {index}"),
-                    completed: false,
-                    ..Task::new(String::new())
-                })
+                .map(|index| Task::new(format!("task {index}")))
                 .collect(),
         );
 
@@ -3528,12 +3376,7 @@ mod tests {
 
         let mut app = App::new(
             (0..1000)
-                .map(|index| Task {
-                    carried: false,
-                    text: format!("task {index}"),
-                    completed: false,
-                    ..Task::new(String::new())
-                })
+                .map(|index| Task::new(format!("task {index}")))
                 .collect(),
         );
 
@@ -3565,10 +3408,8 @@ mod tests {
             for completed in [false, true] {
                 for (width, wrap) in [(12, true), (40, true), (40, false)] {
                     let mut app = App::new(vec![Task {
-                        carried: false,
-                        text: text.into(),
                         completed,
-                        ..Task::new(String::new())
+                        ..Task::new(text)
                     }]);
 
                     let original = app.tasks.clone();
@@ -3615,10 +3456,8 @@ mod tests {
         let mut terminal = test_terminal(40, 10);
 
         let mut app = App::new(vec![Task {
-            carried: false,
-            text: "Completed".into(),
             completed: true,
-            ..Task::new(String::new())
+            ..Task::new("Completed")
         }]);
         app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
         render(&mut terminal, &mut app);
@@ -3643,20 +3482,7 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
         let mut terminal = test_terminal(12, 8);
 
-        let mut app = App::new(vec![
-            Task {
-                carried: false,
-                text: "日本語".repeat(100),
-                completed: false,
-                ..Task::new(String::new())
-            },
-            Task {
-                carried: false,
-                text: "next".into(),
-                completed: false,
-                ..Task::new(String::new())
-            },
-        ]);
+        let mut app = App::new(vec![Task::new("日本語".repeat(100)), Task::new("next")]);
 
         let toggle = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
         app.key(toggle, &fixture.storage).unwrap();
@@ -3687,12 +3513,7 @@ mod tests {
 
         for edit in [false, true] {
             for width in [1, 2, 8, 16, 40] {
-                let mut app = App::new(vec![Task {
-                    carried: false,
-                    text: text.clone(),
-                    completed: false,
-                    ..Task::new(String::new())
-                }]);
+                let mut app = App::new(vec![Task::new(text.clone())]);
                 app.mode = if edit {
                     Mode::Editing {
                         index: 0,
@@ -3951,16 +3772,7 @@ mod tests {
         };
         let fixture = crate::storage::tests::Fixture::new();
 
-        let mut app = App::new(
-            ["abcd \u{301}X", "last"]
-                .map(|text| Task {
-                    carried: false,
-                    text: text.into(),
-                    completed: false,
-                    ..Task::new(String::new())
-                })
-                .into(),
-        );
+        let mut app = App::new(["abcd \u{301}X", "last"].map(Task::new).into());
         app.keybinds = false;
         let mut terminal = test_terminal(12, 5);
         let rows = render(&mut terminal, &mut app);
@@ -4006,20 +3818,7 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
         let mut terminal = test_terminal(18, 12);
 
-        let mut app = App::new(vec![
-            Task {
-                carried: false,
-                text: "alpha beta gamma delta".into(),
-                completed: false,
-                ..Task::new(String::new())
-            },
-            Task {
-                carried: false,
-                text: "next".into(),
-                completed: false,
-                ..Task::new(String::new())
-            },
-        ]);
+        let mut app = App::new(vec![Task::new("alpha beta gamma delta"), Task::new("next")]);
 
         let rows = render(&mut terminal, &mut app);
         assert_eq!(app.row_tasks, [0, 0, 0, 1].map(Some));
@@ -4058,18 +3857,8 @@ mod tests {
         let mut terminal = test_terminal(18, 8);
 
         let mut app = App::new(vec![
-            Task {
-                carried: false,
-                text: format!("{}THE END", "word ".repeat(30)),
-                completed: false,
-                ..Task::new(String::new())
-            },
-            Task {
-                carried: false,
-                text: "next".into(),
-                completed: false,
-                ..Task::new(String::new())
-            },
+            Task::new(format!("{}THE END", "word ".repeat(30))),
+            Task::new("next"),
         ]);
 
         let mut rows = render(&mut terminal, &mut app);

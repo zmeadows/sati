@@ -18,7 +18,7 @@
 - `src/app.rs`: `Task`, application modes, key/mouse dispatch, task mutations, selection, scrolling, and bounded undo history.
 - `src/input.rs`: single-line, grapheme-aware `TextInput`; cursor is a UTF-8 byte offset kept at a grapheme boundary.
 - `src/ui.rs`: layout, wrapping, drawing, context-sensitive shortcut legends, mouse row mapping, and input cursor placement.
-- `src/storage.rs`: platform data paths, exclusive instance lock, JSON loading/validation, and atomic replacement saves.
+- `src/storage.rs`: platform data paths, exclusive instance lock, JSON loading/validation, schema versioning and migrations, and atomic replacement saves.
 - `src/config.rs`: TOML config discovery (`$XDG_CONFIG_HOME`/`~/.config`, macOS Application Support, `%APPDATA%`) and parsing. Unknown keys and invalid files are errors; sati never writes config files. Precedence is CLI > TOML > defaults; contradictory CLI flag pairs are rejected.
 - `src/themes.rs` / `src/styles.rs`: built-in theme palettes and the resolved `Styles` (theme + TOML overrides + `--accent`).
 - `src/search.rs`: search matching and highlight ranges for `Searching` / `SearchResults`.
