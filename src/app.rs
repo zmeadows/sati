@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
@@ -179,10 +179,14 @@ impl Task {
 // order matching the tasks: a section's last task takes it out, and a new one goes last.
 pub(crate) fn settled_section_order(order: &[String], tasks: &[Task]) -> Vec<String> {
     let used: Vec<String> = tasks.iter().filter_map(Task::section_key).collect();
+    let in_use: HashSet<&String> = used.iter().collect();
+
+    // The sets only answer membership; `settled` keeps the order.
+    let mut seen: HashSet<&String> = HashSet::new();
     let mut settled: Vec<String> = Vec::new();
 
     for key in order.iter().chain(&used) {
-        if used.contains(key) && !settled.contains(key) {
+        if in_use.contains(key) && seen.insert(key) {
             settled.push(key.clone());
         }
     }
@@ -414,18 +418,27 @@ impl App {
     // Tabs in display order: [*], [-] when some tasks have no section, then sections in
     // `section_order`. Empty when no task has a section, which hides the tab bar.
     pub fn section_tabs(&self) -> Vec<(SectionView, String)> {
+        // One pass over the tasks: the first spelling of each key in list order labels its
+        // tab, and any task without a section brings in [-].
+        let mut labels: HashMap<String, &str> = HashMap::new();
+        let mut has_unsectioned = false;
+
+        for task in &self.tasks {
+            match &task.section {
+                Some(section) => {
+                    labels.entry(section.to_lowercase()).or_insert(section);
+                }
+                None => has_unsectioned = true,
+            }
+        }
+
         let named: Vec<(SectionView, String)> = self
             .section_order
             .iter()
             .filter_map(|key| {
-                // The first spelling in list order labels the tab.
-                let label = self
-                    .tasks
-                    .iter()
-                    .filter_map(|task| task.section.as_deref())
-                    .find(|section| section.to_lowercase() == *key)?;
+                let label = labels.get(key)?;
 
-                Some((SectionView::Named(key.clone()), label.to_owned()))
+                Some((SectionView::Named(key.clone()), (*label).to_owned()))
             })
             .collect();
 
@@ -435,7 +448,7 @@ impl App {
 
         let mut tabs = vec![(SectionView::All, "[*]".to_owned())];
 
-        if self.tasks.iter().any(|task| task.section.is_none()) {
+        if has_unsectioned {
             tabs.push((SectionView::Unsectioned, "[-]".to_owned()));
         }
 
@@ -1403,12 +1416,9 @@ impl App {
             return Some("Section names are one word without colons");
         }
 
+        // `section_order` lists exactly the keys that tasks use.
         let key = name.to_lowercase();
-        let taken = key != *current
-            && self
-                .tasks
-                .iter()
-                .any(|task| task.section_key().as_ref() == Some(&key));
+        let taken = key != *current && self.section_order.contains(&key);
 
         taken.then_some("Section name already taken")
     }
