@@ -248,40 +248,22 @@ Configuration is optional. Precedence is **CLI > TOML > built-in defaults**.
 | macOS | `~/Library/Application Support/sati/config.toml` |
 | Windows | `%APPDATA%\sati\config.toml` |
 
-Every section and key is optional. This example combines display defaults with optional style customizations:
+Every section and key is optional. A configuration usually sets only a few of them:
 
 ```toml
-theme = "default"
+theme = "catppuccin-mocha"
 
 [display]
-wrap = true
-border_style = "square"    # or "rounded"
-marker_style = "unicode"   # or "ascii"
-status_messages = true
-status_message_duration_ms = 3560
-show_help_hint = true
+wrap = false
+border_style = "rounded"
 
 [input]
-mouse = true
-
-[styles.normal]
-fg = "reset"
-bg = "#20242d"
-
-[styles.muted]
-modifiers = ["dim"]
-
-[styles.completed]
-fg = "darkgray"
-
-[styles.border]
-fg = "darkgray"
-modifiers = []
-
-[styles.accent]
-fg = "#e78a4e"
-modifiers = ["bold"]
+mouse = false
 ```
+
+[`config_defaults.toml`](config_defaults.toml) lists every option at its built-in default,
+with the accepted values and commented-out style examples. Copy it as a starting point and keep
+only the lines you change.
 
 Two display preferences exist only in the configuration file, without command-line flags:
 

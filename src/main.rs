@@ -1482,6 +1482,32 @@ mod tests {
     }
 
     #[test]
+    fn the_defaults_file_lists_every_option_at_its_built_in_default() {
+        let config: config::Config =
+            toml::from_str(include_str!("../config_defaults.toml")).unwrap();
+
+        // Exhaustive patterns: a new display or input option must be added to the file.
+        let config::Display {
+            wrap,
+            border_style,
+            marker_style,
+            status_messages,
+            status_message_duration_ms,
+            show_help_hint,
+        } = &config.display;
+        let config::Input { mouse } = &config.input;
+
+        assert!(wrap.is_some() && border_style.is_some() && marker_style.is_some());
+        assert!(status_messages.is_some() && status_message_duration_ms.is_some());
+        assert!(show_help_hint.is_some() && mouse.is_some());
+
+        assert_eq!(
+            parse_cli(&[]).unwrap().resolve(config),
+            resolve_defaults(&[])
+        );
+    }
+
+    #[test]
     fn wrapping_is_enabled_by_default_and_can_be_disabled() {
         let defaults = resolve_defaults(&[]);
         assert!(defaults.wrap);
