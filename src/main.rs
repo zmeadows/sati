@@ -35,7 +35,7 @@ use ratatui::crossterm::{
 use ratatui::crossterm::event::EnableBracketedPaste;
 
 use clap::{
-    Args, Parser, Subcommand,
+    Args, CommandFactory, FromArgMatches, Parser, Subcommand,
     builder::{
         PossibleValuesParser, TypedValueParser,
         styling::{AnsiColor, Styles},
@@ -89,15 +89,54 @@ struct Options {
     about,
     styles = HELP_STYLES,
     after_help = CONFIG_HELP,
-    args_conflicts_with_subcommands = true,
     disable_help_subcommand = true
 )]
 struct Cli {
     #[command(subcommand)]
     command: Option<CliCommand>,
 
+    /// Use tasks.json and tasks.lock in this directory instead of the default data directory
+    ///
+    /// Each directory holds an independent checklist. sati creates the directory if needed;
+    /// export only reads it. This is unrelated to --config.
+    #[arg(long, value_name = "PATH", global = true)]
+    data_dir: Option<PathBuf>,
+
     #[command(flatten)]
     options: CliOptions,
+}
+
+impl Cli {
+    // Like `try_parse_from`, but a subcommand rejects the interactive options. Clap's
+    // `args_conflicts_with_subcommands` would also reject the global `--data-dir` before a
+    // subcommand, so the conflict is checked here, and reported as Clap's own usage error.
+    fn try_parse_arguments<I, T>(arguments: I) -> std::result::Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        let mut command = Self::command();
+        let matches = command.try_get_matches_from_mut(arguments)?;
+
+        if let Some((subcommand, _)) = matches.subcommand() {
+            let interactive_option = command.get_arguments().find(|argument| {
+                !argument.is_global_set()
+                    && matches.value_source(argument.get_id().as_str())
+                        == Some(clap::parser::ValueSource::CommandLine)
+            });
+
+            if let Some(option) = interactive_option {
+                let message = format!(
+                    "the subcommand '{subcommand}' cannot be used with '--{}'",
+                    option.get_long().unwrap_or_default()
+                );
+
+                return Err(command.error(clap::error::ErrorKind::ArgumentConflict, message));
+            }
+        }
+
+        Self::from_arg_matches(&matches).map_err(|error| error.format(&mut command))
+    }
 }
 
 // Each subcommand runs instead of the interactive checklist.
@@ -250,11 +289,13 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     // Clap answers --help, --version, and argument errors itself and exits before
     // configuration, storage, or the terminal are touched.
-    let cli = Cli::parse();
+    let cli = Cli::try_parse_arguments(std::env::args_os()).unwrap_or_else(|error| error.exit());
+
+    let data_dir = cli.data_dir.as_deref();
 
     if let Some(command) = cli.command {
         return match command {
-            CliCommand::Export => export::run(),
+            CliCommand::Export => export::run(data_dir),
         };
     }
 
@@ -263,7 +304,7 @@ fn run() -> Result<()> {
     let config = config::Config::load(cli.options.config.as_deref())?;
     let options = cli.options.resolve(config);
 
-    let storage = Storage::discover()?;
+    let storage = Storage::discover(data_dir)?;
     let _instance_lock = storage.lock()?;
 
     let mut app = App::from_document(storage.load_document()?);
@@ -554,7 +595,7 @@ mod tests {
     fn parse_cli(arguments: &[&str]) -> std::result::Result<CliOptions, clap::Error> {
         let arguments = std::iter::once("sati").chain(arguments.iter().copied());
 
-        Cli::try_parse_from(arguments).map(|cli| cli.options)
+        Cli::try_parse_arguments(arguments).map(|cli| cli.options)
     }
 
     fn resolve_defaults(arguments: &[&str]) -> Options {
@@ -1395,8 +1436,8 @@ mod tests {
             }
         );
         assert!(parse_cli(&["--no-mouse=true"]).is_err());
-        assert!(Cli::try_parse_from(["sati", "export", "--no-mouse"]).is_err());
-        assert!(Cli::try_parse_from(["sati", "--no-mouse", "export"]).is_err());
+        assert!(Cli::try_parse_arguments(["sati", "export", "--no-mouse"]).is_err());
+        assert!(Cli::try_parse_arguments(["sati", "--no-mouse", "export"]).is_err());
     }
 
     #[test]
@@ -1470,19 +1511,108 @@ mod tests {
 
     #[test]
     fn export_is_a_subcommand_that_takes_no_display_options() {
-        let cli = Cli::try_parse_from(["sati", "export"]).unwrap();
+        let cli = Cli::try_parse_arguments(["sati", "export"]).unwrap();
         assert_eq!(cli.command, Some(CliCommand::Export));
 
-        assert!(Cli::try_parse_from(["sati"]).unwrap().command.is_none());
+        assert!(
+            Cli::try_parse_arguments(["sati"])
+                .unwrap()
+                .command
+                .is_none()
+        );
 
         for args in [
             vec!["sati", "--no-wrap", "export"],
             vec!["sati", "export", "--no-wrap"],
             vec!["sati", "export", "unexpected"],
             vec!["sati", "help"],
+            vec!["sati", "--config", "sati.toml", "export"],
+            vec!["sati", "--data-dir", "work", "--theme", "default", "export"],
         ] {
-            assert!(Cli::try_parse_from(&args).is_err(), "accepted {args:?}");
+            assert!(
+                Cli::try_parse_arguments(&args).is_err(),
+                "accepted {args:?}"
+            );
         }
+
+        let error = Cli::try_parse_arguments(["sati", "--no-mouse", "export"]).unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        assert!(
+            error
+                .to_string()
+                .contains("'export' cannot be used with '--no-mouse'")
+        );
+    }
+
+    #[test]
+    fn data_dir_is_global_optional_and_independent_of_config() {
+        let parse = |arguments: &[&str]| {
+            let arguments = std::iter::once("sati").chain(arguments.iter().copied());
+
+            Cli::try_parse_arguments(arguments).unwrap()
+        };
+
+        assert!(parse(&[]).data_dir.is_none());
+        assert!(parse(&["export"]).data_dir.is_none());
+
+        for arguments in [
+            vec!["--data-dir", "work", "export"],
+            vec!["export", "--data-dir", "work"],
+            vec!["export", "--data-dir=work"],
+        ] {
+            let cli = parse(&arguments);
+
+            assert_eq!(cli.command, Some(CliCommand::Export), "{arguments:?}");
+            assert_eq!(cli.data_dir, Some(PathBuf::from("work")), "{arguments:?}");
+        }
+
+        let cli = parse(&["--config", "work.toml", "--data-dir", "work", "--no-wrap"]);
+
+        assert!(cli.command.is_none());
+        assert_eq!(cli.data_dir, Some(PathBuf::from("work")));
+        assert_eq!(cli.options.config, Some(PathBuf::from("work.toml")));
+
+        let cli = parse(&["--data-dir", "work"]);
+
+        assert!(cli.options.config.is_none());
+
+        for arguments in [
+            vec!["sati", "--data-dir"],
+            vec!["sati", "--data-dir", ""],
+            vec!["sati", "--data-dir", "a", "--data-dir", "b"],
+        ] {
+            assert!(
+                Cli::try_parse_arguments(&arguments).is_err(),
+                "accepted {arguments:?}"
+            );
+        }
+
+        // Clap lets a global argument appear once on each level; the subcommand's value wins.
+        let cli = parse(&["--data-dir", "a", "export", "--data-dir", "b"]);
+
+        assert_eq!(cli.data_dir, Some(PathBuf::from("b")));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn data_dir_keeps_non_utf8_paths_intact() {
+        use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
+        let directory = OsStr::from_bytes(b"checklists/\xffwork");
+        let interactive = [OsStr::new("sati"), OsStr::new("--data-dir"), directory];
+        let export = [
+            OsStr::new("sati"),
+            OsStr::new("export"),
+            OsStr::new("--data-dir"),
+            directory,
+        ];
+
+        let interactive = Cli::try_parse_arguments(interactive).unwrap();
+        let export = Cli::try_parse_arguments(export).unwrap();
+
+        assert_eq!(interactive.data_dir, Some(PathBuf::from(directory)));
+        assert_eq!(export.data_dir, Some(PathBuf::from(directory)));
     }
 
     #[test]

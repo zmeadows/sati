@@ -211,6 +211,7 @@ adds nothing.
 | --- | --- |
 | `--theme NAME` | Select a built-in theme (listed below). |
 | `--config PATH` | Use an explicit configuration file. |
+| `--data-dir PATH` | Keep `tasks.json` and `tasks.lock` in this directory (see [Data](#data)). Also works with `export`. |
 | `--wrap` / `--no-wrap` | Enable / disable task wrapping. |
 | `--border-style square\|rounded` | Draw square (default) or rounded border corners. |
 | `--marker-style unicode\|ascii` | Use Unicode (default) or ASCII task markers. |
@@ -373,6 +374,7 @@ Export Markdown to stdout, even while the TUI is running:
 sati export
 sati export > tasks.md
 sati export | grep -F '[ ]'
+sati export --data-dir ~/checklists/work   # or: sati --data-dir ~/checklists/work export
 ```
 
 Stdout carries only the Markdown, so it can be redirected or piped; errors go to stderr.
@@ -397,6 +399,27 @@ Tasks are saved locally in `tasks.json`:
 | Linux | `~/.local/share/sati/tasks.json` (or `$XDG_DATA_HOME/sati/tasks.json`) |
 | macOS | `~/Library/Application Support/sati/tasks.json` |
 | Windows | `%APPDATA%\sati\tasks.json` |
+
+`--data-dir PATH` uses another directory instead: sati keeps `tasks.json` and its
+`tasks.lock` directly in `PATH` (no `sati` subdirectory is added; a relative path is taken
+from the current directory). Each directory is an independent checklist with its own lock,
+so separate directories can be open at the same time. The interactive checklist creates the
+directory (and any missing parents) if needed; `sati export` only reads it, never creates
+it, and reports an error if it is missing or not a directory. An existing directory without
+a `tasks.json` is an empty checklist.
+
+`--data-dir` only chooses where tasks live. Configuration is still read from the default
+`config.toml` (or `--config PATH`), and neither option changes the other. For example, to
+keep separate personal and work checklists:
+
+```sh
+sati --data-dir ~/checklists/personal
+sati --data-dir ~/checklists/work --config ~/.config/sati/work.toml
+sati export --data-dir ~/checklists/work > work.md
+```
+
+A shell alias such as `alias work='sati --data-dir ~/checklists/work'` makes the second
+list one word away.
 
 Tasks are saved automatically to `tasks.json`. Each save replaces the file atomically, so
 an interrupted save leaves the previous list rather than a partial file. Undo/redo history

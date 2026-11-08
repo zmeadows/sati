@@ -189,3 +189,103 @@ fn export_rejects_removed_file_options_and_unknown_arguments() {
     assert!(help.contains("stdout"));
     assert!(!help.contains("--output") && !help.contains("--force"));
 }
+
+#[test]
+fn export_reads_the_data_dir_in_either_position_and_never_creates_anything() {
+    let fixture = Fixture::new();
+    fixture.prepare();
+    let work = fixture.root.join("work");
+    fs::create_dir(&work).unwrap();
+    fs::write(work.join("tasks.json"), tasks_document("")).unwrap();
+
+    let before_flag = Command::new(env!("CARGO_BIN_EXE_sati"))
+        .arg("--data-dir")
+        .arg(&work)
+        .arg("export")
+        .env("HOME", &fixture.root)
+        .env("APPDATA", &fixture.root)
+        .env("XDG_DATA_HOME", &fixture.root)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let after_flag = fixture
+        .command()
+        .arg("--data-dir")
+        .arg(&work)
+        .output()
+        .unwrap();
+
+    for output in [before_flag, after_flag] {
+        assert!(output.status.success() && output.stderr.is_empty());
+        assert_eq!(output.stdout, MARKDOWN.as_bytes());
+    }
+
+    assert_eq!(fs::read_dir(&work).unwrap().count(), 1);
+
+    // An existing directory without a task file is an empty checklist, as by default.
+    let empty = fixture.root.join("empty");
+    fs::create_dir(&empty).unwrap();
+
+    let output = fixture
+        .command()
+        .arg("--data-dir")
+        .arg(&empty)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    assert_eq!(fs::read_dir(&empty).unwrap().count(), 0);
+}
+
+#[test]
+fn export_reports_a_missing_or_non_directory_data_dir_without_creating_it() {
+    let fixture = Fixture::new();
+    let missing = fixture.root.join("missing/work");
+    let file = fixture.root.join("file");
+    fs::write(&file, "keep me").unwrap();
+
+    for (directory, message) in [
+        (&missing, "could not read data directory"),
+        (&file, "is not a directory"),
+    ] {
+        let output = fixture
+            .command()
+            .arg("--data-dir")
+            .arg(directory)
+            .output()
+            .unwrap();
+        let error = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(
+            error.contains(message) && error.contains(&directory.display().to_string()),
+            "{error}"
+        );
+    }
+
+    assert!(!fixture.root.join("missing").exists());
+    assert_eq!(fs::read_to_string(&file).unwrap(), "keep me");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn export_reads_a_non_utf8_data_dir() {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
+    let fixture = Fixture::new();
+    let directory = fixture.root.join(OsStr::from_bytes(b"work-\xff"));
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("tasks.json"), tasks_document("")).unwrap();
+
+    let output = fixture
+        .command()
+        .arg("--data-dir")
+        .arg(&directory)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success() && output.stderr.is_empty());
+    assert_eq!(output.stdout, MARKDOWN.as_bytes());
+}

@@ -143,6 +143,55 @@ fn explicit_config_replaces_an_invalid_default_file() {
 }
 
 #[test]
+fn config_and_data_dir_select_their_files_independently() {
+    let fixture = Fixture::new();
+    let work = fixture.root.join("work");
+
+    // `--data-dir` does not move the configuration: the invalid default file is still read,
+    // and stops startup before the data directory is created.
+    fixture.config("invalid default");
+
+    let output = fixture
+        .command()
+        .arg("--data-dir")
+        .arg(&work)
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&output.stderr);
+
+    assert!(error.contains("invalid configuration"), "{error}");
+    assert!(
+        error.contains(&fixture.config.display().to_string()),
+        "{error}"
+    );
+    assert!(!work.exists());
+
+    // `--config` does not move the data: tasks come from `--data-dir`, and a config.toml
+    // there is never read.
+    write_invalid_tasks(&fixture);
+    fs::create_dir(&work).unwrap();
+    fs::write(work.join("tasks.json"), "invalid work data").unwrap();
+    fs::write(work.join("config.toml"), "invalid work config").unwrap();
+    fs::write(fixture.root.join("work.toml"), "[display]\nwrap = false").unwrap();
+
+    let output = fixture
+        .command()
+        .args(["--config", "work.toml", "--data-dir", "work"])
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&output.stderr);
+    let work_tasks = std::path::Path::new("work").join("tasks.json");
+
+    assert!(!output.status.success());
+    assert!(
+        error.contains(&format!("invalid task file {}", work_tasks.display())),
+        "{error}"
+    );
+    assert!(work.join("tasks.lock").is_file());
+    assert!(!fixture.data.join("tasks.lock").exists());
+}
+
+#[test]
 fn missing_default_config_does_not_get_created() {
     let fixture = Fixture::new();
     write_invalid_tasks(&fixture);

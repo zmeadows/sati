@@ -64,7 +64,15 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub fn discover() -> Result<Self> {
+    // An explicit `--data-dir` is used as given (relative to the working directory), without
+    // a `sati` subdirectory; otherwise the platform data directory is discovered.
+    pub fn discover(data_dir: Option<&Path>) -> Result<Self> {
+        if let Some(directory) = data_dir {
+            return Ok(Self {
+                path: directory.join("tasks.json"),
+            });
+        }
+
         #[cfg(not(any(target_os = "macos", windows)))]
         let base = match env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
             Some(path) => {
@@ -321,6 +329,10 @@ fn create_data_directory(directory: &Path) -> io::Result<()> {
 
     match builder.create(directory) {
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists && directory.is_dir() => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "a file that is not a directory is in the way",
+        )),
         result => result,
     }
 }
@@ -897,18 +909,68 @@ pub mod tests {
     }
 
     #[test]
+    fn explicit_data_directories_are_created_privately_and_stay_independent() {
+        let fixture = Fixture::new();
+        let personal = fixture.directory.join("checklists/personal");
+        let work = fixture.directory.join("checklists/work");
+        let personal_storage = Storage::discover(Some(&personal)).unwrap();
+        let work_storage = Storage::discover(Some(&work)).unwrap();
+
+        assert_eq!(personal_storage.path, personal.join("tasks.json"));
+        assert!(!personal.exists());
+
+        let personal_lock = personal_storage.lock().unwrap();
+        let _work_lock = work_storage.lock().unwrap();
+
+        personal_storage.save(&[Task::new("Water plants")]).unwrap();
+        work_storage.save(&[Task::new("Review PR")]).unwrap();
+
+        assert_eq!(personal_storage.load().unwrap()[0].text, "Water plants");
+        assert_eq!(work_storage.load().unwrap()[0].text, "Review PR");
+
+        let mut names: Vec<_> = fs::read_dir(&personal)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+
+        assert_eq!(names, ["tasks.json", "tasks.lock"]);
+
+        #[cfg(unix)]
+        {
+            let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+            assert_eq!(mode(&personal), 0o700);
+            assert_eq!(mode(&personal.join("tasks.json")), 0o600);
+            assert_eq!(mode(&personal.join("tasks.lock")), 0o600);
+        }
+
+        // Each directory has its own lock: only the same directory is already running.
+        let again = Storage::discover(Some(&personal)).unwrap();
+
+        assert!(
+            again
+                .lock()
+                .unwrap_err()
+                .to_string()
+                .contains("already running")
+        );
+
+        drop(personal_lock);
+
+        let _reacquired = again.lock().unwrap();
+    }
+
+    #[test]
     fn lock_setup_failures_are_reported() {
         let fixture = Fixture::new();
         let directory = fixture.task_path().parent().unwrap();
         fs::write(directory, "blocking file").unwrap();
+        let error = fixture.storage.lock().unwrap_err().to_string();
 
         assert!(
-            fixture
-                .storage
-                .lock()
-                .unwrap_err()
-                .to_string()
-                .contains("could not create")
+            error.contains("could not create") && error.contains("is not a directory"),
+            "{error}"
         );
 
         fs::remove_file(directory).unwrap();

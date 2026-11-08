@@ -1,4 +1,8 @@
-use std::io::{self, Write};
+use std::{
+    fs,
+    io::{self, Write},
+    path::Path,
+};
 
 use crate::{
     app::{Task, TaskStatus},
@@ -30,8 +34,26 @@ pub fn markdown(tasks: &[Task]) -> String {
     output
 }
 
-pub fn run() -> Result<()> {
-    let storage = Storage::discover()?;
+pub fn run(data_dir: Option<&Path>) -> Result<()> {
+    // A missing default directory just means sati has not saved anything yet, but a missing
+    // `--data-dir` is more likely a typo, so it is reported instead of exporting nothing.
+    // Export never creates it either way.
+    if let Some(directory) = data_dir {
+        let metadata = fs::metadata(directory).map_err(|error| {
+            format!(
+                "could not read data directory {}: {error}",
+                directory.display()
+            )
+        })?;
+
+        if !metadata.is_dir() {
+            return Err(
+                format!("data directory {} is not a directory", directory.display()).into(),
+            );
+        }
+    }
+
+    let storage = Storage::discover(data_dir)?;
     // Atomic task-file replacement allows a consistent read without the writer lock.
     let contents = markdown(&storage.load()?);
 

@@ -142,3 +142,98 @@ fn xdg_directory_takes_precedence_and_empty_xdg_uses_home() {
     );
     assert!(!home.exists());
 }
+
+#[test]
+fn data_dir_replaces_native_discovery_without_a_sati_subdirectory() {
+    let fixture = Fixture::new();
+    let work = fixture.0.join("checklists/work");
+    let mut command = command();
+    command
+        .env("HOME", &fixture.0)
+        .env("APPDATA", &fixture.0)
+        .arg("--data-dir")
+        .arg(&work);
+
+    assert_reuses_data(&mut command, &work);
+
+    // The native data directory is never created or read.
+    let entries: Vec<_> = fs::read_dir(&fixture.0)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+
+    assert_eq!(entries, ["checklists"]);
+}
+
+#[test]
+fn data_dir_needs_no_native_directory_and_may_be_relative() {
+    let fixture = Fixture::new();
+    let absolute = fixture.0.join("absolute");
+
+    assert_reuses_data(command().arg("--data-dir").arg(&absolute), &absolute);
+
+    // A relative directory is resolved against the working directory and reported as given.
+    let relative = fixture.0.join("relative");
+    fs::create_dir(&relative).unwrap();
+    fs::write(relative.join("tasks.json"), "invalid json").unwrap();
+
+    let output = command()
+        .current_dir(&fixture.0)
+        .args(["--data-dir", "relative"])
+        .output()
+        .unwrap();
+    let shown = Path::new("relative").join("tasks.json");
+
+    assert_discovery_error(output, &format!("invalid task file {}", shown.display()));
+    assert!(relative.join("tasks.lock").is_file());
+}
+
+#[test]
+fn data_dir_that_is_a_regular_file_is_reported_and_left_alone() {
+    let fixture = Fixture::new();
+    let file = fixture.0.join("not-a-directory");
+    fs::write(&file, "keep me").unwrap();
+
+    let output = command().arg("--data-dir").arg(&file).output().unwrap();
+
+    assert_discovery_error(output, "is not a directory");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "keep me");
+
+    let output = command()
+        .arg("--data-dir")
+        .arg(file.join("child"))
+        .output()
+        .unwrap();
+
+    assert_discovery_error(output, "could not create");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "keep me");
+}
+
+#[test]
+fn separate_data_dirs_have_independent_locks() {
+    let fixture = Fixture::new();
+    let personal = fixture.0.join("personal");
+    let work = fixture.0.join("work");
+
+    // Invalid task data stops each run after locking, before terminal setup.
+    for directory in [&personal, &work] {
+        fs::create_dir(directory).unwrap();
+        fs::write(directory.join("tasks.json"), "invalid json").unwrap();
+    }
+
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(personal.join("tasks.lock"))
+        .unwrap();
+    held.try_lock().unwrap();
+
+    let blocked = command().arg("--data-dir").arg(&personal).output().unwrap();
+    let independent = command().arg("--data-dir").arg(&work).output().unwrap();
+
+    assert_eq!(blocked.stderr, b"sati: already running\n");
+    assert_discovery_error(independent, "invalid task file");
+    assert!(work.join("tasks.lock").is_file());
+}
