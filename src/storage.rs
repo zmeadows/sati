@@ -121,8 +121,7 @@ impl Storage {
             .path
             .parent()
             .expect("task file has a parent directory");
-        create_data_directory(directory)
-            .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
+        create_data_directory(directory)?;
         let path = directory.join("tasks.lock");
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
@@ -287,8 +286,7 @@ impl Storage {
 
 fn atomic_save<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
     let directory = path.parent().expect("task file has a parent directory");
-    create_data_directory(directory)
-        .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
+    create_data_directory(directory)?;
 
     let mut contents = serde_json::to_vec_pretty(value)?;
     contents.push(b'\n');
@@ -314,9 +312,21 @@ fn atomic_save<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
     Ok(())
 }
 
-fn create_data_directory(directory: &Path) -> io::Result<()> {
+fn create_data_directory(directory: &Path) -> Result<()> {
+    // Name the path that actually failed, which may be a parent of `directory`. Creating a
+    // directory reports AlreadyExists only when something else occupies that path.
+    let failure = |path: &Path, error: io::Error| -> Box<dyn Error> {
+        let problem = if error.kind() == io::ErrorKind::AlreadyExists {
+            "a file that is not a directory is in the way".to_owned()
+        } else {
+            error.to_string()
+        };
+
+        format!("could not create {}: {problem}", path.display()).into()
+    };
+
     if let Some(parent) = directory.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).map_err(|error| failure(parent, error))?;
     }
 
     // Apply private permissions only when creating sati's own directory.
@@ -331,11 +341,7 @@ fn create_data_directory(directory: &Path) -> io::Result<()> {
 
     match builder.create(directory) {
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists && directory.is_dir() => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "a file that is not a directory is in the way",
-        )),
-        result => result,
+        result => result.map_err(|error| failure(directory, error)),
     }
 }
 
@@ -1190,6 +1196,23 @@ pub mod tests {
         assert!(error.contains("could not save"), "{error}");
         assert_eq!(fs::read(fixture.task_path()).unwrap(), original);
         assert_eq!(fs::read_dir(directory).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_file_in_place_of_a_parent_directory_is_named_in_the_error() {
+        let fixture = Fixture::new();
+        let blocking = fixture.directory.join("blocking");
+        fs::write(&blocking, "keep me").unwrap();
+        let storage = Storage::discover(Some(&blocking.join("checklist"))).unwrap();
+
+        let error = storage.lock().unwrap_err().to_string();
+
+        let expected = format!(
+            "could not create {}: a file that is not a directory is in the way",
+            blocking.display()
+        );
+        assert_eq!(error, expected);
+        assert_eq!(fs::read_to_string(&blocking).unwrap(), "keep me");
     }
 
     #[test]
