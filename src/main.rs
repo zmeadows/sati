@@ -330,19 +330,25 @@ fn run() -> Result<()> {
     }));
 
     let result = (|| -> Result<()> {
-        terminal::enable_raw_mode()?;
+        // Setup errors are bare OS errors (such as "No such device or address" without a
+        // terminal), so label them as terminal setup failures.
+        terminal::enable_raw_mode().map_err(terminal_setup_error)?;
         modes.raw.store(true, Ordering::Relaxed);
         modes.cursor.store(true, Ordering::Relaxed);
         // An output failure may occur after the screen-switch command was sent.
         modes.alternate.store(true, Ordering::Relaxed);
-        execute!(io::stdout(), EnterAlternateScreen)?;
+        execute!(io::stdout(), EnterAlternateScreen).map_err(terminal_setup_error)?;
         let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(io::stdout()))?;
+            ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(io::stdout()))
+                .map_err(terminal_setup_error)?;
 
         // The capability probe retries reader errors internally; validate input first.
-        event::poll(std::time::Duration::ZERO)?;
-        let enhanced = keyboard_support(terminal::supports_keyboard_enhancement())?;
-        modes.enable_input(&mut io::stdout(), enhanced, options.mouse)?;
+        event::poll(std::time::Duration::ZERO).map_err(terminal_setup_error)?;
+        let enhanced = keyboard_support(terminal::supports_keyboard_enhancement())
+            .map_err(terminal_setup_error)?;
+        modes
+            .enable_input(&mut io::stdout(), enhanced, options.mouse)
+            .map_err(terminal_setup_error)?;
 
         let mut background = None;
         let mut rendered_theme = app.theme;
@@ -410,6 +416,10 @@ fn run() -> Result<()> {
     finish_session(result, restore_result)?;
 
     app.save_selection(&storage)
+}
+
+fn terminal_setup_error(error: io::Error) -> Box<dyn std::error::Error> {
+    format!("could not set up the terminal: {error}").into()
 }
 
 fn finish_session(result: Result<()>, restore_result: io::Result<()>) -> Result<()> {
