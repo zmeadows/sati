@@ -7,7 +7,7 @@ use std::{
 
 use notify::{
     Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
-    event::{AccessKind, AccessMode, MetadataKind, ModifyKind},
+    event::{AccessKind, AccessMode, ModifyKind},
 };
 
 use crate::config::{ConfigFile, ConfigText};
@@ -129,8 +129,8 @@ impl ConfigWatch {
         Some(text)
     }
 
-    // Only removal or renaming ends a directory watch. Opening or listing the directory,
-    // or changing its permissions, leaves the watch working.
+    // Only removal or renaming ends a directory watch. Opening, listing, or changing the
+    // directory's metadata leaves the watch working.
     fn invalidates_directory(&self, event: &Event) -> bool {
         let removed_or_moved = matches!(
             event.kind,
@@ -168,15 +168,18 @@ impl ConfigWatch {
     }
 }
 
-// Opening, reading, or closing a file without writing changes nothing. sati's own reads
-// produce exactly these events, so counting them would schedule a read after every read.
-// Unknown kinds count, since they might be changes.
+// Opening, reading, or closing a file without writing changes nothing, and sati's own
+// reads produce exactly these events. Reads can also update the access time, which Linux
+// reports as generic metadata, so all metadata-only events are ignored; counting either
+// would schedule a read after every read. Every backend reports content changes as data
+// or unspecified modifications, which still count, as do unknown kinds. Metadata changes
+// that matter, such as permissions, are found by the periodic poll.
 fn may_change_file(kind: &EventKind) -> bool {
     match kind {
         // Closing after writing ends a save.
         EventKind::Access(AccessKind::Close(AccessMode::Write)) => true,
         EventKind::Access(_) => false,
-        EventKind::Modify(ModifyKind::Metadata(MetadataKind::AccessTime)) => false,
+        EventKind::Modify(ModifyKind::Metadata(_)) => false,
         _ => true,
     }
 }
@@ -192,7 +195,7 @@ fn watch_directory(directory: &Path, sender: &Sender<EventResult>) -> Option<Rec
 mod tests {
     use super::*;
     use crate::storage::tests::Fixture;
-    use notify::event::{CreateKind, DataChange, RemoveKind, RenameMode};
+    use notify::event::{CreateKind, DataChange, MetadataKind, RemoveKind, RenameMode};
     use std::fs;
 
     fn watch(path: PathBuf, now: Instant) -> ConfigWatch {
@@ -283,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn opening_and_reading_the_config_file_is_not_a_change() {
+    fn opening_reading_and_metadata_only_events_are_not_changes() {
         let fixture = Fixture::new();
         let path = fixture.directory.join("config.toml");
         let watch = watch(path.clone(), Instant::now());
@@ -294,13 +297,16 @@ mod tests {
             EventKind::Access(AccessKind::Read),
             EventKind::Access(AccessKind::Close(AccessMode::Read)),
             EventKind::Modify(ModifyKind::Metadata(MetadataKind::AccessTime)),
+            // Linux reports any attribute change, including access times, this way.
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Permissions)),
         ] {
             assert!(!watch.concerns_file(&event(kind)), "{kind:?}");
         }
     }
 
     #[test]
-    fn writes_creation_removal_renames_and_permission_changes_are_changes() {
+    fn writes_creation_removal_and_renames_are_changes() {
         let fixture = Fixture::new();
         let path = fixture.directory.join("config.toml");
         let watch = watch(path.clone(), Instant::now());
@@ -312,8 +318,8 @@ mod tests {
             EventKind::Create(CreateKind::File),
             EventKind::Remove(RemoveKind::File),
             EventKind::Modify(ModifyKind::Name(RenameMode::To)),
-            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
-            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Permissions)),
+            // Windows reports every content change without detail.
+            EventKind::Modify(ModifyKind::Any),
             EventKind::Any,
         ] {
             assert!(watch.concerns_file(&event(kind)), "{kind:?}");
@@ -340,12 +346,12 @@ mod tests {
         assert!(!watch.invalidates_directory(&opened));
         assert!(!watch.concerns_file(&opened));
 
-        // A permission change keeps the watch but may make the file unreadable.
+        // Metadata changes keep the watch; the poll notices any that affect reading.
         let permissions = event(EventKind::Modify(ModifyKind::Metadata(
             MetadataKind::Permissions,
         )));
         assert!(!watch.invalidates_directory(&permissions));
-        assert!(watch.concerns_file(&permissions));
+        assert!(!watch.concerns_file(&permissions));
     }
 
     #[test]
