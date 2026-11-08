@@ -62,18 +62,19 @@ Then run `sati`.
 | Navigate | `j` / `k`, `↓` / `↑`, `Ctrl+N` / `Ctrl+P` |
 | Next / previous section tab (wraps) | `l` / `h`, `Tab` / `Shift+Tab`, `Alt+F` / `Alt+B` |
 | Go to section tab 1–10 | `s1` … `s9`, `s0`; `Alt+S` then a digit |
-| Find section tab by name | `` ` `` |
+| Find section tab by name | `` ` ``, `Alt+G` |
 | Move current section right / left | `L` / `H`, `Alt+N` / `Alt+P` |
 | First / last task | `g` / `G`, `Home` / `End` |
-| Move one page | `PageDown` / `PageUp` |
+| Move one page | `PageDown` / `PageUp`, `Ctrl+V` / `Alt+V` |
 | Reorder task | `J` / `K`, `Shift+↓` / `Shift+↑` |
 | Copy checklist as Markdown | `c` |
 | Copy selected task internally | `y`, `Alt+W` |
+| Cut selected task internally | `Ctrl+K` |
 | Paste task below / above | `p` / `P` (`Ctrl+Y` also pastes below) |
 | Append task | `a` |
-| Insert below selection | `o` |
+| Insert below selection | `o`, `Ctrl+O` |
 | Insert above selection | `O` |
-| Edit task | `e` |
+| Edit task | `e`, `Alt+E` |
 | Rename current section | `E` |
 | Check / uncheck | `Space`, `Enter` |
 | Delete task | `d`, `Delete` |
@@ -95,10 +96,12 @@ or last task or tab instead of wrapping. A counted reorder is a single change fo
 `Esc` cancels a count, and sati forgets one after two seconds without another key.
 
 Holding a key repeats navigation (`j` / `k`, `h` / `l`, arrows, `Tab`, `Alt+B` / `Alt+F`,
-Page Up/Down), but commands that change tasks or section order, such as `d`, `J` / `K`,
-or `H` / `L`, run once per key press.
+Page Up/Down, `Ctrl+V` / `Alt+V`), but commands that change tasks or section order, such
+as `d`, `Ctrl+K`, `J` / `K`, or `H` / `L`, run once per key press.
 
-Task copies use one in-memory register, separate from the system clipboard. Pasted
+Task copies use one in-memory register, separate from the system clipboard. `Ctrl+K`
+cuts: it deletes the selected task like `d` and puts its text in the register, so `p`,
+`P`, or `Ctrl+Y` can put it back elsewhere; `u` restores it in place. Pasted
 tasks start incomplete and unmarked; the register remains available for repeated
 pastes until exit. `c` still copies the entire checklist as Markdown to the system
 clipboard.

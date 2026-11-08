@@ -1553,6 +1553,51 @@ impl App {
         }
     }
 
+    // Cut is one ordinary deletion. The register changes only after the save succeeds, so a
+    // failed cut leaves the previous copy in place.
+    fn cut_task(&mut self, storage: &Storage) -> Result<()> {
+        let Some(index) = self.list.selected() else {
+            return Ok(());
+        };
+
+        let text = self.tasks[index].display_text();
+        self.delete_task(index, "cut task", storage)?;
+
+        self.task_register = Some(text);
+        self.notify("Cut task");
+
+        Ok(())
+    }
+
+    fn delete_task(&mut self, index: usize, label: &str, storage: &Storage) -> Result<()> {
+        let visible = self.visible_indices();
+        let position = visible.iter().position(|&visible| visible == index);
+        let mut tasks = self.tasks.clone();
+        tasks.remove(index);
+
+        // Prefer the next visible task, then the previous one. Later indices
+        // shift down by one after the removal.
+        let next = position.and_then(|position| visible.get(position + 1));
+        let previous = position
+            .and_then(|position| position.checked_sub(1))
+            .map(|position| visible[position]);
+
+        let visible_neighbor = next.map(|&next| next - 1).or(previous);
+
+        // Deleting a tab's last task returns to [*].
+        let view = if visible_neighbor.is_none() {
+            SectionView::All
+        } else {
+            self.view.clone()
+        };
+
+        let selected =
+            visible_neighbor.or_else(|| (!tasks.is_empty()).then(|| index.min(tasks.len() - 1)));
+
+        let section_order = self.section_order.clone();
+        self.replace_with(tasks, section_order, view, selected, label, storage)
+    }
+
     fn paste_task(&mut self, placement: AddPlacement, storage: &Storage) -> Result<()> {
         let Some(text) = self.task_register.clone() else {
             self.notify("Nothing to paste");
@@ -1663,6 +1708,27 @@ impl App {
     }
 
     fn normalize_key(&self, key: KeyEvent) -> KeyEvent {
+        // Emacs-style aliases become the Normal-mode keys they mirror, so they share their
+        // dispatch and repeat policy. Input modes keep ignoring these chords.
+        if self.mode == Mode::Normal {
+            let alias = match (key.modifiers, key.code) {
+                (KeyModifiers::CONTROL, KeyCode::Char('o' | 'O')) => Some(KeyCode::Char('o')),
+                (KeyModifiers::ALT, KeyCode::Char('e' | 'E')) => Some(KeyCode::Char('e')),
+                (KeyModifiers::ALT, KeyCode::Char('g' | 'G')) => Some(KeyCode::Char('`')),
+                (KeyModifiers::CONTROL, KeyCode::Char('v' | 'V')) => Some(KeyCode::PageDown),
+                (KeyModifiers::ALT, KeyCode::Char('v' | 'V')) => Some(KeyCode::PageUp),
+                _ => None,
+            };
+
+            if let Some(code) = alias {
+                return KeyEvent {
+                    code,
+                    modifiers: KeyModifiers::NONE,
+                    ..key
+                };
+            }
+        }
+
         // Route cancellation through Esc, including its press/repeat policy.
         if self.mode != Mode::Normal
             && key.modifiers == KeyModifiers::CONTROL
@@ -1819,6 +1885,8 @@ impl App {
                             self.paste_task(AddPlacement::Below, storage)?
                         }
                         KeyCode::Char('f' | 'F') => self.start_search(),
+                        // In text inputs, Ctrl+K deletes to the end of the line instead.
+                        KeyCode::Char('k' | 'K') => self.cut_task(storage)?,
                         _ => {}
                     }
 
@@ -2146,39 +2214,7 @@ impl App {
             KeyCode::Char('E') => self.start_rename_section(),
             KeyCode::Char('d') | KeyCode::Delete => {
                 if let Some(index) = self.list.selected() {
-                    let visible = self.visible_indices();
-                    let position = visible.iter().position(|&visible| visible == index);
-                    let mut tasks = self.tasks.clone();
-                    tasks.remove(index);
-
-                    // Prefer the next visible task, then the previous one. Later indices
-                    // shift down by one after the removal.
-                    let next = position.and_then(|position| visible.get(position + 1));
-                    let previous = position
-                        .and_then(|position| position.checked_sub(1))
-                        .map(|position| visible[position]);
-
-                    let visible_neighbor = next.map(|&next| next - 1).or(previous);
-
-                    // Deleting a tab's last task returns to [*].
-                    let view = if visible_neighbor.is_none() {
-                        SectionView::All
-                    } else {
-                        self.view.clone()
-                    };
-
-                    let selected = visible_neighbor
-                        .or_else(|| (!tasks.is_empty()).then(|| index.min(tasks.len() - 1)));
-
-                    let section_order = self.section_order.clone();
-                    self.replace_with(
-                        tasks,
-                        section_order,
-                        view,
-                        selected,
-                        "delete task",
-                        storage,
-                    )?;
+                    self.delete_task(index, "delete task", storage)?;
                     self.notify("Deleted task");
                 }
             }
@@ -8222,5 +8258,267 @@ mod tests {
         );
         assert_eq!(app.tasks, original);
         assert_eq!(app.list.selected(), Some(0));
+    }
+
+    #[test]
+    fn emacs_aliases_match_their_normal_mode_keys() {
+        let fixture = Fixture::new();
+
+        for (alias, equivalent) in [
+            (
+                (KeyCode::Char('o'), KeyModifiers::CONTROL),
+                KeyCode::Char('o'),
+            ),
+            ((KeyCode::Char('e'), KeyModifiers::ALT), KeyCode::Char('e')),
+            ((KeyCode::Char('g'), KeyModifiers::ALT), KeyCode::Char('`')),
+            (
+                (KeyCode::Char('v'), KeyModifiers::CONTROL),
+                KeyCode::PageDown,
+            ),
+            ((KeyCode::Char('v'), KeyModifiers::ALT), KeyCode::PageUp),
+        ] {
+            let mut apps = [
+                app_with_texts(&["Work: one", "Work: two", "three", "four", "five"]),
+                app_with_texts(&["Work: one", "Work: two", "three", "four", "five"]),
+            ];
+
+            for app in &mut apps {
+                app.show_section(SectionView::Named("work".into()));
+                app.list.select(Some(1));
+                app.row_tasks = (0..5).map(Some).collect();
+                app.viewport_height = 2;
+            }
+
+            let [aliased, plain] = &mut apps;
+            press(aliased, &fixture, KeyEvent::new(alias.0, alias.1));
+            press(plain, &fixture, equivalent);
+
+            assert_ne!(aliased.list.selected(), None);
+            assert_eq!(aliased.mode, plain.mode);
+            assert_eq!(aliased.view, plain.view);
+            assert_eq!(aliased.list.selected(), plain.list.selected());
+            assert_eq!(
+                aliased
+                    .completion
+                    .as_ref()
+                    .map(|c| (c.labels.clone(), c.current)),
+                plain
+                    .completion
+                    .as_ref()
+                    .map(|c| (c.labels.clone(), c.current)),
+            );
+            assert!(!aliased.can_undo());
+        }
+
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn emacs_aliases_leave_text_inputs_unchanged() {
+        let fixture = Fixture::new();
+
+        for start in [KeyCode::Char('a'), KeyCode::Char('e'), KeyCode::Char('/')] {
+            let mut app = app_with_tasks(3);
+            app.row_tasks = (0..3).map(Some).collect();
+            app.viewport_height = 1;
+            press(&mut app, &fixture, start);
+            let selected = app.list.selected();
+            let text = app.search_query().map(str::to_owned);
+
+            for (code, modifiers) in [
+                (KeyCode::Char('o'), KeyModifiers::CONTROL),
+                (KeyCode::Char('e'), KeyModifiers::ALT),
+                (KeyCode::Char('g'), KeyModifiers::ALT),
+                (KeyCode::Char('v'), KeyModifiers::CONTROL),
+                (KeyCode::Char('v'), KeyModifiers::ALT),
+            ] {
+                press(&mut app, &fixture, KeyEvent::new(code, modifiers));
+            }
+
+            assert_ne!(app.mode, Mode::Normal);
+            assert!(!matches!(app.mode, Mode::FuzzySection { .. }));
+            assert_eq!(app.list.selected(), selected);
+            assert_eq!(app.search_query().map(str::to_owned), text);
+        }
+
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn page_aliases_repeat_while_mode_changing_aliases_fire_once() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(6);
+        app.row_tasks = (0..6).map(Some).collect();
+        app.viewport_height = 2;
+        app.list.select(Some(0));
+
+        repeat(
+            &mut app,
+            &fixture,
+            KeyCode::Char('v'),
+            KeyModifiers::CONTROL,
+        );
+        let paged_down = app.list.selected();
+
+        assert_ne!(paged_down, Some(0));
+
+        repeat(&mut app, &fixture, KeyCode::Char('v'), KeyModifiers::ALT);
+
+        assert_ne!(app.list.selected(), paged_down);
+
+        for (code, modifiers) in [
+            (KeyCode::Char('o'), KeyModifiers::CONTROL),
+            (KeyCode::Char('e'), KeyModifiers::ALT),
+            (KeyCode::Char('g'), KeyModifiers::ALT),
+            (KeyCode::Char('k'), KeyModifiers::CONTROL),
+        ] {
+            repeat(&mut app, &fixture, code, modifiers);
+            assert_eq!(app.mode, Mode::Normal);
+        }
+
+        assert_eq!(app.tasks.len(), 6);
+        assert!(!app.can_undo());
+    }
+
+    #[test]
+    fn ctrl_k_cuts_the_last_task_of_a_tab_into_the_register_as_one_undoable_deletion() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["one", "Work: fix bug", "three"]);
+        app.show_section(SectionView::Named("work".into()));
+        let original_id = app.tasks[1].id;
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        );
+
+        assert_eq!(texts(&app), ["one", "three"]);
+        assert_eq!(app.task_register.as_deref(), Some("Work: fix bug"));
+        assert_eq!(app.view, SectionView::All);
+        assert_eq!(app.list.selected(), Some(1));
+        assert_eq!(notice(&app), Some("Cut task"));
+        assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+
+        press(&mut app, &fixture, KeyCode::Char('u'));
+
+        assert_eq!(texts(&app), ["one", "Work: fix bug", "three"]);
+        assert_eq!(app.tasks[1].id, original_id);
+        assert!(!app.can_undo());
+
+        press(&mut app, &fixture, KeyCode::Char('p'));
+
+        assert_eq!(
+            texts(&app),
+            ["one", "Work: fix bug", "Work: fix bug", "three"]
+        );
+        assert_ne!(app.tasks[2].id, original_id);
+        assert_eq!(app.tasks[2].status, TaskStatus::Pending);
+    }
+
+    #[test]
+    fn ctrl_k_selects_a_neighbor_in_the_tab_like_delete() {
+        let fixture = Fixture::new();
+        let texts_before = ["Work: a", "b", "Work: c", "Work: d"];
+        let mut cut = app_with_texts(&texts_before);
+        let mut deleted = app_with_texts(&texts_before);
+
+        for app in [&mut cut, &mut deleted] {
+            app.show_section(SectionView::Named("work".into()));
+            app.list.select(Some(2));
+        }
+
+        press(
+            &mut cut,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        );
+        press(&mut deleted, &fixture, KeyCode::Char('d'));
+
+        assert_eq!(texts(&cut), texts(&deleted));
+        assert_eq!(cut.list.selected(), deleted.list.selected());
+        assert_eq!(cut.view, deleted.view);
+        assert_eq!(cut.history.back().unwrap().label, "cut task");
+    }
+
+    #[test]
+    fn ctrl_k_without_a_selection_changes_nothing() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(2);
+        press(&mut app, &fixture, KeyCode::Char('y'));
+        app.list.select(None);
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        );
+
+        assert_eq!(app.tasks.len(), 2);
+        assert_eq!(app.task_register.as_deref(), Some("task 0"));
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn failed_cut_keeps_tasks_history_view_and_register() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["one", "Work: two"]);
+        press(&mut app, &fixture, KeyCode::Char('y'));
+        app.show_section(SectionView::Named("work".into()));
+        fixture.storage.save(&app.tasks).unwrap();
+        let before = task_state(&app);
+        block_saves(&fixture);
+
+        let result = app.key(
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+            &fixture.storage,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(task_state(&app), before);
+        assert_eq!(app.view, SectionView::Named("work".into()));
+        assert_eq!(app.task_register.as_deref(), Some("one"));
+    }
+
+    #[test]
+    fn ctrl_k_deletes_to_the_end_in_every_text_input() {
+        let fixture = Fixture::new();
+        let ctrl_k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
+
+        for start in [
+            KeyCode::Char('a'),
+            KeyCode::Char('e'),
+            KeyCode::Char('/'),
+            KeyCode::Char('E'),
+            KeyCode::Char('`'),
+        ] {
+            let mut app = app_with_texts(&["Work: alpha", "Work: beta"]);
+            app.show_section(SectionView::Named("work".into()));
+            press(&mut app, &fixture, start);
+            app.paste("xyz");
+            press(&mut app, &fixture, KeyCode::Home);
+
+            press(&mut app, &fixture, ctrl_k);
+            repeat(
+                &mut app,
+                &fixture,
+                KeyCode::Char('k'),
+                KeyModifiers::CONTROL,
+            );
+
+            let (Mode::Adding(input, _)
+            | Mode::Editing { input, .. }
+            | Mode::Searching { input, .. }
+            | Mode::RenamingSection { input }
+            | Mode::FuzzySection { input, .. }) = &app.mode
+            else {
+                panic!("{start:?} left text input");
+            };
+
+            assert_eq!(input.text(), "");
+            assert_eq!(app.tasks.len(), 2);
+            assert!(!app.can_undo());
+        }
     }
 }
