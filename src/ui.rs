@@ -415,8 +415,7 @@ struct TaskLayout {
 }
 
 fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
-    let mapping = std::mem::take(&mut app.row_tasks);
-    let layout = prepare_task_layout(app, area.width, mapping);
+    let layout = prepare_task_layout(app, area.width);
     let visible = update_task_viewport(app, &layout, area.height);
 
     let TaskLayout {
@@ -472,9 +471,7 @@ fn draw_scrollbar(frame: &mut Frame, area: Rect, total: usize, scroll: usize, st
     }
 }
 
-fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>) -> TaskLayout {
-    row_tasks.clear();
-
+fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
     let inline = match &app.mode {
         Mode::Adding(_, placement) => Some(app.insertion_index(*placement)),
         Mode::Editing { index, .. } => Some(*index),
@@ -490,6 +487,7 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
     };
 
     let mut lines = Vec::new();
+    let mut row_tasks = Vec::new();
     let mut input_row = None;
     let text_width = usize::from(width.saturating_sub(6));
 

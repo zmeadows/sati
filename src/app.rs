@@ -449,17 +449,26 @@ pub struct App {
     pub theme: crate::themes::BuiltinTheme,
     pub style_overrides: crate::config::StyleOverrides,
     pub cli_accent: Option<ratatui::style::Color>,
-    pub scroll: usize,
-    // A temporary inline add row has no task until it is confirmed.
-    pub row_tasks: Vec<Option<usize>>,
-    pub viewport_height: u16,
-    pub reveal_selection: bool,
     pub status_message: Option<StatusMessage>,
     pub view: SectionView,
-    // Clickable tab regions from the last draw.
+
+    // Layout from the last draw, which `ui::draw` writes so that the next key or click acts on
+    // what is on screen.
+    //
+    // `scroll` is the first task-list row shown. Input may move it; drawing clamps it, and
+    // scrolls to the selection or inline input when that is off screen or `reveal_selection`
+    // asks, then clears that request.
+    pub scroll: usize,
+    pub reveal_selection: bool,
+    // The task on each list row, for paging and clicks; an inline add row has none.
+    pub row_tasks: Vec<Option<usize>>,
+    // The list rows that fit, for paging.
+    pub viewport_height: u16,
+    // Clickable tab regions.
     pub tab_targets: Vec<(Rect, SectionView)>,
     // The first visible tab when they overflow; kept between draws so tabs don't slide.
     pub tab_scroll: usize,
+
     // A Vim-style count typed before a motion, with when its last digit was typed; transient
     // and never saved.
     pending_count: Option<(usize, Instant)>,
@@ -496,12 +505,12 @@ impl App {
             theme: crate::themes::BuiltinTheme::default(),
             style_overrides: crate::config::StyleOverrides::default(),
             cli_accent: None,
-            scroll: 0,
-            row_tasks: Vec::new(),
-            viewport_height: 0,
-            reveal_selection: true,
             status_message: None,
             view: SectionView::All,
+            scroll: 0,
+            reveal_selection: true,
+            row_tasks: Vec::new(),
+            viewport_height: 0,
             tab_targets: Vec::new(),
             tab_scroll: 0,
             pending_count: None,
