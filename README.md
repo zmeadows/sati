@@ -91,7 +91,8 @@ Then run `sati`.
 | Quit | `q` |
 
 `?` opens a keyboard reference over the checklist, in place of a permanent shortcut
-footer; the muted `? for help` in the bottom-right corner is the only reminder of it.
+footer; the muted `? for help` in the bottom-right corner is the only reminder of it
+(hidden with `show_help_hint = false`).
 Scroll it with `j` / `k`, `↓` / `↑`, `Ctrl+N` / `Ctrl+P`, `PageDown` / `PageUp`,
 `Home` / `End`, or the mouse wheel, and close it with `?`, `Esc`, or `Ctrl+G`. It changes
 nothing: the tasks, selection, and section tab are exactly as you left them. On a narrow
@@ -252,6 +253,8 @@ wrap = true
 border_style = "square"    # or "rounded"
 marker_style = "unicode"   # or "ascii"
 status_messages = true
+status_message_duration_ms = 3560
+show_help_hint = true
 
 [styles.normal]
 fg = "reset"
@@ -271,6 +274,15 @@ modifiers = []
 fg = "#e78a4e"
 modifiers = ["bold"]
 ```
+
+Two display preferences exist only in the configuration file, without command-line flags:
+
+- `status_message_duration_ms` (default `3560`) is how long each status message stays on
+  the border, in milliseconds. It must be a positive integer. A message is accented for its
+  first 300 ms (or all of it, if shorter), then drawn in the normal style. It applies to every
+  status message, including errors that are shown even with `status_messages = false`.
+- `show_help_hint` (default `true`) shows the muted `? for help` in the bottom-right corner.
+  Set it to `false` to hide that hint; `?` still opens the keyboard reference.
 
 Use `sati --config ./sati.toml` for another file. sati never creates or edits
 configuration files. A missing default file is harmless; an explicit file must
@@ -360,7 +372,7 @@ order and literal text preserved.
 
 Press `c` in the checklist to send the same Markdown, limited to the current section
 tab, to the terminal clipboard using OSC 52. The brief “Copy sent to terminal” message
-clears on subsequent activity; clipboard acceptance depends on terminal and
+clears on subsequent activity or after `status_message_duration_ms`; clipboard acceptance depends on terminal and
 multiplexer support.
 `--no-status-messages` (or `status_messages = false`) hides this and sati's other brief
 status messages (undo/redo descriptions, wrap, delete and clear confirmations, and hints such as

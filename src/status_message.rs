@@ -2,21 +2,24 @@ use std::time::{Duration, Instant};
 
 use ratatui::style::Style;
 
-// Phases run sequentially; their durations determine the total lifetime.
-// Any nonnegative Duration is valid; zero skips a phase (all zero expires immediately).
+// A message starts in the accent style to draw the eye, then uses the normal style for the
+// rest of its lifetime. A lifetime shorter than the accent phase is accented throughout.
 const ACCENT_DURATION: Duration = Duration::from_millis(300);
-const NORMAL_DURATION: Duration = Duration::from_millis(3260);
+pub const DEFAULT_DURATION: Duration = Duration::from_millis(3560);
 
 pub struct StatusMessage {
     message: String,
     started: Instant,
+    // Total lifetime, from `display.status_message_duration_ms`.
+    duration: Duration,
 }
 
 impl StatusMessage {
-    pub fn new(message: impl Into<String>) -> Self {
+    pub fn new(message: impl Into<String>, duration: Duration) -> Self {
         Self {
             message: message.into(),
             started: Instant::now(),
+            duration,
         }
     }
 
@@ -40,9 +43,12 @@ impl StatusMessage {
     }
 
     fn timing(&self, now: Instant) -> Option<(usize, Duration)> {
+        let accent = self.duration.min(ACCENT_DURATION);
+        let normal = self.duration - accent;
+
         timing(
             now.saturating_duration_since(self.started),
-            [ACCENT_DURATION, NORMAL_DURATION],
+            [accent, normal],
         )
     }
 
@@ -55,6 +61,8 @@ impl StatusMessage {
     }
 }
 
+// Phases run sequentially; their durations determine the total lifetime.
+// Any nonnegative Duration is valid; zero skips a phase (all zero expires immediately).
 fn timing(mut elapsed: Duration, phases: [Duration; 2]) -> Option<(usize, Duration)> {
     for (phase, duration) in phases.into_iter().enumerate() {
         if elapsed < duration {
@@ -89,7 +97,10 @@ mod tests {
             ("Cleared 2 tasks, kept 1 carried", "Cleared"),
             ("Nothing to undo", "Nothing to undo"),
         ] {
-            assert_eq!(StatusMessage::new(message).compact_message(), compact);
+            assert_eq!(
+                StatusMessage::new(message, DEFAULT_DURATION).compact_message(),
+                compact
+            );
         }
     }
 
@@ -97,7 +108,7 @@ mod tests {
     fn status_messages_use_configured_semantic_styles_without_changing_deadlines() {
         let config: crate::config::Config = toml::from_str("[styles.normal]\nfg='lightblue'\nmodifiers=['bold']\n[styles.muted]\nmodifiers=['italic']\n[styles.accent]\nfg='3'\nmodifiers=[]").unwrap();
         let styles = crate::styles::Styles::resolve(config.theme, &config.styles, None);
-        let notice = StatusMessage::new("Copied task");
+        let notice = StatusMessage::new("Copied task", DEFAULT_DURATION);
 
         for (elapsed, expected) in [
             (0, styles.accent),
@@ -162,7 +173,7 @@ mod tests {
 
     #[test]
     fn phases_select_styles_directly_and_replacements_restart() {
-        let first = StatusMessage::new("Copied task");
+        let first = StatusMessage::new("Copied task", DEFAULT_DURATION);
         let start = first.started;
 
         for colors in [
@@ -189,6 +200,7 @@ mod tests {
         let replacement = StatusMessage {
             message: "Copy sent to terminal".into(),
             started: start + Duration::from_secs(4),
+            duration: DEFAULT_DURATION,
         };
 
         assert_eq!(
@@ -211,5 +223,78 @@ mod tests {
                 wait.map(Duration::from_millis)
             );
         }
+    }
+
+    #[test]
+    fn a_configured_duration_is_the_total_lifetime_after_the_accent_phase() {
+        let ms = Duration::from_millis;
+        let [accent, normal] = [Color::Red, Color::Blue].map(|color| Style::default().fg(color));
+
+        for (duration, expectations) in [
+            (
+                1000,
+                vec![
+                    (0, Some(accent), Some(300)),
+                    (300, Some(normal), Some(700)),
+                    (999, Some(normal), Some(1)),
+                ],
+            ),
+            (
+                10_000,
+                vec![
+                    (299, Some(accent), Some(1)),
+                    (300, Some(normal), Some(9700)),
+                    (9999, Some(normal), Some(1)),
+                ],
+            ),
+            (
+                300,
+                vec![(0, Some(accent), Some(300)), (299, Some(accent), Some(1))],
+            ),
+        ] {
+            let message = StatusMessage::new("Copied task", ms(duration));
+
+            for (elapsed, style, wait) in expectations {
+                let now = message.started + ms(elapsed);
+
+                assert_eq!(
+                    message.style(now, accent, normal),
+                    style,
+                    "{duration} at {elapsed}"
+                );
+                assert_eq!(
+                    message.next_redraw(now),
+                    wait.map(ms),
+                    "{duration} at {elapsed}"
+                );
+            }
+
+            assert!(
+                message
+                    .next_redraw(message.started + ms(duration))
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn a_duration_shorter_than_the_accent_phase_is_accented_until_it_expires() {
+        let ms = Duration::from_millis;
+        let [accent, normal] = [Color::Red, Color::Blue].map(|color| Style::default().fg(color));
+        let message = StatusMessage::new("Copied task", ms(120));
+
+        for elapsed in [0, 60, 119] {
+            let now = message.started + ms(elapsed);
+
+            assert_eq!(message.style(now, accent, normal), Some(accent));
+            assert_eq!(message.next_redraw(now), Some(ms(120 - elapsed)));
+        }
+
+        assert!(
+            message
+                .style(message.started + ms(120), accent, normal)
+                .is_none()
+        );
+        assert!(message.next_redraw(message.started + ms(120)).is_none());
     }
 }

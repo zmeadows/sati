@@ -5,6 +5,7 @@ use std::{
     env,
     ffi::OsString,
     fs, io,
+    num::NonZeroU64,
     path::{Path, PathBuf},
 };
 
@@ -26,6 +27,9 @@ pub struct Display {
     pub border_style: Option<BorderStyle>,
     pub marker_style: Option<MarkerStyle>,
     pub status_messages: Option<bool>,
+    // Total lifetime of a status message; serde rejects zero, negatives, and non-integers.
+    pub status_message_duration_ms: Option<NonZeroU64>,
+    pub show_help_hint: Option<bool>,
 }
 
 // Shared by config.toml, the command line, and the app, so each value is spelled one way.
@@ -300,6 +304,37 @@ mod tests {
                 .contains("unknown variant `round`, expected `square` or `rounded`"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn status_message_duration_must_be_a_positive_integer() {
+        let config: Config = toml::from_str("[display]\nstatus_message_duration_ms = 1").unwrap();
+
+        assert_eq!(
+            config.display.status_message_duration_ms,
+            NonZeroU64::new(1)
+        );
+
+        for value in ["0", "-5", "1.5", "'300'", "true", "18446744073709551616"] {
+            let text = format!("[display]\nstatus_message_duration_ms = {value}");
+
+            assert!(toml::from_str::<Config>(&text).is_err(), "accepted {text}");
+        }
+
+        let error = toml::from_str::<Config>("[display]\nstatus_message_duration_ms = 0")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("expected a nonzero u64"), "{error}");
+    }
+
+    #[test]
+    fn show_help_hint_is_an_optional_boolean() {
+        let config: Config = toml::from_str("[display]\nshow_help_hint = false").unwrap();
+
+        assert_eq!(config.display.show_help_hint, Some(false));
+        assert!(toml::from_str::<Config>("[display]\nshow_help_hint = 'no'").is_err());
+        assert!(toml::from_str::<Config>("[display]\nhelp_hint = false").is_err());
     }
 
     #[test]

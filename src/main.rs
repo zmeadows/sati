@@ -71,6 +71,8 @@ const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
 struct Options {
     wrap: bool,
     status_messages: bool,
+    status_message_duration: std::time::Duration,
+    show_help_hint: bool,
     border_style: config::BorderStyle,
     marker_style: config::MarkerStyle,
     styles: styles::Styles,
@@ -167,6 +169,14 @@ impl CliOptions {
             status_messages: chosen_flag(self.status_messages, self.no_status_messages)
                 .or(config.display.status_messages)
                 .unwrap_or(true),
+            // Duration and help-hint visibility are TOML-only preferences, without CLI flags.
+            status_message_duration: config
+                .display
+                .status_message_duration_ms
+                .map_or(status_message::DEFAULT_DURATION, |milliseconds| {
+                    std::time::Duration::from_millis(milliseconds.get())
+                }),
+            show_help_hint: config.display.show_help_hint.unwrap_or(true),
             border_style: self
                 .border_style
                 .or(config.display.border_style)
@@ -246,6 +256,8 @@ fn run() -> Result<()> {
     let mut app = App::from_document(storage.load_document()?);
     app.wrap = options.wrap;
     app.status_messages = options.status_messages;
+    app.status_message_duration = options.status_message_duration;
+    app.show_help_hint = options.show_help_hint;
     app.border_style = options.border_style;
     app.marker_style = options.marker_style;
     app.styles = options.styles;
@@ -1292,6 +1304,36 @@ mod tests {
             let mut repeated = Vec::new();
             modes.restore(&mut repeated).unwrap();
             assert!(repeated.is_empty());
+        }
+    }
+
+    #[test]
+    fn duration_and_help_hint_come_from_config_or_defaults() {
+        let defaults = resolve_defaults(&[]);
+
+        assert_eq!(
+            defaults.status_message_duration,
+            std::time::Duration::from_millis(3560)
+        );
+        assert!(defaults.show_help_hint);
+
+        let text = "[display]\nstatus_message_duration_ms = 1500\nshow_help_hint = false";
+        let config = toml::from_str::<config::Config>(text).unwrap();
+        let options = parse_cli(&["--no-wrap"]).unwrap().resolve(config);
+
+        assert_eq!(
+            options.status_message_duration,
+            std::time::Duration::from_millis(1500)
+        );
+        assert!(!options.show_help_hint);
+        assert!(!options.wrap);
+
+        for flag in [
+            "--status-message-duration-ms",
+            "--show-help-hint",
+            "--no-help-hint",
+        ] {
+            assert!(parse_cli(&[flag]).is_err(), "accepted {flag}");
         }
     }
 

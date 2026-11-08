@@ -60,7 +60,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
 
     // The hint points to the keyboard reference from the bottom-right corner. It only shows
     // on the plain checklist, and gives the border to brief status messages.
-    if app.mode == Mode::Normal
+    if app.show_help_hint
+        && app.mode == Mode::Normal
         && !showing_status
         && list_area.height >= 2
         && HELP_HINT.width() + 2 <= usize::from(list_area.width)
@@ -2306,7 +2307,10 @@ mod tests {
                     "Theme: Rosé Pine (rose-pine)",
                     "Theme: Default (default)",
                 ] {
-                    app.status_message = Some(crate::status_message::StatusMessage::new(notice));
+                    app.status_message = Some(crate::status_message::StatusMessage::new(
+                        notice,
+                        crate::status_message::DEFAULT_DURATION,
+                    ));
                     let after = render(&mut terminal, &mut app);
                     assert_eq!(before, after);
 
@@ -4436,10 +4440,39 @@ mod tests {
         assert!(!screen(&terminal).contains("help"));
 
         terminal.backend_mut().resize(40, 6);
-        app.status_message = Some(crate::status_message::StatusMessage::new("Wrap off"));
+        app.status_message = Some(crate::status_message::StatusMessage::new(
+            "Wrap off",
+            crate::status_message::DEFAULT_DURATION,
+        ));
         render(&mut terminal, &mut app);
 
         assert!(row_text(&terminal, 5).contains("Wrap off"));
         assert!(!screen(&terminal).contains("? for help"));
+    }
+
+    #[test]
+    fn disabling_the_help_hint_hides_only_the_hint_and_question_mark_still_opens_help() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&["a", "b"]);
+        app.show_help_hint = false;
+        let mut terminal = test_terminal(40, 6);
+
+        render(&mut terminal, &mut app);
+
+        assert!(!screen(&terminal).contains("? for help"));
+
+        app.status_message = Some(crate::status_message::StatusMessage::new(
+            "Wrap off",
+            crate::status_message::DEFAULT_DURATION,
+        ));
+        render(&mut terminal, &mut app);
+
+        assert!(row_text(&terminal, 5).contains("Wrap off"));
+
+        press_keys(&mut app, &fixture, "?");
+        render(&mut terminal, &mut app);
+
+        assert!(matches!(app.mode, Mode::Help { .. }));
+        assert!(screen(&terminal).contains("Keyboard shortcuts"));
     }
 }

@@ -390,6 +390,8 @@ pub struct App {
     pub mode: Mode,
     pub wrap: bool,
     pub status_messages: bool,
+    pub status_message_duration: Duration,
+    pub show_help_hint: bool,
     pub border_style: BorderStyle,
     pub marker_style: MarkerStyle,
     pub styles: crate::styles::Styles,
@@ -437,6 +439,8 @@ impl App {
             mode: Mode::Normal,
             wrap: true,
             status_messages: true,
+            status_message_duration: crate::status_message::DEFAULT_DURATION,
+            show_help_hint: true,
             border_style: BorderStyle::default(),
             marker_style: MarkerStyle::default(),
             styles: crate::styles::Styles::default(),
@@ -1494,7 +1498,7 @@ impl App {
     // why Enter does nothing.
     fn explain_rename_problem(&mut self) {
         if let Some(problem) = self.rename_problem() {
-            self.status_message = Some(StatusMessage::new(problem));
+            self.show_important_status_message(problem);
         }
     }
 
@@ -1615,16 +1619,20 @@ impl App {
         match crate::export::copy(&visible, output) {
             Ok(()) => self.show_status_message("Copy sent to terminal"),
             // Failures are always reported, even when confirmations are disabled.
-            Err(error) => {
-                self.status_message = Some(StatusMessage::new(format!("Copy failed: {error}")));
-            }
+            Err(error) => self.show_important_status_message(format!("Copy failed: {error}")),
         }
     }
 
     fn show_status_message(&mut self, message: impl Into<String>) {
         if self.status_messages {
-            self.status_message = Some(StatusMessage::new(message));
+            self.show_important_status_message(message);
         }
+    }
+
+    // Errors and validation feedback ignore `status_messages`, but share the configured
+    // lifetime with routine messages.
+    fn show_important_status_message(&mut self, message: impl Into<String>) {
+        self.status_message = Some(StatusMessage::new(message, self.status_message_duration));
     }
 
     pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
@@ -2415,6 +2423,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::status_message::DEFAULT_DURATION;
     use crate::storage::tests::Fixture;
 
     use unicode_segmentation::UnicodeSegmentation;
@@ -2590,7 +2599,7 @@ mod tests {
                     original: Some(0),
                 };
                 app.list.select(Some(2));
-                app.status_message = Some(StatusMessage::new("Copied task"));
+                app.status_message = Some(StatusMessage::new("Copied task", DEFAULT_DURATION));
                 press(
                     &mut app,
                     &fixture,
@@ -2657,6 +2666,42 @@ mod tests {
                 assert!(!path.exists());
             }
         }
+    }
+
+    #[test]
+    fn routine_and_important_status_messages_use_the_configured_duration() {
+        struct BrokenOutput;
+        impl std::io::Write for BrokenOutput {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("output unavailable"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(2);
+        let duration = Duration::from_millis(120);
+        app.status_message_duration = duration;
+
+        let expires_within_duration = |app: &App| {
+            let message = app.status_message.as_ref().unwrap();
+            let now = Instant::now();
+            let wait = message.next_redraw(now).unwrap();
+
+            wait <= duration && message.next_redraw(now + duration).is_none()
+        };
+
+        press(&mut app, &fixture, KeyCode::Char('w'));
+
+        assert_eq!(notice(&app), Some("Wrap off"));
+        assert!(expires_within_duration(&app));
+
+        app.status_messages = false;
+        app.copy_markdown(&mut BrokenOutput);
+
+        assert!(notice(&app).is_some_and(|message| message.starts_with("Copy failed:")));
+        assert!(expires_within_duration(&app));
     }
 
     #[test]
