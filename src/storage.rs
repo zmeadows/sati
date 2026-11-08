@@ -135,7 +135,9 @@ impl Storage {
         // Keep this file open and never unlink it: every instance must lock the same inode.
         match file.try_lock() {
             Ok(()) => Ok(file),
-            Err(TryLockError::WouldBlock) => Err("already running".into()),
+            Err(TryLockError::WouldBlock) => {
+                Err(format!("already running: another sati holds {}", path.display()).into())
+            }
             Err(TryLockError::Error(error)) => {
                 Err(format!("could not lock {}: {error}", path.display()).into())
             }

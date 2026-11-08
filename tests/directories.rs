@@ -233,7 +233,11 @@ fn separate_data_dirs_have_independent_locks() {
     let blocked = command().arg("--data-dir").arg(&personal).output().unwrap();
     let independent = command().arg("--data-dir").arg(&work).output().unwrap();
 
-    assert_eq!(blocked.stderr, b"sati: already running\n");
+    let expected = format!(
+        "sati: already running: another sati holds {}\n",
+        personal.join("tasks.lock").display()
+    );
+    assert_eq!(String::from_utf8_lossy(&blocked.stderr), expected);
     assert_discovery_error(independent, "invalid task file");
     assert!(work.join("tasks.lock").is_file());
 }

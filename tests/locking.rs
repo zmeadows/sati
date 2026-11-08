@@ -100,7 +100,11 @@ fn check_process_lock(terminate: bool) {
     fs::remove_dir_all(&directory).unwrap();
 
     assert_eq!(blocked.status.code(), Some(1));
-    assert_eq!(blocked.stderr, b"sati: already running\n");
+    let expected = format!(
+        "sati: already running: another sati holds {}\n",
+        data.join("tasks.lock").display()
+    );
+    assert_eq!(String::from_utf8_lossy(&blocked.stderr), expected);
     assert!(blocked.stdout.is_empty());
     assert_eq!(unlocked.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&unlocked.stderr).contains("invalid task file"));
