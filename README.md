@@ -120,9 +120,11 @@ Press `` ` `` to find a section by name. `[*]` turns into a small input, and the
 its right narrow to the sections that fuzzy-match what you type (`wl` finds `Wishlist`),
 best match first; `[-]` matches as "unsectioned". Each change to the query shows the best
 match's tasks right away. `Tab` / `Shift+Tab` (or `Ctrl+→` / `Ctrl+←`) step through the
-matches and wrap around. `Enter` stays on the shown section; `Esc` or `Ctrl+G` returns to
-the tab, task, and scroll position you started from. While nothing matches, the last
-shown section stays on screen, and `Tab` and `Enter` wait until the query matches again.
+matches and wrap around. `Enter` stays on the highlighted match; opened from `[*]`, it
+waits until typing or `Tab` highlights one. `Esc` or `Ctrl+G` returns to the tab, task,
+and scroll position you started from. While nothing matches, the last shown section stays
+on screen, and `Tab` and `Enter` wait until the query matches again. On a narrow
+terminal, a long section name is shortened with `…` so the current tab stays visible.
 
 Press `L` / `H` (or `Alt+N` / `Alt+P`) on a section tab to move it one place right or
 left among the named sections. `[*]` and `[-]` stay first, the ends don't wrap, and the

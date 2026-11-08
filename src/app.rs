@@ -1815,9 +1815,10 @@ impl App {
                     self.cycle_section_match(forward);
                     return Ok(());
                 }
-                // With no matches there is nothing to pick; Esc still cancels.
+                // Enter needs a focused match: none is focused when nothing matches, or
+                // when the picker opened on [*] and no edit or Tab has moved yet.
                 KeyCode::Enter => {
-                    if !matches.is_empty() {
+                    if matches.contains(&self.view) {
                         self.finish_section_picker(true);
                     }
 
@@ -3360,6 +3361,26 @@ mod tests {
 
         press(&mut app, &fixture, KeyCode::Esc);
         assert_eq!(app.view, SectionView::All);
+    }
+
+    #[test]
+    fn enter_waits_for_a_focused_match_when_the_picker_opens_on_all() {
+        let fixture = Fixture::new();
+        let mut app = picker_app();
+        press(&mut app, &fixture, KeyCode::Char('`'));
+
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert!(matches!(app.mode, Mode::FuzzySection { .. }));
+        assert_eq!(app.view, SectionView::All);
+
+        press(&mut app, &fixture, KeyCode::Tab);
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.view, SectionView::Unsectioned);
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
     }
 
     #[test]

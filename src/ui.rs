@@ -149,6 +149,9 @@ const RENAME_LABEL: &str = "rename";
 const PICKER_INPUT_SHARE: usize = 3;
 const PICKER_INPUT_MIN_WIDTH: usize = 10;
 
+// The narrowest shortened tab label worth showing: one cell of the name and `…`.
+const MIN_TAB_LABEL_WIDTH: usize = 2;
+
 // Draw section tabs on the box's top border (`strip`). Every tab keeps the same width
 // whichever one is active, so labels never move; the active tab only changes color.
 // While renaming, the active tab becomes the name input and grows with it. The section
@@ -165,8 +168,17 @@ fn draw_section_tabs(
 
     if let Mode::FuzzySection { input, matches, .. } = &app.mode {
         let width = usize::from(strip.width);
-        let wanted = 2 + Line::raw("› ").width() + input.text().width() + 1;
-        let limit = (width / PICKER_INPUT_SHARE).max(PICKER_INPUT_MIN_WIDTH);
+        let prompt_width = 2 + Line::raw("› ").width() + 1;
+        let wanted = prompt_width + input.text().width();
+
+        // Leave room after the input for at least a shortened match (a leading cell, the
+        // padded label, and a border cell), but never shrink the input below its empty
+        // prompt and cursor.
+        let shortest_match = TAB_MARKER + MIN_TAB_LABEL_WIDTH + 2 + 1;
+        let limit = (width / PICKER_INPUT_SHARE)
+            .max(PICKER_INPUT_MIN_WIDTH)
+            .min(width.saturating_sub(TAB_MARKER + shortest_match))
+            .max(prompt_width);
         let input_width = wanted.min(limit).min(width.saturating_sub(TAB_MARKER + 1));
         let x = strip.x + TAB_MARKER as u16;
 
@@ -219,6 +231,34 @@ fn draw_section_tabs(
         let input_width = 2 + prompt_width + input.text().width() + 1;
 
         widths[active] = input_width.min(width.saturating_sub(TAB_MARKER + 1));
+    }
+
+    // Tabs are drawn whole, so an active tab wider than the strip would vanish. Shorten its
+    // label at a grapheme boundary to fit beside the leading cell and the trailing border
+    // cell; when not even one glyph and `…` fit, it stays hidden behind `›`.
+    let label_room = width.saturating_sub(TAB_MARKER + 1 + 2);
+
+    if rename_input.is_none()
+        && let Some(active) = active
+        && tabs[active].1.width() > label_room
+    {
+        let mut shortened = String::new();
+        let mut used = 0;
+
+        for grapheme in tabs[active].1.graphemes(true) {
+            if used + grapheme.width() + 1 > label_room {
+                break;
+            }
+
+            used += grapheme.width();
+            shortened.push_str(grapheme);
+        }
+
+        if label_room >= MIN_TAB_LABEL_WIDTH && !shortened.is_empty() {
+            shortened.push('…');
+            widths[active] = shortened.width() + 2;
+            tabs[active].1 = shortened;
+        }
     }
 
     // Scroll only when the active tab would otherwise leave the strip. The picker's matches
@@ -1639,25 +1679,68 @@ mod tests {
     }
 
     #[test]
+    fn a_long_focused_match_is_shortened_beside_the_picker_input() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&["Supercalifragilistic: a", "Home: b"]);
+        app.keybinds = false;
+        let mut terminal = test_terminal(24, 8);
+
+        press_keys(&mut app, &fixture, "`sup");
+        render(&mut terminal, &mut app);
+
+        let top = row_text(&terminal, 0);
+
+        assert_eq!(top, "┌─ › sup  ─ Supercal… ─┐");
+        assert_eq!(terminal.backend().buffer()[(12, 0)].fg, DEFAULT_ACCENT);
+    }
+
+    #[test]
+    fn a_long_active_section_tab_is_shortened_on_a_narrow_terminal() {
+        let mut app = app_with_texts(&["Supercalifragilistic: a", "Home: b"]);
+        app.keybinds = false;
+        app.show_section(SectionView::Named("supercalifragilistic".into()));
+        let mut terminal = test_terminal(16, 8);
+
+        render(&mut terminal, &mut app);
+
+        assert_eq!(row_text(&terminal, 0), "┌‹ Supercali… ─┐");
+        assert_eq!(terminal.backend().buffer()[(3, 0)].fg, DEFAULT_ACCENT);
+    }
+
+    #[test]
     fn tiny_terminals_and_resizing_are_safe_while_picking_a_section() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = app_with_texts(&["日本語: 🪷 task", "LongSectionName: b", "plain"]);
         let mut terminal = test_terminal(40, 12);
 
         press_keys(&mut app, &fixture, "`");
-        app.paste("日本語 🪷 long query 日本語");
+        let clear_query = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
 
-        for width in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 40] {
-            for height in [0, 1, 2, 3, 6, 12] {
-                terminal.backend_mut().resize(width, height);
+        // An empty query focuses each tab in turn, including the shortened long one; a long
+        // Unicode query matches nothing and has to clip inside the input.
+        for query in ["", "日本語 🪷 long query 日本語"] {
+            app.key(clear_query, &fixture.storage).unwrap();
+            app.paste(query);
 
-                let rows = render(&mut terminal, &mut app);
+            for width in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 40] {
+                for height in [0, 1, 2, 3, 6, 12] {
+                    terminal.backend_mut().resize(width, height);
 
-                assert!(rows.right() <= width && rows.bottom() <= height);
+                    for _ in 0..3 {
+                        app.key(KeyEvent::from(KeyCode::Tab), &fixture.storage)
+                            .unwrap();
 
-                if terminal.backend().cursor_visible() {
-                    let buffer = terminal.backend().buffer();
-                    assert!(buffer.area.contains(terminal.backend().cursor_position()));
+                        let rows = render(&mut terminal, &mut app);
+
+                        assert!(rows.right() <= width && rows.bottom() <= height);
+
+                        if terminal.backend().cursor_visible() {
+                            let buffer = terminal.backend().buffer();
+                            assert!(buffer.area.contains(terminal.backend().cursor_position()));
+                        }
+                    }
                 }
             }
         }
