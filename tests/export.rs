@@ -167,7 +167,7 @@ fn export_rejects_removed_file_options_and_unknown_arguments() {
         vec!["--output", "tasks.md"],
         vec!["-o", "tasks.md"],
         vec!["--format", "json"],
-        vec!["unexpected"],
+        vec!["work", "home"],
     ] {
         let output = fixture
             .command()
@@ -288,4 +288,72 @@ fn export_reads_a_non_utf8_data_dir() {
 
     assert!(output.status.success() && output.stderr.is_empty());
     assert_eq!(output.stdout, MARKDOWN.as_bytes());
+}
+
+#[test]
+fn a_section_exports_only_its_tasks_without_the_prefix_matching_any_case() {
+    let fixture = Fixture::new();
+    fixture.prepare();
+
+    for name in ["work", "Work", "WORK"] {
+        let output = fixture.run(&[name]);
+
+        assert!(output.status.success(), "{name}");
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), "- [ ] 日本語\n");
+        assert!(output.stderr.is_empty());
+    }
+
+    let output = fixture.run(&["--unsectioned"]);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "- [x] done\n");
+}
+
+#[test]
+fn an_unknown_section_lists_the_known_ones_in_tab_order() {
+    let fixture = Fixture::new();
+    fixture.prepare();
+
+    // Tab order comes from section_order, and labels keep the first spelling in list order.
+    let document = r#"{"schema_version":5,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Home","text":"a","status":"pending"},{"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:06Z","section":"Work","text":"b","status":"pending"}],"section_order":["work","home"]}"#;
+    fs::write(fixture.data.join("tasks.json"), document).unwrap();
+
+    let output = fixture.run(&["play"]);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains(r#"no section named "play"; known sections: Work, Home"#)
+    );
+
+    let unsectioned = r#"{"schema_version":5,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"a","status":"pending"}],"section_order":[]}"#;
+    fs::write(fixture.data.join("tasks.json"), unsectioned).unwrap();
+
+    let output = fixture.run(&["work"]);
+    assert!(!output.status.success() && output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains(r#"no section named "work"; the checklist has no sections"#)
+    );
+}
+
+#[test]
+fn a_section_export_reports_an_invalid_task_file_without_changing_it() {
+    let fixture = Fixture::new();
+    fixture.prepare();
+    let invalid =
+        tasks_document("").replace(r#""section_order":["work"]"#, r#""section_order":[]"#);
+    fs::write(fixture.data.join("tasks.json"), &invalid).unwrap();
+
+    for args in [vec!["work"], vec!["--unsectioned"]] {
+        let output = fixture.run(&args);
+
+        assert!(!output.status.success(), "{args:?}");
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("invalid task file"));
+    }
+
+    assert_eq!(
+        fs::read_to_string(fixture.data.join("tasks.json")).unwrap(),
+        invalid
+    );
 }

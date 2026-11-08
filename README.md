@@ -359,8 +359,14 @@ Export Markdown to stdout, even while the TUI is running:
 sati export
 sati export > tasks.md
 sati export | grep -F '[ ]'
+sati export work                           # only the Work section
+sati export --unsectioned                  # only tasks without a section
 sati export --data-dir ~/checklists/work   # or: sati --data-dir ~/checklists/work export
 ```
+
+A section name matches regardless of case, and that section's tasks are written without their
+`Work: ` prefix. An unknown name is an error that lists the checklist's sections in tab order.
+An invalid `tasks.json` is reported on stderr, never partly exported.
 
 Stdout carries only the Markdown, so it can be redirected or piped; errors go to stderr.
 Shell redirection with `>` replaces an existing file, and sati adds no overwrite

@@ -211,7 +211,10 @@ pub(crate) fn settled_section_order(order: &[String], tasks: &[Task]) -> Vec<Str
 
 // Tabs in display order for `tasks`: [*], [-] when some tasks have no section, then sections
 // in `section_order`. Empty when no task has a section, which hides the tab bar.
-fn section_tabs_of(tasks: &[Task], section_order: &[String]) -> Vec<(SectionView, String)> {
+pub(crate) fn section_tabs_of(
+    tasks: &[Task],
+    section_order: &[String],
+) -> Vec<(SectionView, String)> {
     // One pass over the tasks: the first spelling of each key in list order labels its
     // tab, and any task without a section brings in [-].
     let mut labels: HashMap<String, &str> = HashMap::new();
@@ -250,7 +253,7 @@ fn section_tabs_of(tasks: &[Task], section_order: &[String]) -> Vec<(SectionView
     tabs
 }
 
-fn view_shows(view: &SectionView, task: &Task) -> bool {
+pub(crate) fn view_shows(view: &SectionView, task: &Task) -> bool {
     match view {
         SectionView::All => true,
         SectionView::Named(key) => task.section_key().as_ref() == Some(key),
@@ -6673,7 +6676,7 @@ mod tests {
         assert_ne!(app.tasks[1].id, id);
 
         assert_eq!(
-            crate::export::markdown(&app.tasks[..1]),
+            crate::export::markdown(&app.tasks[..1], true),
             "- [ ] Work: fix bug\n"
         );
     }

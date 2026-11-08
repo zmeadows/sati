@@ -5,11 +5,12 @@ use std::{
 };
 
 use crate::{
-    app::{Task, TaskStatus},
+    app::{SectionView, Task, TaskStatus, section_tabs_of, view_shows},
     storage::{Result, Storage},
 };
 
-pub fn markdown(tasks: &[Task]) -> String {
+// Each task as typed ("Work: fix bug"), or only its body when every task is from one section.
+pub fn markdown(tasks: &[Task], include_sections: bool) -> String {
     let mut output = String::new();
 
     for task in tasks {
@@ -21,7 +22,13 @@ pub fn markdown(tasks: &[Task]) -> String {
 
         output.push_str(checkbox);
 
-        for character in task.display_text().chars() {
+        let text = if include_sections {
+            task.display_text()
+        } else {
+            task.text.clone()
+        };
+
+        for character in text.chars() {
             if "\\`*_{}[]<>!&#|~+-.()".contains(character) {
                 output.push('\\');
             }
@@ -34,7 +41,9 @@ pub fn markdown(tasks: &[Task]) -> String {
     output
 }
 
-pub fn run(data_dir: Option<&Path>) -> Result<()> {
+// Exports every task, the tasks of `section` (matched case-insensitively), or with
+// `unsectioned` the tasks without a section. A section's tasks are printed without its prefix.
+pub fn run(data_dir: Option<&Path>, section: Option<&str>, unsectioned: bool) -> Result<()> {
     // A missing default directory just means sati has not saved anything yet, but a missing
     // `--data-dir` is more likely a typo, so it is reported instead of exporting nothing.
     // Export never creates it either way.
@@ -54,8 +63,36 @@ pub fn run(data_dir: Option<&Path>) -> Result<()> {
     }
 
     let storage = Storage::discover(data_dir)?;
-    // Atomic task-file replacement allows a consistent read without the writer lock.
-    let contents = markdown(&storage.load()?);
+    // Atomic task-file replacement allows a consistent read without the writer lock. Loading
+    // validates the whole file, so an invalid one is reported rather than partly exported.
+    let document = storage.load_document()?;
+
+    // Clap rejects a section name together with `--unsectioned`.
+    let view = match (section, unsectioned) {
+        (_, true) => SectionView::Unsectioned,
+        (None, false) => SectionView::All,
+        (Some(name), false) => {
+            let key = name.to_lowercase();
+
+            // `section_order` lists exactly the sections that tasks use.
+            if !document.section_order.contains(&key) {
+                return Err(unknown_section(
+                    name,
+                    &document.tasks,
+                    &document.section_order,
+                ));
+            }
+
+            SectionView::Named(key)
+        }
+    };
+
+    let tasks: Vec<Task> = document
+        .tasks
+        .into_iter()
+        .filter(|task| view_shows(&view, task))
+        .collect();
+    let contents = markdown(&tasks, !matches!(view, SectionView::Named(_)));
 
     let mut stdout = io::stdout().lock();
     let written = stdout
@@ -69,9 +106,32 @@ pub fn run(data_dir: Option<&Path>) -> Result<()> {
     }
 }
 
+// Names the sections as their tabs spell them, in tab order.
+fn unknown_section(
+    name: &str,
+    tasks: &[Task],
+    section_order: &[String],
+) -> Box<dyn std::error::Error> {
+    let labels: Vec<String> = section_tabs_of(tasks, section_order)
+        .into_iter()
+        .filter(|(view, _)| matches!(view, SectionView::Named(_)))
+        .map(|(_, label)| label)
+        .collect();
+
+    if labels.is_empty() {
+        format!("no section named \"{name}\"; the checklist has no sections").into()
+    } else {
+        format!(
+            "no section named \"{name}\"; known sections: {}",
+            labels.join(", ")
+        )
+        .into()
+    }
+}
+
 pub fn copy(tasks: &[Task], output: &mut impl Write) -> io::Result<()> {
     const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let contents = markdown(tasks);
+    let contents = markdown(tasks, true);
     let mut sequence = String::from("\x1b]52;c;");
 
     for chunk in contents.as_bytes().chunks(3) {
@@ -124,7 +184,7 @@ mod tests {
         ];
 
         assert_eq!(
-            markdown(&tasks),
+            markdown(&tasks, true),
             concat!(
                 "- [ ] Buy groceries\n",
                 "- [x] Walk the dog\n",
@@ -133,7 +193,13 @@ mod tests {
                 "- [ ] 1\\. nested 日本語 👩‍💻 e\u{301}\n"
             )
         );
-        assert_eq!(markdown(&[]), "");
+        assert_eq!(markdown(&[], true), "");
+
+        // A single-section export prints bodies only, still escaped.
+        assert_eq!(
+            markdown(&tasks[2..3], false),
+            "- [ ] Review \\*PR\\* \\& \\<notes\\> \\[x\\] \\\\ \\`code\\`\n"
+        );
     }
 
     #[test]

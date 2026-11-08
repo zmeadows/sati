@@ -143,11 +143,20 @@ impl Cli {
 // Each subcommand runs instead of the interactive checklist.
 #[derive(Debug, PartialEq, Subcommand)]
 enum CliCommand {
-    /// Print the checklist as Markdown
+    /// Print the checklist, or one section of it, as Markdown
     ///
-    /// Writes every task, in list order, to stdout as a Markdown checklist. It works while
-    /// sati is open and never changes the task file.
-    Export,
+    /// Writes every task, in list order, to stdout as a Markdown checklist. With a SECTION,
+    /// writes only that section's tasks, without their "Name: " prefix. It works while sati
+    /// is open and never changes the task file.
+    Export {
+        /// Export only this section; names match regardless of case
+        #[arg(value_name = "SECTION")]
+        section: Option<String>,
+
+        /// Export only the tasks without a section
+        #[arg(long, conflicts_with = "section")]
+        unsectioned: bool,
+    },
 }
 
 // Each on/off pair overrides the other, so the last flag given wins.
@@ -296,7 +305,10 @@ fn run() -> Result<()> {
 
     if let Some(command) = cli.command {
         return match command {
-            CliCommand::Export => export::run(data_dir),
+            CliCommand::Export {
+                section,
+                unsectioned,
+            } => export::run(data_dir, section.as_deref(), unsectioned),
         };
     }
 
@@ -1548,8 +1560,28 @@ mod tests {
 
     #[test]
     fn export_is_a_subcommand_that_takes_no_display_options() {
-        let cli = Cli::try_parse_arguments(["sati", "export"]).unwrap();
-        assert_eq!(cli.command, Some(CliCommand::Export));
+        let export = |arguments: &[&str]| {
+            let arguments = ["sati", "export"]
+                .into_iter()
+                .chain(arguments.iter().copied());
+
+            Cli::try_parse_arguments(arguments)
+                .unwrap()
+                .command
+                .unwrap()
+        };
+        let section_export = |section: Option<&str>, unsectioned| CliCommand::Export {
+            section: section.map(str::to_owned),
+            unsectioned,
+        };
+
+        assert_eq!(export(&[]), section_export(None, false));
+        assert_eq!(export(&["Work"]), section_export(Some("Work"), false));
+        assert_eq!(export(&["--unsectioned"]), section_export(None, true));
+        assert_eq!(
+            export(&["--data-dir", "work", "home"]),
+            section_export(Some("home"), false)
+        );
 
         assert!(
             Cli::try_parse_arguments(["sati"])
@@ -1561,7 +1593,8 @@ mod tests {
         for args in [
             vec!["sati", "--no-wrap", "export"],
             vec!["sati", "export", "--no-wrap"],
-            vec!["sati", "export", "unexpected"],
+            vec!["sati", "export", "work", "home"],
+            vec!["sati", "export", "work", "--unsectioned"],
             vec!["sati", "help"],
             vec!["sati", "--config", "sati.toml", "export"],
             vec!["sati", "--data-dir", "work", "--theme", "default", "export"],
@@ -1600,7 +1633,14 @@ mod tests {
         ] {
             let cli = parse(&arguments);
 
-            assert_eq!(cli.command, Some(CliCommand::Export), "{arguments:?}");
+            assert_eq!(
+                cli.command,
+                Some(CliCommand::Export {
+                    section: None,
+                    unsectioned: false
+                }),
+                "{arguments:?}"
+            );
             assert_eq!(cli.data_dir, Some(PathBuf::from("work")), "{arguments:?}");
         }
 

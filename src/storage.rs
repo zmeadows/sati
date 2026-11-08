@@ -143,6 +143,7 @@ impl Storage {
         }
     }
 
+    #[cfg(test)]
     pub fn load(&self) -> Result<Vec<Task>> {
         Ok(self.load_document()?.tasks)
     }
