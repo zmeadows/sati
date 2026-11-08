@@ -725,7 +725,12 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             .is_some_and(|index| !app.tasks[index].completed);
 
         for (key, label, available) in [
-            ("Tab", "Section", !app.section_tabs().is_empty()),
+            ("h/l", "Section", !app.section_tabs().is_empty()),
+            (
+                "H/L",
+                "Move section",
+                matches!(app.view, SectionView::Named(_)),
+            ),
             (
                 "E",
                 "Rename section",
@@ -1200,6 +1205,55 @@ mod tests {
     }
 
     #[test]
+    fn moving_a_section_on_a_narrow_terminal_keeps_its_tab_visible() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
+        let fixture = crate::storage::tests::Fixture::new();
+        let texts: Vec<String> = (0..8).map(|index| format!("S{index}: task")).collect();
+        let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let mut app = app_with_texts(&texts);
+        app.keybinds = false;
+        let mut terminal = test_terminal(24, 8);
+
+        app.show_section(crate::app::SectionView::Named("s0".into()));
+        render(&mut terminal, &mut app);
+
+        for _ in 0..7 {
+            app.key(KeyEvent::from(KeyCode::Char('L')), &fixture.storage)
+                .unwrap();
+            render(&mut terminal, &mut app);
+
+            assert!(row_text(&terminal, 0).contains(" S0 "));
+        }
+
+        assert_eq!(app.section_order.last().map(String::as_str), Some("s0"));
+
+        for _ in 0..7 {
+            app.key(KeyEvent::from(KeyCode::Char('H')), &fixture.storage)
+                .unwrap();
+            render(&mut terminal, &mut app);
+
+            assert!(row_text(&terminal, 0).contains(" S0 "));
+        }
+
+        assert_eq!(app.section_order.first().map(String::as_str), Some("s0"));
+    }
+
+    #[test]
+    fn the_move_section_legend_appears_only_on_a_section_tab() {
+        let mut app = app_with_texts(&["Work: a", "plain"]);
+        let mut terminal = test_terminal(80, 12);
+
+        render(&mut terminal, &mut app);
+        assert!(screen(&terminal).contains("h/l Section"));
+        assert!(!screen(&terminal).contains("Move section"));
+
+        app.show_section(SectionView::Named("work".into()));
+        render(&mut terminal, &mut app);
+        assert!(screen(&terminal).contains("H/L Move section"));
+    }
+
+    #[test]
     fn overflowing_tabs_scroll_only_to_keep_the_active_tab_visible() {
         let texts: Vec<String> = (0..12)
             .map(|index| format!("Section{index:02}: task"))
@@ -1508,13 +1562,13 @@ mod tests {
     }
 
     #[test]
-    fn clicking_a_tab_shows_that_section_and_the_legend_mentions_tab() {
+    fn clicking_a_tab_shows_that_section_and_the_legend_mentions_section_keys() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b"]);
         let mut terminal = test_terminal(80, 12);
         let rows = render(&mut terminal, &mut app);
 
-        assert!(screen(&terminal).contains("Tab Section"));
+        assert!(screen(&terminal).contains("h/l Section"));
 
         let (area, view) = app.tab_targets[1].clone();
         assert_eq!(view, crate::app::SectionView::Named("home".into()));

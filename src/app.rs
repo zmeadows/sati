@@ -164,6 +164,22 @@ impl Task {
     }
 }
 
+// The section tab order for `tasks`, starting from `order`: keys that some task still uses
+// keep their places, and sections not listed yet follow in list order. This keeps the saved
+// order matching the tasks: a section's last task takes it out, and a new one goes last.
+pub(crate) fn settled_section_order(order: &[String], tasks: &[Task]) -> Vec<String> {
+    let used: Vec<String> = tasks.iter().filter_map(Task::section_key).collect();
+    let mut settled: Vec<String> = Vec::new();
+
+    for key in order.iter().chain(&used) {
+        if used.contains(key) && !settled.contains(key) {
+            settled.push(key.clone());
+        }
+    }
+
+    settled
+}
+
 // Which tasks are shown: all of them, one section (by lowercase key), or unsectioned ones.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum SectionView {
@@ -232,6 +248,7 @@ struct Completion {
 #[cfg_attr(test, derive(Clone, Debug, PartialEq))]
 struct UndoState {
     tasks: Vec<Task>,
+    section_order: Vec<String>,
     selected: Option<usize>,
     // Describes the change from this snapshot to the next state, e.g. "delete task".
     label: String,
@@ -239,6 +256,8 @@ struct UndoState {
 
 pub struct App {
     pub tasks: Vec<Task>,
+    // Lowercase keys of the named section tabs in display order; see `settled_section_order`.
+    pub section_order: Vec<String>,
     pub list: ListState,
     pub mode: Mode,
     pub wrap: bool,
@@ -263,6 +282,8 @@ pub struct App {
     pub tab_scroll: usize,
     // A Vim-style count typed before a motion; transient and never saved.
     pending_count: Option<usize>,
+    // Set by `s` / Alt+S: the next key picks a tab by number. Transient and never saved.
+    pending_section_jump: bool,
     completion: Option<Completion>,
     task_register: Option<String>,
     last_search_query: Option<String>,
@@ -276,8 +297,14 @@ pub struct App {
 impl App {
     pub fn new(tasks: Vec<Task>) -> Self {
         let selected = (!tasks.is_empty()).then_some(0);
+        // Without a saved order, tabs start alphabetically, as they were before orders were
+        // saved (and as `v3_to_v4` migrates them).
+        let mut section_order = settled_section_order(&[], &tasks);
+        section_order.sort();
+
         Self {
             tasks,
+            section_order,
             list: ListState::default().with_selected(selected),
             mode: Mode::Normal,
             wrap: true,
@@ -298,6 +325,7 @@ impl App {
             tab_targets: Vec::new(),
             tab_scroll: 0,
             pending_count: None,
+            pending_section_jump: false,
             completion: None,
             task_register: None,
             last_search_query: None,
@@ -311,6 +339,7 @@ impl App {
 
     pub fn from_document(document: crate::storage::TaskDocument) -> Self {
         let mut app = Self::new(document.tasks);
+        app.section_order = document.section_order;
         app.list.select(document.selected);
         app.persisted_selection = document.selected;
         app.view = SectionView::from_saved_key(document.section);
@@ -338,7 +367,12 @@ impl App {
             || selected != self.persisted_selection
             || self.view != self.persisted_view
         {
-            storage.save_view(&self.tasks, selected, self.view.saved_key())?;
+            storage.save_view(
+                &self.tasks,
+                &self.section_order,
+                selected,
+                self.view.saved_key(),
+            )?;
             self.persisted_selection = selected;
             self.persisted_view = self.view.clone();
             self.needs_migration = false;
@@ -347,43 +381,35 @@ impl App {
         Ok(())
     }
 
-    // Tabs in display order: [*], [-] when some tasks have no section, then sections
-    // alphabetically. Empty when no task has a section, which hides the tab bar.
+    // Tabs in display order: [*], [-] when some tasks have no section, then sections in
+    // `section_order`. Empty when no task has a section, which hides the tab bar.
     pub fn section_tabs(&self) -> Vec<(SectionView, String)> {
-        let mut named: Vec<(String, &str)> = Vec::new();
-        let mut unsectioned = false;
+        let named: Vec<(SectionView, String)> = self
+            .section_order
+            .iter()
+            .filter_map(|key| {
+                // The first spelling in list order labels the tab.
+                let label = self
+                    .tasks
+                    .iter()
+                    .filter_map(|task| task.section.as_deref())
+                    .find(|section| section.to_lowercase() == *key)?;
 
-        for task in &self.tasks {
-            match task.section.as_deref() {
-                Some(prefix) => {
-                    let key = prefix.to_lowercase();
-
-                    // The first spelling in list order labels the tab.
-                    if !named.iter().any(|(existing, _)| *existing == key) {
-                        named.push((key, prefix));
-                    }
-                }
-                None => unsectioned = true,
-            }
-        }
+                Some((SectionView::Named(key.clone()), label.to_owned()))
+            })
+            .collect();
 
         if named.is_empty() {
             return Vec::new();
         }
 
-        named.sort_by(|left, right| left.0.cmp(&right.0));
-
         let mut tabs = vec![(SectionView::All, "[*]".to_owned())];
 
-        if unsectioned {
+        if self.tasks.iter().any(|task| task.section.is_none()) {
             tabs.push((SectionView::Unsectioned, "[-]".to_owned()));
         }
 
-        tabs.extend(
-            named
-                .into_iter()
-                .map(|(key, label)| (SectionView::Named(key), label.to_owned())),
-        );
+        tabs.extend(named);
 
         tabs
     }
@@ -477,6 +503,56 @@ impl App {
         };
 
         self.show_section(tabs[next].0.clone());
+    }
+
+    // `s1` through `s9` pick the first nine tabs in display order and `s0` the tenth.
+    fn jump_to_section(&mut self, digit: char) {
+        let position = match digit.to_digit(10) {
+            Some(0) => 9,
+            Some(number) => number as usize - 1,
+            None => return,
+        };
+
+        if let Some((view, _)) = self.section_tabs().get(position) {
+            self.show_section(view.clone());
+        }
+    }
+
+    // Swap the current section tab with its neighbor. [*] and [-] stay where they are, and the
+    // ends do not wrap around.
+    fn move_section(&mut self, right: bool, storage: &Storage) -> Result<()> {
+        let SectionView::Named(key) = &self.view else {
+            return Ok(());
+        };
+
+        let Some(position) = self.section_order.iter().position(|named| named == key) else {
+            return Ok(());
+        };
+
+        let target = if right {
+            position + 1
+        } else {
+            match position.checked_sub(1) {
+                Some(target) => target,
+                None => return Ok(()),
+            }
+        };
+
+        if target >= self.section_order.len() {
+            return Ok(());
+        }
+
+        let mut section_order = self.section_order.clone();
+        section_order.swap(position, target);
+
+        // Only the tab order changes; the tasks and their order in [*] stay as they are.
+        self.replace_with_section_order(
+            self.tasks.clone(),
+            section_order,
+            self.list.selected(),
+            "move section",
+            storage,
+        )
     }
 
     fn section_labels(&self) -> Vec<String> {
@@ -681,8 +757,6 @@ impl App {
         }
     }
 
-    // Update memory only after a successful save. Any save error exits the event loop;
-    // after a post-replacement error, the next run reloads the file already on disk.
     fn replace(
         &mut self,
         tasks: Vec<Task>,
@@ -690,7 +764,25 @@ impl App {
         label: impl Into<String>,
         storage: &Storage,
     ) -> Result<()> {
-        storage.save_view(&tasks, selected, self.view.saved_key())?;
+        let section_order = self.section_order.clone();
+
+        self.replace_with_section_order(tasks, section_order, selected, label, storage)
+    }
+
+    // Update memory only after a successful save. Any save error exits the event loop;
+    // after a post-replacement error, the next run reloads the file already on disk.
+    // `section_order` is settled against `tasks`, so new sections join at the end.
+    fn replace_with_section_order(
+        &mut self,
+        tasks: Vec<Task>,
+        section_order: Vec<String>,
+        selected: Option<usize>,
+        label: impl Into<String>,
+        storage: &Storage,
+    ) -> Result<()> {
+        let section_order = settled_section_order(&section_order, &tasks);
+
+        storage.save_view(&tasks, &section_order, selected, self.view.saved_key())?;
         self.persisted_selection = crate::storage::valid_selection(&tasks, selected);
         self.persisted_view = self.view.clone();
         self.needs_migration = false;
@@ -701,6 +793,7 @@ impl App {
 
         self.history.push_back(UndoState {
             tasks: std::mem::replace(&mut self.tasks, tasks),
+            section_order: std::mem::replace(&mut self.section_order, section_order),
             selected: self.list.selected(),
             label: label.into(),
         });
@@ -852,7 +945,12 @@ impl App {
             return Ok(());
         };
 
-        storage.save_view(&previous.tasks, previous.selected, self.view.saved_key())?;
+        storage.save_view(
+            &previous.tasks,
+            &previous.section_order,
+            previous.selected,
+            self.view.saved_key(),
+        )?;
         self.persisted_selection =
             crate::storage::valid_selection(&previous.tasks, previous.selected);
         self.persisted_view = self.view.clone();
@@ -869,6 +967,7 @@ impl App {
         // The label describes the same change in either direction, so it moves with it.
         destination.push_back(UndoState {
             tasks: std::mem::replace(&mut self.tasks, previous.tasks),
+            section_order: std::mem::replace(&mut self.section_order, previous.section_order),
             selected: self.list.selected(),
             label: previous.label,
         });
@@ -1154,11 +1253,27 @@ impl App {
             return Ok(());
         }
 
-        // The new tab is saved with the renamed tasks; a failed save keeps the old one.
-        let new_view = SectionView::Named(name.to_lowercase());
-        let old_view = std::mem::replace(&mut self.view, new_view);
+        // The renamed section keeps its place among the tabs.
+        let new_key = name.to_lowercase();
 
-        if let Err(error) = self.replace(tasks, self.list.selected(), "rename section", storage) {
+        let mut section_order = self.section_order.clone();
+
+        if let Some(key) = section_order.iter_mut().find(|key| **key == old_key) {
+            *key = new_key.clone();
+        }
+
+        // The new tab is saved with the renamed tasks; a failed save keeps the old one.
+        let old_view = std::mem::replace(&mut self.view, SectionView::Named(new_key));
+
+        let renamed_tasks = self.replace_with_section_order(
+            tasks,
+            section_order,
+            self.list.selected(),
+            "rename section",
+            storage,
+        );
+
+        if let Err(error) = renamed_tasks {
             self.view = old_view;
 
             return Err(error);
@@ -1236,6 +1351,18 @@ impl App {
 
         // Every accepted key consumes a pending count, even shortcuts that ignore it.
         let count = self.pending_count.take();
+
+        // After `s` / Alt+S, a digit picks a tab. Any other key only cancels the jump, so a
+        // mistyped follow-up never runs its own, possibly destructive, shortcut.
+        if std::mem::take(&mut self.pending_section_jump) {
+            if let KeyCode::Char(digit @ '0'..='9') = key.code
+                && key.modifiers.is_empty()
+            {
+                self.jump_to_section(digit);
+            }
+
+            return Ok(false);
+        }
 
         // Modifier shortcuts edit the input directly, so a pending suggestion is dropped.
         if key
@@ -1317,7 +1444,7 @@ impl App {
                 key.modifiers.is_empty()
                     && matches!(
                         key.code,
-                        KeyCode::Char('j' | 'k')
+                        KeyCode::Char('j' | 'k' | 'h' | 'l')
                             | KeyCode::Up
                             | KeyCode::Down
                             | KeyCode::PageUp
@@ -1386,11 +1513,18 @@ impl App {
             return Ok(true);
         }
 
-        if self.mode == Mode::Normal
-            && key.modifiers == KeyModifiers::ALT
-            && matches!(key.code, KeyCode::Char('w' | 'W'))
-        {
-            self.yank_task();
+        // Outside text input, Alt+B/F switch sections the way they move between words.
+        if self.mode == Mode::Normal && key.modifiers == KeyModifiers::ALT {
+            match key.code {
+                KeyCode::Char('w' | 'W') => self.yank_task(),
+                KeyCode::Char('b' | 'B') => self.cycle_section(false),
+                KeyCode::Char('f' | 'F') => self.cycle_section(true),
+                KeyCode::Char('p' | 'P') => self.move_section(false, storage)?,
+                KeyCode::Char('n' | 'N') => self.move_section(true, storage)?,
+                KeyCode::Char('s' | 'S') => self.pending_section_jump = true,
+                _ => {}
+            }
+
             return Ok(true);
         }
 
@@ -1665,6 +1799,17 @@ impl App {
             }
             KeyCode::Char('j') | KeyCode::Down => self.navigate(true, count),
             KeyCode::Char('k') | KeyCode::Up => self.navigate(false, count),
+            KeyCode::Char('H') => self.move_section(false, storage)?,
+            KeyCode::Char('L') => self.move_section(true, storage)?,
+            KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.move_section(false, storage)?;
+            }
+            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.move_section(true, storage)?;
+            }
+            KeyCode::Char('h') => self.cycle_section(false),
+            KeyCode::Char('l') => self.cycle_section(true),
+            KeyCode::Char('s') => self.pending_section_jump = true,
             KeyCode::Tab | KeyCode::BackTab
                 if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
             {
@@ -1766,6 +1911,7 @@ impl App {
     pub fn paste(&mut self, text: &str) {
         self.notification = None;
         self.pending_count = None;
+        self.pending_section_jump = false;
         self.accept_completion();
 
         if let Mode::Adding(input, _)
@@ -1789,6 +1935,7 @@ impl App {
     pub fn mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
         self.notification = None;
         self.pending_count = None;
+        self.pending_section_jump = false;
 
         if self.mode == Mode::Normal
             && event.kind == MouseEventKind::Down(MouseButton::Left)
@@ -1962,7 +2109,7 @@ mod tests {
 
         // A clean quit writes the migrated, versioned document.
         let saved = std::fs::read_to_string(fixture.task_path()).unwrap();
-        assert!(saved.contains("\"schema_version\": 3"), "{saved}");
+        assert!(saved.contains("\"schema_version\": 4"), "{saved}");
 
         app.list.select(Some(2));
         assert_eq!(fixture.storage.load_document().unwrap().selected, Some(0));
@@ -2628,6 +2775,238 @@ mod tests {
 
         assert!(!app.can_undo());
         assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn h_l_and_alt_b_f_switch_sections_and_wrap_like_tab() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "plain"]);
+        let alt = |character| KeyEvent::new(KeyCode::Char(character), KeyModifiers::ALT);
+
+        for (key, view) in [
+            (
+                KeyEvent::from(KeyCode::Char('h')),
+                SectionView::Named("work".into()),
+            ),
+            (KeyCode::Char('l').into(), SectionView::All),
+            (KeyCode::Char('l').into(), SectionView::Unsectioned),
+            (alt('f'), SectionView::Named("home".into())),
+            (alt('b'), SectionView::Unsectioned),
+            (alt('b'), SectionView::All),
+            (alt('b'), SectionView::Named("work".into())),
+        ] {
+            press(&mut app, &fixture, key);
+
+            assert_eq!(app.view, view, "{key:?}");
+        }
+
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn alt_b_and_f_still_move_by_word_while_adding() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+
+        type_keys(&mut app, &fixture, "aone two");
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
+        );
+
+        let Mode::Adding(input, _) = &app.mode else {
+            panic!("expected to keep adding");
+        };
+
+        assert_eq!(input.cursor(), "one ".len());
+        assert_eq!(app.view, SectionView::All);
+    }
+
+    #[test]
+    fn s_or_alt_s_and_a_digit_jump_to_tabs_in_display_order() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "plain"]);
+
+        type_keys(&mut app, &fixture, "s4");
+        assert_eq!(app.view, SectionView::Named("work".into()));
+
+        type_keys(&mut app, &fixture, "s1");
+        assert_eq!(app.view, SectionView::All);
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT),
+        );
+        press(&mut app, &fixture, KeyCode::Char('3'));
+        assert_eq!(app.view, SectionView::Named("home".into()));
+
+        // Numbers past the last tab, including 0 for the tenth, do nothing.
+        type_keys(&mut app, &fixture, "s5");
+        assert_eq!(app.view, SectionView::Named("home".into()));
+
+        type_keys(&mut app, &fixture, "s0");
+        assert_eq!(app.view, SectionView::Named("home".into()));
+    }
+
+    #[test]
+    fn s0_jumps_to_the_tenth_tab() {
+        let fixture = Fixture::new();
+        let texts: Vec<String> = (1..=9).map(|number| format!("S{number}: task")).collect();
+        let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let mut app = app_with_texts(&texts);
+
+        type_keys(&mut app, &fixture, "s0");
+
+        assert_eq!(app.view, SectionView::Named("s9".into()));
+    }
+
+    #[test]
+    fn a_key_other_than_a_digit_after_s_only_cancels_the_jump() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c"]);
+
+        type_keys(&mut app, &fixture, "sd");
+        assert_eq!(app.tasks.len(), 3);
+        assert!(!app.can_undo());
+
+        press(&mut app, &fixture, KeyCode::Char('s'));
+        press(&mut app, &fixture, KeyCode::Esc);
+        type_keys(&mut app, &fixture, "2");
+        assert_eq!(app.view, SectionView::All);
+
+        // Counts work as before once the jump is cancelled.
+        type_keys(&mut app, &fixture, "j");
+        assert_eq!(app.list.selected(), Some(2));
+    }
+
+    #[test]
+    fn moving_a_section_swaps_named_tabs_as_one_change_and_keeps_tasks_and_view() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "Errands: c", "plain"]);
+        let tasks = app.tasks.clone();
+        app.show_section(SectionView::Named("errands".into()));
+
+        type_keys(&mut app, &fixture, "L");
+        assert_eq!(app.section_order, ["home", "errands", "work"]);
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT),
+        );
+        assert_eq!(app.section_order, ["home", "work", "errands"]);
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT),
+        );
+        type_keys(&mut app, &fixture, "H");
+        assert_eq!(app.section_order, ["errands", "home", "work"]);
+
+        type_keys(&mut app, &fixture, "LL");
+
+        let labels: Vec<_> = app
+            .section_tabs()
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect();
+        assert_eq!(labels, ["[*]", "[-]", "Home", "Work", "Errands"]);
+        assert_eq!(app.tasks, tasks);
+        assert_eq!(app.view, SectionView::Named("errands".into()));
+
+        let saved = fixture.storage.load_document().unwrap();
+        assert_eq!(saved.section_order, ["home", "work", "errands"]);
+        assert_eq!(saved.tasks, tasks);
+
+        type_keys(&mut app, &fixture, "u");
+        assert_eq!(app.section_order, ["home", "errands", "work"]);
+        assert_eq!(notice(&app), Some("Undid: move section"));
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.section_order, ["home", "work", "errands"]);
+        assert_eq!(
+            fixture.storage.load_document().unwrap().section_order,
+            app.section_order
+        );
+    }
+
+    #[test]
+    fn sections_do_not_move_past_the_ends_or_from_the_all_and_unsectioned_tabs() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "plain"]);
+
+        for view in [SectionView::All, SectionView::Unsectioned] {
+            app.show_section(view);
+            type_keys(&mut app, &fixture, "HL");
+        }
+
+        app.show_section(SectionView::Named("home".into()));
+        type_keys(&mut app, &fixture, "H");
+
+        app.show_section(SectionView::Named("work".into()));
+        type_keys(&mut app, &fixture, "L");
+
+        assert_eq!(app.section_order, ["home", "work"]);
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn new_sections_join_at_the_end_and_leave_with_their_last_task() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.section_order.reverse();
+
+        type_keys(&mut app, &fixture, "aAlpha: c");
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert_eq!(app.section_order, ["work", "home", "alpha"]);
+
+        // Deleting Work's only task drops it; adding it again puts it last.
+        app.list.select(Some(0));
+        type_keys(&mut app, &fixture, "d");
+        assert_eq!(app.section_order, ["home", "alpha"]);
+
+        type_keys(&mut app, &fixture, "aWork: again");
+        press(&mut app, &fixture, KeyCode::Enter);
+        assert_eq!(app.section_order, ["home", "alpha", "work"]);
+        assert_eq!(
+            fixture.storage.load_document().unwrap().section_order,
+            app.section_order
+        );
+    }
+
+    #[test]
+    fn renaming_a_section_keeps_its_place_in_the_tab_order() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Alpha: a", "Beta: b", "Gamma: c"]);
+        app.show_section(SectionView::Named("alpha".into()));
+
+        press(&mut app, &fixture, KeyCode::Char('E'));
+        type_rename(&mut app, &fixture, "Zulu");
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(app.section_order, ["zulu", "beta", "gamma"]);
+        assert_eq!(app.view, SectionView::Named("zulu".into()));
+    }
+
+    #[test]
+    fn reordering_tasks_never_changes_the_section_order() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.list.select(Some(1));
+
+        type_keys(&mut app, &fixture, "K");
+
+        assert_eq!(texts(&app), ["Home: b", "Work: a"]);
+        assert_eq!(app.section_order, ["home", "work"]);
     }
 
     #[test]

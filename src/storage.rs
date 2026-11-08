@@ -14,18 +14,18 @@ use serde_json::Value;
 
 use uuid::Uuid;
 
-use crate::app::{Task, current_time, split_section};
+use crate::app::{Task, current_time, settled_section_order, split_section};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 // The `tasks.json` format written by this build. Files without `schema_version` are version 0.
-const SCHEMA_VERSION: u64 = 3;
+const SCHEMA_VERSION: u64 = 4;
 
 // `MIGRATIONS[n]` upgrades a version `n` document to version `n + 1`. To change the format,
 // bump `SCHEMA_VERSION` and append one migration; the array length enforces the pairing.
 // Migrations run in memory on load; the upgraded document is written by the next save.
 const MIGRATIONS: [fn(Value) -> std::result::Result<Value, String>; SCHEMA_VERSION as usize] =
-    [v0_to_v1, v1_to_v2, v2_to_v3];
+    [v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4];
 
 // Versions 0 and 1 share one document shape; version 0 also allows a bare task array.
 // Parsing into these strict types validates legacy data before it is migrated, so
@@ -151,29 +151,36 @@ fn v1_to_v2(value: Value) -> std::result::Result<Value, String> {
     versioned(2, document)
 }
 
+// Version 3 documents, the output of `v2_to_v3` and the input of `v3_to_v4`. Version 4 keeps
+// the same task shape, so `V3Task` is also how `v3_to_v4` writes tasks back out.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct V3Document {
+    tasks: Vec<V3Task>,
+    #[serde(default)]
+    selected: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    section: Option<String>,
+}
+
+// `id`, `created_at`, and `section` pass through unchanged and are validated once the current
+// `Task` is parsed.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct V3Task {
+    id: String,
+    created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    section: Option<String>,
+    text: String,
+    completed: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    carried: bool,
+}
+
 // Version 3 stores each task's section in its own field instead of a "Name: " text prefix,
 // so the meaning of stored tasks no longer depends on how typed text is parsed.
 fn v2_to_v3(value: Value) -> std::result::Result<Value, String> {
-    #[derive(Serialize)]
-    struct Document {
-        tasks: Vec<V3Task>,
-        selected: Option<usize>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section: Option<String>,
-    }
-
-    #[derive(Serialize)]
-    struct V3Task {
-        id: String,
-        created_at: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section: Option<String>,
-        text: String,
-        completed: bool,
-        #[serde(skip_serializing_if = "std::ops::Not::not")]
-        carried: bool,
-    }
-
     let document: V2Document =
         serde_json::from_value(parse_version(value)?).map_err(|error| error.to_string())?;
 
@@ -194,13 +201,47 @@ fn v2_to_v3(value: Value) -> std::result::Result<Value, String> {
         })
         .collect();
 
-    let document = Document {
+    let document = V3Document {
         tasks,
         selected: document.selected,
         section: document.section,
     };
 
     versioned(3, document)
+}
+
+// Version 4 stores the order of the section tabs. Older versions sorted them alphabetically,
+// so that is where the custom order starts.
+fn v3_to_v4(value: Value) -> std::result::Result<Value, String> {
+    #[derive(Serialize)]
+    struct Document {
+        tasks: Vec<V3Task>,
+        selected: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        section: Option<String>,
+        section_order: Vec<String>,
+    }
+
+    let document: V3Document =
+        serde_json::from_value(parse_version(value)?).map_err(|error| error.to_string())?;
+
+    let mut section_order: Vec<String> = document
+        .tasks
+        .iter()
+        .filter_map(|task| task.section.as_deref())
+        .map(str::to_lowercase)
+        .collect();
+    section_order.sort();
+    section_order.dedup();
+
+    let document = Document {
+        tasks: document.tasks,
+        selected: document.selected,
+        section: document.section,
+        section_order,
+    };
+
+    versioned(4, document)
 }
 
 #[derive(Default, Deserialize)]
@@ -212,6 +253,9 @@ pub struct TaskDocument {
     // The active section tab: absent for all tasks, "" for unsectioned, else a lowercase key.
     #[serde(default)]
     pub section: Option<String>,
+    // Lowercase keys of the named section tabs, in display order; each task section once.
+    #[serde(default)]
+    pub section_order: Vec<String>,
     #[serde(skip)]
     pub needs_migration: bool,
 }
@@ -425,6 +469,16 @@ impl Storage {
             }
         }
 
+        // The order is part of the data, so a mismatch is reported rather than repaired.
+        let expected_order = settled_section_order(&document.section_order, &document.tasks);
+
+        if document.section_order != expected_order {
+            return Err(invalid_file(format!(
+                "section_order must list each task section exactly once in lowercase, such as {expected_order:?}"
+            ))
+            .into());
+        }
+
         document.selected = valid_selection(&document.tasks, document.selected);
 
         Ok(document)
@@ -437,12 +491,13 @@ impl Storage {
 
     #[cfg(test)]
     pub fn save_selected(&self, tasks: &[Task], selected: Option<usize>) -> Result<()> {
-        self.save_view(tasks, selected, None)
+        self.save_view(tasks, &settled_section_order(&[], tasks), selected, None)
     }
 
     pub fn save_view(
         &self,
         tasks: &[Task],
+        section_order: &[String],
         selected: Option<usize>,
         section: Option<&str>,
     ) -> Result<()> {
@@ -453,6 +508,7 @@ impl Storage {
             selected: Option<usize>,
             #[serde(skip_serializing_if = "Option::is_none")]
             section: Option<&'a str>,
+            section_order: &'a [String],
         }
 
         atomic_save(
@@ -462,6 +518,7 @@ impl Storage {
                 tasks,
                 selected: valid_selection(tasks, selected),
                 section,
+                section_order,
             },
             "Original tasks are unchanged",
             "The new task list is already visible",
@@ -653,6 +710,13 @@ pub mod tests {
             (
                 format!(r#"{{"schema_version":3,"tasks":{IDENTIFIED_TASKS},"selected":1}}"#),
                 Some(1),
+                true,
+            ),
+            (
+                format!(
+                    r#"{{"schema_version":4,"tasks":{IDENTIFIED_TASKS},"selected":1,"section_order":[]}}"#
+                ),
+                Some(1),
                 false,
             ),
         ] {
@@ -702,12 +766,12 @@ pub mod tests {
 
         assert_eq!(
             json,
-            serde_json::json!({"schema_version": 3, "tasks":[], "selected":null})
+            serde_json::json!({"schema_version": 4, "tasks":[], "selected":null, "section_order":[]})
         );
 
         // The version comes first so it is the first thing a reader sees.
         let saved = fs::read_to_string(fixture.task_path()).unwrap();
-        assert!(saved.starts_with("{\n  \"schema_version\": 3,"), "{saved}");
+        assert!(saved.starts_with("{\n  \"schema_version\": 4,"), "{saved}");
         assert!(!fixture.storage.load_document().unwrap().needs_migration);
     }
 
@@ -903,7 +967,7 @@ pub mod tests {
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
         let task = |section: &str, text: &str| {
             format!(
-                r#"{{"schema_version":3,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":{section},"text":"{text}","completed":false}}]}}"#
+                r#"{{"schema_version":4,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":{section},"text":"{text}","completed":false}}],"section_order":["work"]}}"#
             )
         };
 
@@ -1012,11 +1076,77 @@ pub mod tests {
     }
 
     #[test]
+    fn version_3_files_get_their_alphabetical_tab_order_without_writing() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+        let tasks: Vec<_> = ["Work", "home", "Errands", "work"]
+            .iter()
+            .enumerate()
+            .map(|(index, section)| {
+                serde_json::json!({
+                    "id": format!("00000000-0000-4000-8000-00000000000{index}"),
+                    "created_at": "2026-11-07T19:24:05Z",
+                    "section": section,
+                    "text": "task",
+                    "completed": false,
+                })
+            })
+            .collect();
+        let json = serde_json::json!({"schema_version": 3, "tasks": tasks}).to_string();
+        fs::write(fixture.task_path(), &json).unwrap();
+
+        let document = fixture.storage.load_document().unwrap();
+
+        assert_eq!(document.section_order, ["errands", "home", "work"]);
+        assert!(document.needs_migration);
+        assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
+    }
+
+    #[test]
+    fn section_order_must_list_each_task_section_once_in_lowercase() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+        let document = |order: &str| {
+            format!(
+                r#"{{"schema_version":4,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Work","text":"a","completed":false}},{{"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:05Z","section":"Home","text":"b","completed":false}}],"section_order":{order}}}"#
+            )
+        };
+
+        for order in [
+            r#"[]"#,
+            r#"["work"]"#,
+            r#"["work","home","work"]"#,
+            r#"["work","home","gone"]"#,
+            r#"["Work","home"]"#,
+        ] {
+            let json = document(order);
+            fs::write(fixture.task_path(), &json).unwrap();
+
+            let error = fixture
+                .storage
+                .load_document()
+                .err()
+                .expect("rejected")
+                .to_string();
+
+            assert!(error.contains("section_order"), "{order}: {error}");
+            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
+        }
+
+        // Any order of the right sections is kept as saved.
+        fs::write(fixture.task_path(), document(r#"["work","home"]"#)).unwrap();
+        let loaded = fixture.storage.load_document().unwrap();
+
+        assert_eq!(loaded.section_order, ["work", "home"]);
+        assert!(!loaded.needs_migration);
+    }
+
+    #[test]
     fn future_and_malformed_schema_versions_are_rejected_without_writing() {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
 
-        let future = r#"{"schema_version":4,"tasks":[],"future":"field"}"#;
+        let future = r#"{"schema_version":5,"tasks":[],"future":"field"}"#;
         fs::write(fixture.task_path(), future).unwrap();
         let error = fixture
             .storage
@@ -1025,8 +1155,8 @@ pub mod tests {
             .expect("rejected")
             .to_string();
 
-        assert!(error.contains("schema version 4"), "{error}");
-        assert!(error.contains("supports version 3"), "{error}");
+        assert!(error.contains("schema version 5"), "{error}");
+        assert!(error.contains("supports version 4"), "{error}");
         assert!(error.contains("left untouched"), "{error}");
         assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), future);
 

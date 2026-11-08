@@ -60,7 +60,9 @@ Then run `sati`.
 | Action | Keys |
 | --- | --- |
 | Navigate | `j` / `k`, `↓` / `↑`, `Ctrl+N` / `Ctrl+P` |
-| Next / previous section tab (wraps) | `Tab` / `Shift+Tab` |
+| Next / previous section tab (wraps) | `l` / `h`, `Tab` / `Shift+Tab`, `Alt+F` / `Alt+B` |
+| Go to section tab 1–10 | `s1` … `s9`, `s0`; `Alt+S` then a digit |
+| Move current section right / left | `L` / `H`, `Alt+N` / `Alt+P` |
 | First / last task | `g` / `G`, `Home` / `End` |
 | Move one page | `PageDown` / `PageUp` |
 | Reorder task | `J` / `K`, `Shift+↓` / `Shift+↑` |
@@ -104,10 +106,23 @@ the accent color and a blank row separating them from the tasks:
 
 - `[*]` shows every task in your order, with each section prefix in bold.
 - `[-]` comes next and shows tasks without a section, when there are any.
-- Each section follows with its own tab, in alphabetical order. `Work:` and `work:` are
-  the same section, labelled with the first spelling in the list.
+- Each section follows with its own tab, in an order you choose. A new section starts at
+  the right end. `Work:` and `work:` are the same section, labelled with the first
+  spelling in the list.
 
-Press `Tab` / `Shift+Tab` or click a tab to switch. A section tab hides the shared prefix
+Press `l` / `h` (or `Tab` / `Shift+Tab`, `Alt+F` / `Alt+B`) or click a tab to switch; the
+ends wrap around. `s` followed by a digit jumps straight to a tab by position: `s1` is
+`[*]`, `s2` the next tab, and `s0` the tenth. `Alt+S` works the same way. A digit past the
+last tab does nothing, and any other key after `s` just cancels the jump.
+
+Press `L` / `H` (or `Alt+N` / `Alt+P`) on a section tab to move it one place right or
+left among the named sections. `[*]` and `[-]` stay first, the ends don't wrap, and the
+tasks themselves keep their order; `u` undoes a move. Renaming a section keeps its place.
+A section disappears from the order with its last task, and comes back at the right end
+if you use it again. On macOS, the `Alt` shortcuts need the terminal to send Option as
+Meta (Esc+).
+
+ A section tab hides the shared prefix
 and keeps navigation, counts, reordering (`J` / `K`), and search within its own tasks.
 `x`, `D`, and `c` clear or copy only the current tab's tasks; `sati export` always
 exports the whole list.
@@ -322,7 +337,9 @@ Tasks are saved automatically to `tasks.json`. Undo/redo history is session-only
 and is not preserved across restarts. Old `history.json` files are ignored and
 can be removed manually if desired.
 
-The task file stores the checklist, the selected task, and the current section tab.
+The task file stores the checklist, the selected task, the current section tab, and the
+order of the section tabs (`section_order`, the lowercase section names from left to
+right).
 Navigation is saved on normal quit; a crash may lose selection changes since the last
 task save.
 
@@ -333,14 +350,16 @@ its own `section` field, separate from its `text`; typing `Work: fix bug` sets t
 to `Work` and the text to `fix bug`, and the task is still shown, edited, and exported as
 `Work: fix bug`.
 
-The file starts with a `schema_version` (currently `3`). Older files, including the
+The file starts with a `schema_version` (currently `4`). Older files, including the
 original bare task lists, are upgraded in memory when sati starts and written in the
 current format on the next save or normal quit; starting sati never rewrites the file by
 itself. Upgraded tasks receive new ids and share the upgrade time as their `created_at`,
 since their real creation times are unknown, and `Name: ` prefixes in older files move into
-the `section` field once. A file written by a newer version of sati is
-refused and left untouched, as is any file that cannot be read or upgraded, or that gives
-two tasks the same `id`. Older versions of sati cannot open version 3 files.
+the `section` field once. Upgraded files order their section tabs alphabetically, as
+earlier versions showed them. A file written by a newer version of sati is
+refused and left untouched, as is any file that cannot be read or upgraded, that gives
+two tasks the same `id`, or whose `section_order` doesn't list each section exactly once.
+Older versions of sati cannot open version 4 files.
 
 ## Credits
 
