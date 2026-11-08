@@ -173,6 +173,15 @@ pub(crate) fn split_section(input: &str) -> (Option<String>, String) {
     (section, section_body(input).to_owned())
 }
 
+// The text an add or edit input submits as a task: trimmed, and None when it is blank or a
+// chosen section with nothing after it.
+fn submitted_task_text(input: &TextInput) -> Option<String> {
+    let text = input.text().trim();
+    let bare_section = task_prefix(input.text()).is_some() && section_body(input.text()).is_empty();
+
+    (!text.is_empty() && !bare_section).then(|| text.to_owned())
+}
+
 impl Task {
     // Sections match case-insensitively.
     fn section_key(&self) -> Option<String> {
@@ -2012,18 +2021,6 @@ impl App {
             }
         }
 
-        let placement = match self.mode {
-            Mode::Adding(_, placement) => placement,
-            _ => AddPlacement::End,
-        };
-
-        let edited_task = match &self.mode {
-            Mode::Editing { index, .. } => Some(*index),
-            _ => None,
-        };
-
-        let renaming = matches!(self.mode, Mode::RenamingSection { .. });
-
         let Some(input) = self.mode.text_input_mut() else {
             unreachable!("text input mode");
         };
@@ -2042,43 +2039,58 @@ impl App {
             KeyCode::Char(character) if !character.is_control() => {
                 input.insert(single_line_character(character).encode_utf8(&mut [0; 4]))
             }
-            // A taken or invalid name keeps the input open; the notice says why.
-            KeyCode::Enter if renaming => {
-                let name = input.text().trim().to_owned();
-
-                if self.rename_problem().is_none() {
-                    self.rename_section(&name, storage)?;
-                    self.mode = Mode::Normal;
-                    self.reveal_selection = true;
-                }
-            }
-            KeyCode::Enter => {
-                let text = input.text().trim().to_owned();
-                // A chosen section with nothing after it is not a task.
-                let bare_section =
-                    task_prefix(input.text()).is_some() && section_body(input.text()).is_empty();
-
-                if !text.is_empty() && !bare_section {
-                    if let Some(index) = edited_task {
-                        // Editing re-reads the "Name: " syntax, so it can change the section.
-                        let (section, body) = split_section(&text);
-
-                        if self.tasks[index].section != section || self.tasks[index].text != body {
-                            let mut tasks = self.tasks.clone();
-                            tasks[index].section = section;
-                            tasks[index].text = body;
-                            self.replace(tasks, Some(index), "edit task", storage)?;
-                        }
-                    } else {
-                        self.insert_task(text, placement, "add task", storage)?;
-                    }
-                }
-
-                self.mode = Mode::Normal;
-                self.reveal_selection = true;
-            }
+            KeyCode::Enter => self.submit_input(storage)?,
             _ => {}
         }
+
+        Ok(())
+    }
+
+    // Enter in an add, edit, or rename input; search and the section picker handle their own
+    // Enter above. An add or edit closes even when it changes nothing, but a rename stays open
+    // until the name can be used.
+    fn submit_input(&mut self, storage: &Storage) -> Result<()> {
+        match &self.mode {
+            Mode::Adding(input, placement) => {
+                let placement = *placement;
+
+                if let Some(text) = submitted_task_text(input) {
+                    self.insert_task(text, placement, "add task", storage)?;
+                }
+            }
+            Mode::Editing { index, input } => {
+                let index = *index;
+
+                // Editing re-reads the "Name: " syntax, so it can change the section.
+                if let Some(text) = submitted_task_text(input) {
+                    let (section, body) = split_section(&text);
+
+                    if self.tasks[index].section != section || self.tasks[index].text != body {
+                        let mut tasks = self.tasks.clone();
+                        tasks[index].section = section;
+                        tasks[index].text = body;
+                        self.replace(tasks, Some(index), "edit task", storage)?;
+                    }
+                }
+            }
+            // A taken or invalid name keeps the input open; the notice says why.
+            Mode::RenamingSection { input } => {
+                if self.rename_problem().is_some() {
+                    return Ok(());
+                }
+
+                let name = input.text().trim().to_owned();
+                self.rename_section(&name, storage)?;
+            }
+            Mode::Searching { .. }
+            | Mode::FuzzySection { .. }
+            | Mode::Normal
+            | Mode::ConfirmClear
+            | Mode::Help { .. } => return Ok(()),
+        }
+
+        self.mode = Mode::Normal;
+        self.reveal_selection = true;
 
         Ok(())
     }
