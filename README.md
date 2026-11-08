@@ -405,7 +405,9 @@ Tasks are saved locally in `tasks.json`:
 
 `--data-dir PATH` uses another directory instead: sati keeps `tasks.json` and its
 `tasks.lock` directly in `PATH` (no `sati` subdirectory is added; a relative path is taken
-from the current directory). Each directory is an independent checklist with its own lock,
+from the current directory). sati doesn't expand `~` itself: write `--data-dir ~/work` with a
+space so the shell expands it, since `--data-dir=~/work` would name a directory called `~`
+in some shells. Each directory is an independent checklist with its own lock,
 so separate directories can be open at the same time. The interactive checklist creates the
 directory (and any missing parents) if needed; `sati export` only reads it, never creates
 it, and reports an error if it is missing or not a directory. An existing directory without
