@@ -22,7 +22,7 @@
 - `src/config.rs`: TOML config discovery (`$XDG_CONFIG_HOME`/`~/.config`, macOS Application Support, `%APPDATA%`), reading, and parsing. `ConfigFile::locate` finds the file (`required` only for `--config`), `ConfigFile::read` returns its raw `ConfigText`, and `Config::parse` validates it, returning a structured `ConfigError` (path, message, optional `SourceLocation` built from the toml span). Unknown keys and invalid files are errors; sati never writes config files. Precedence is CLI > TOML > defaults; contradictory CLI flag pairs are rejected.
 - `src/config_watch.rs`: `ConfigWatch`, which watches the config file's parent directory (non-recursively, filtering events by file name and ignoring access-only and metadata-only events, which sati's own reads produce (opens, reads, access-time updates reported as generic metadata on Linux); metadata changes that matter, such as permissions, are left to the poll; only removal or renaming of the directory itself drops the watch), debounces bursts (`SETTLE_DELAY`), polls as a fallback (`POLL_INTERVAL`, also re-creating the watch when the directory appears), and reports a new `ConfigText` only when it differs from the last one read.
 - `src/themes.rs` / `src/styles.rs`: built-in theme palettes and the resolved `Styles` (theme + TOML overrides + `--accent`).
-- `src/search.rs`: search matching and highlight ranges for `Searching` / `SearchResults`.
+- `src/search.rs`: search matching and highlight ranges for `Searching`.
 - `src/export.rs`: Markdown rendering shared by `sati export [-o PATH] [--force]` and the `c` OSC 52 clipboard copy. Export runs without taking the instance lock (it works while the TUI is open) and refuses to overwrite sati's own state files or existing files without `--force`.
 - `src/notification.rs`: timed footer notifications (e.g. theme name after `t` / `T`).
 - Unit tests live in `#[cfg(test)] mod tests` inside each module; `tests/` holds integration tests that run the binary (`cli`, `config`, `directories`, `export`, `locking`). Integration tests isolate data/config by overriding `HOME`, `XDG_DATA_HOME`, and `APPDATA`; never point tests at the real user data directory. They run the binary without a terminal, so every run must fail or exit before terminal setup (an invalid `tasks.json` is the usual way); otherwise crossterm can take over the developer's `/dev/tty`. Invalid configuration no longer stops startup, so it cannot serve that purpose.
@@ -60,7 +60,7 @@
 
 ### Input, rendering, and terminal lifecycle
 
-- Modes are `Normal`, `Adding`, `Editing`, `Searching`, `SearchResults`, `RenamingSection`, `FuzzySection`, and `ConfirmClear`. Keep shortcuts mode-specific; accidental key repeats and key releases must not trigger destructive actions.
+- Modes are `Normal`, `Adding`, `Editing`, `Searching`, `RenamingSection`, `FuzzySection`, and `ConfirmClear`. Keep shortcuts mode-specific; accidental key repeats and key releases must not trigger destructive actions.
 - Text editing is deliberately **single-line**. Respect Unicode grapheme boundaries when moving, inserting, deleting, pasting, wrapping, and positioning the cursor. Use terminal-cell width, not byte or character count, for layout.
 - Task wrapping affects visual-row scrolling, Page Up/Down, mouse hit mapping, and selection visibility. Account for narrow/short windows and tasks taller than the viewport.
 - Keep footer hints contextual and compact. **Do not advertise Page Up/Down in the bottom shortcut legend**; those are intentionally unlisted convenience shortcuts.

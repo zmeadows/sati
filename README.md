@@ -83,7 +83,6 @@ Then run `sati`.
 | Undo | `u`, `Ctrl+Z` |
 | Redo | `Ctrl+R` |
 | Search | `/`, `Ctrl+F` |
-| Resume previous search forward / backward | `n` / `N` |
 | Toggle wrapping | `w` |
 | Next / previous color theme | `t` / `T` |
 | Quit | `q` |
@@ -165,7 +164,7 @@ The add, edit, search, rename, and section-picker prompts share these shortcuts:
 | Delete to end / start of input | `Ctrl+K` / `Ctrl+U` |
 | Cancel current operation | `Esc`, `Ctrl+G` |
 
-`Ctrl+G` also cancels search results and confirmation dialogs; it does nothing in Normal mode.
+`Ctrl+G` also cancels confirmation dialogs; it does nothing in Normal mode.
 
 **Section suggestions:** While adding or editing, if the input is empty or a single
 partial word (such as `wo`), `Tab` / `Shift+Tab` cycle through matching sections, shown
@@ -175,7 +174,7 @@ it. Adding a task from a section tab starts with that section suggested; from `[
 `[-]`, nothing is suggested until you press `Tab`. A section with no task text after it
 adds nothing.
 
-**Search:** Press `/` and type to find matches. `Enter` selects a sole matching task immediately; with multiple matches, it opens results. Use `n` / `N`, `↓` / `↑`, or `Ctrl+N` / `Ctrl+P` to move between results, then `Enter` to select one. `Esc` cancels and restores your previous selection. Exiting search clears highlighting but remembers the last nonempty query for this session. From the checklist, `n` / `N` resume it, staying on the current task if it matches; subsequent presses cycle through matches.
+**Search:** Press `/` and type; the first match after your current task is focused as you type. `Tab` / `Shift+Tab` cycle through the matches, and `Enter` selects the focused one and returns to the checklist. `Esc` cancels and restores your previous selection. Exiting search clears highlighting; the query is not remembered.
 
 ## Options
 

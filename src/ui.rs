@@ -18,10 +18,7 @@ use crate::styles::Styles;
 pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let area = frame.area();
     frame.render_widget(Block::default().style(app.styles.normal), area);
-    let searching = matches!(
-        app.mode,
-        Mode::Searching { .. } | Mode::SearchResults { .. }
-    );
+    let searching = matches!(app.mode, Mode::Searching { .. });
     // Only search uses a separate input row; add/edit live inside the checklist.
     let input_height = u16::from(searching && area.height > 0);
     let mut shortcuts = shortcut_lines(app, area.width);
@@ -134,27 +131,37 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
 
     draw_tasks(frame, app, rows);
 
-    match &app.mode {
-        Mode::Searching { input, .. } | Mode::SearchResults { input, .. } => {
-            let no_matches = !input.text().is_empty() && app.list.selected().is_none();
+    if let Mode::Searching { input, .. } = &app.mode {
+        let no_matches = !input.text().is_empty() && app.list.selected().is_none();
 
-            let label = if no_matches && sections[1].width >= 28 {
-                "search (No matches)"
-            } else {
-                "search"
-            };
+        let label = if no_matches && sections[1].width >= 28 {
+            "search (No matches)"
+        } else {
+            "search"
+        };
 
-            draw_input_line(
-                frame,
+        draw_input_line(
+            frame,
+            sections[1],
+            input,
+            label,
+            &app.styles,
+            app.config_error.is_none(),
+            None,
+        );
+
+        // The hint sits at the right edge only while the prompt, query, and cursor cell
+        // leave room for it, so it never covers typing.
+        let prompt_width = label.width() + " › ".width();
+        let typed_width = prompt_width + input.text().width() + 1;
+        let needed_width = typed_width + SEARCH_HINT_GAP + SEARCH_HINT.width();
+
+        if app.config_error.is_none() && needed_width <= usize::from(sections[1].width) {
+            frame.render_widget(
+                Paragraph::new(Line::styled(SEARCH_HINT, app.styles.muted).right_aligned()),
                 sections[1],
-                input,
-                label,
-                &app.styles,
-                matches!(app.mode, Mode::Searching { .. }) && app.config_error.is_none(),
-                None,
             );
         }
-        _ => {}
     }
 
     frame.render_widget(
@@ -176,6 +183,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
 }
 
 const TAB_MARKER: usize = 1;
+
+const SEARCH_HINT: &str = "Tab to cycle";
+
+// Blank cells kept between the search query's cursor and the hint.
+const SEARCH_HINT_GAP: usize = 2;
 
 // `s1` … `s9` and `s0` reach the first ten tabs.
 const JUMPABLE_TABS: usize = 10;
@@ -921,10 +933,8 @@ fn shortcut_available(app: &App, key: &str) -> bool {
 
 fn compact_shortcuts(app: &App, width: u16) -> Vec<Line<'static>> {
     let mut rows: Vec<Vec<(&str, &str)>> = match app.mode {
-        Mode::Searching { .. } => vec![vec![("Enter", "Results"), ("Esc", "Cancel")]],
-        Mode::SearchResults { .. } => vec![vec![
-            ("n/N", "Next/prev"),
-            ("↑/↓", "Navigate"),
+        Mode::Searching { .. } => vec![vec![
+            ("Tab/Shift+Tab", "Next/prev"),
             ("Enter", "Select"),
             ("Esc", "Cancel"),
         ]],
@@ -952,7 +962,7 @@ fn compact_shortcuts(app: &App, width: u16) -> Vec<Line<'static>> {
     let mut lines = wrap_shortcuts(&rows, width, &app.styles);
 
     // Keep at most three hint rows, dropping secondary actions first.
-    for omit in ["x", "D", "w", "u", "d", "j/k", "↑/↓"] {
+    for omit in ["x", "D", "w", "u", "d", "j/k"] {
         if lines.len() <= 3 {
             break;
         }
@@ -2229,7 +2239,7 @@ mod tests {
                 ..Task::new("Work: text")
             }]);
             app.styles.accent = app.styles.accent.fg(accent);
-            app.mode = Mode::SearchResults {
+            app.mode = Mode::Searching {
                 input: "Work".into(),
                 original: Some(0),
             };
@@ -2381,7 +2391,7 @@ mod tests {
             );
             assert!(buffer[(13, 2)].modifier.contains(Modifier::CROSSED_OUT));
 
-            app.mode = Mode::SearchResults {
+            app.mode = Mode::Searching {
                 input: "Work".into(),
                 original: Some(0),
             };
@@ -2420,8 +2430,8 @@ mod tests {
                         input: "Work".into(),
                         original: Some(0),
                     },
-                    4 => Mode::SearchResults {
-                        input: "Work".into(),
+                    4 => Mode::Searching {
+                        input: "".into(),
                         original: Some(0),
                     },
                     5 => Mode::ConfirmClear,
@@ -2584,8 +2594,8 @@ mod tests {
                                     input: "task".into(),
                                     original: Some(0),
                                 },
-                                4 => Mode::SearchResults {
-                                    input: "task".into(),
+                                4 => Mode::Searching {
+                                    input: "".into(),
                                     original: Some(0),
                                 },
                                 _ => Mode::ConfirmClear,
@@ -2713,105 +2723,7 @@ mod tests {
     }
 
     #[test]
-    fn remembered_search_is_invisible_until_resumed_and_restores_its_checkpoint() {
-        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-        for single in [false, true] {
-            let fixture = crate::storage::tests::Fixture::new();
-
-            let mut app = App::new(
-                (0..20)
-                    .map(|index| Task {
-                        status: completed_if(index >= 10),
-                        ..Task::new(if index == 19 || (!single && index == 0) {
-                            "needle words ".repeat(10).trim().into()
-                        } else {
-                            format!("task {index}")
-                        })
-                    })
-                    .collect(),
-            );
-            app.keybinds = false;
-            app.list.select(Some(4));
-            let original = app.tasks.clone();
-            let key = |app: &mut App, code| {
-                app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
-                    .unwrap();
-            };
-            key(&mut app, KeyCode::Char('/'));
-            app.paste("needle");
-            key(&mut app, KeyCode::Enter);
-
-            if !single {
-                key(&mut app, KeyCode::Enter);
-            }
-
-            let mut terminal = test_terminal(28, 7);
-
-            for _ in 0..2 {
-                let rows = render(&mut terminal, &mut app);
-                assert_eq!(app.mode, Mode::Normal);
-                assert_eq!(app.list.selected(), Some(19));
-
-                let rendered = screen(&terminal);
-                assert!(
-                    !rendered.contains('■')
-                        && !rendered.contains('□')
-                        && !rendered.contains("search ›")
-                );
-                assert!(rendered.contains("› [✓] needle"));
-                assert!(
-                    terminal
-                        .backend()
-                        .buffer()
-                        .content
-                        .iter()
-                        .all(|cell| cell.bg == Color::Reset)
-                );
-                assert!(!terminal.backend().cursor_visible());
-
-                let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
-                assert!(app.row_tasks[app.scroll..end].contains(&Some(19)));
-
-                key(&mut app, KeyCode::Char('n'));
-                assert_eq!(app.list.selected(), Some(19));
-
-                render(&mut terminal, &mut app);
-                assert!(screen(&terminal).contains("search › needle"));
-                assert!(screen(&terminal).contains('■'));
-                assert!(
-                    terminal
-                        .backend()
-                        .buffer()
-                        .content
-                        .iter()
-                        .any(|cell| cell.modifier.contains(Modifier::REVERSED))
-                );
-
-                key(&mut app, KeyCode::Char('n'));
-                assert_eq!(app.list.selected(), Some(if single { 19 } else { 0 }));
-
-                key(&mut app, KeyCode::Esc);
-                assert_eq!(app.list.selected(), Some(19));
-            }
-
-            key(&mut app, KeyCode::Char('j'));
-            assert_eq!(app.list.selected(), Some(0));
-
-            key(&mut app, KeyCode::Char('N'));
-            assert_eq!(app.list.selected(), Some(if single { 19 } else { 0 }));
-
-            key(&mut app, KeyCode::Enter);
-            assert_eq!(app.mode, Mode::Normal);
-            assert_eq!(app.search_query(), None);
-            assert_eq!(app.tasks, original);
-            assert!(!app.can_undo() && !app.can_redo());
-            assert!(!fixture.task_path().exists());
-        }
-    }
-
-    #[test]
-    fn search_enter_accepts_one_task_but_keeps_zero_and_multiple_results() {
+    fn search_enter_selects_the_focused_match_but_keeps_search_open_without_one() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
         for (query, count) in [("missing", 0), ("task 18", 1), ("task 1", 11)] {
@@ -2853,35 +2765,21 @@ mod tests {
                 if !accept {
                     assert_eq!(app.mode, Mode::Normal);
                     assert_eq!(app.list.selected(), Some(0));
+                } else if count == 0 {
+                    assert!(matches!(app.mode, Mode::Searching { .. }));
                 } else {
-                    match count {
-                        0 => assert!(matches!(app.mode, Mode::Searching { .. })),
-                        1 => {
-                            assert_eq!(app.mode, Mode::Normal);
-                            assert_eq!(app.list.selected(), Some(18));
+                    assert_eq!(app.mode, Mode::Normal);
+                    assert_eq!(app.list.selected(), selected);
 
-                            app.key(
-                                KeyEvent::new_with_kind(
-                                    KeyCode::Enter,
-                                    KeyModifiers::NONE,
-                                    KeyEventKind::Repeat,
-                                ),
-                                &fixture.storage,
-                            )
-                            .unwrap();
-                        }
-                        _ => {
-                            assert!(matches!(app.mode, Mode::SearchResults { .. }));
-
-                            app.key(
-                                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
-                                &fixture.storage,
-                            )
-                            .unwrap();
-
-                            assert_ne!(app.list.selected(), selected);
-                        }
-                    }
+                    app.key(
+                        KeyEvent::new_with_kind(
+                            KeyCode::Enter,
+                            KeyModifiers::NONE,
+                            KeyEventKind::Repeat,
+                        ),
+                        &fixture.storage,
+                    )
+                    .unwrap();
                 }
 
                 let rows = render(&mut terminal, &mut app);
@@ -2893,6 +2791,7 @@ mod tests {
 
                 if accept && count == 1 {
                     let rendered = screen(&terminal);
+                    assert_eq!(selected, Some(18));
                     assert!(rendered.contains("[✓] task 18"));
                     assert!(!rendered.contains('■') && !rendered.contains('□'));
                     assert!(!rendered.contains("search ›"));
@@ -2942,10 +2841,6 @@ mod tests {
                 for mode in [
                     Mode::Normal,
                     Mode::Searching {
-                        input: "done".into(),
-                        original: Some(1),
-                    },
-                    Mode::SearchResults {
                         input: "done".into(),
                         original: Some(1),
                     },
@@ -3386,7 +3281,7 @@ mod tests {
     }
 
     #[test]
-    fn search_keeps_its_bottom_prompt_and_read_only_results_cursor() {
+    fn search_keeps_its_bottom_prompt_and_cursor_while_tab_cycles_matches() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let fixture = crate::storage::tests::Fixture::new();
 
@@ -3409,7 +3304,7 @@ mod tests {
         app.paste("needle");
         let mut terminal = test_terminal(40, 12);
 
-        for results in [false, true] {
+        for _ in 0..2 {
             let rows = render(&mut terminal, &mut app);
             assert_eq!(rows.height, 9);
             assert!(
@@ -3421,24 +3316,66 @@ mod tests {
             );
             assert_eq!(app.row_tasks, [Some(0), Some(1)]);
             assert!(screen(&terminal).contains("■"));
-            assert_eq!(terminal.backend().cursor_visible(), !results);
-
-            if !results {
-                assert_eq!(terminal.backend().cursor_position().y, 11);
-            }
+            assert!(terminal.backend().cursor_visible());
+            assert_eq!(terminal.backend().cursor_position().y, 11);
 
             app.key(
-                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
                 &fixture.storage,
             )
             .unwrap();
         }
 
+        app.key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &fixture.storage,
+        )
+        .unwrap();
         render(&mut terminal, &mut app);
+        assert_eq!(app.list.selected(), Some(0));
         assert!(screen(&terminal).contains("[✓] needle"));
         assert!(!screen(&terminal).contains("search ›"));
         assert_eq!(app.tasks[0].status, TaskStatus::Completed);
         assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn tab_hint_sits_at_the_right_of_the_search_row_only_when_it_fits_after_the_query() {
+        let mut app = App::new(vec![Task::new("needle")]);
+        app.keybinds = false;
+
+        for (width, query, shown) in [
+            (40, "", true),
+            (40, "needle", true),
+            (30, "needle", true),
+            (29, "needle", false),
+            (40, "a much longer search query", false),
+            (12, "", false),
+        ] {
+            app.mode = Mode::Searching {
+                input: query.into(),
+                original: Some(0),
+            };
+            let mut terminal = test_terminal(width, 8);
+
+            render(&mut terminal, &mut app);
+            let rendered = screen(&terminal);
+            let search_row = rendered.lines().last().unwrap();
+
+            assert!(search_row.contains("search ›"), "{width} {query:?}");
+            assert_eq!(
+                search_row.ends_with(SEARCH_HINT),
+                shown,
+                "{width} {query:?}: {search_row:?}"
+            );
+            assert_eq!(rendered.contains(SEARCH_HINT), shown);
+        }
+
+        app.mode = Mode::Normal;
+        let mut terminal = test_terminal(40, 8);
+        render(&mut terminal, &mut app);
+
+        assert!(!screen(&terminal).contains(SEARCH_HINT));
     }
 
     #[test]
@@ -3505,11 +3442,10 @@ mod tests {
             assert_eq!(highlighted, expected);
         }
 
-        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::Tab);
         render(&mut terminal, &mut app);
         assert!(screen(&terminal).contains("search › i\u{307}foo"));
 
-        key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Enter);
         render(&mut terminal, &mut app);
 
@@ -3635,17 +3571,10 @@ mod tests {
         assert_eq!(terminal.backend().buffer()[(1, 1)].symbol(), " ");
         assert_eq!(terminal.backend().buffer()[(4, 1)].symbol(), "□");
 
-        for results in [false, true] {
-            app.mode = if results {
-                Mode::SearchResults {
-                    input: "ordinary".into(),
-                    original: Some(0),
-                }
-            } else {
-                Mode::Searching {
-                    input: "ordinary".into(),
-                    original: Some(0),
-                }
+        for query in ["", "ordinary"] {
+            app.mode = Mode::Searching {
+                input: query.into(),
+                original: Some(0),
             };
 
             let text = shortcut_lines(&app, 80)
@@ -3655,7 +3584,7 @@ mod tests {
                 .join(" ");
 
             assert!(text.contains("Esc") && text.contains("Cancel"));
-            assert!(text.contains(if results { "Select" } else { "Results" }));
+            assert!(text.contains("Tab/Shift+Tab") && text.contains("Select"));
             assert!(!text.contains("Page"));
 
             for width in [0, 1, 12, 18, 30, 40, 60, 80] {
@@ -3983,10 +3912,6 @@ mod tests {
                     },
                     Mode::Searching {
                         input: "Long search 日本語 🪷".into(),
-                        original: Some(0),
-                    },
-                    Mode::SearchResults {
-                        input: "日本語".into(),
                         original: Some(0),
                     },
                     Mode::ConfirmClear,
