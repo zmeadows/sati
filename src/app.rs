@@ -405,6 +405,34 @@ struct UndoState {
     label: String,
 }
 
+// The navigation that tasks.json holds, so a clean exit only writes when the selection or tab
+// has changed since, or when the file still uses an older schema.
+struct Persisted {
+    selected: Option<usize>,
+    view: SectionView,
+    needs_migration: bool,
+}
+
+impl Persisted {
+    // Write a complete document, and only once that succeeds, record what it holds.
+    fn save(
+        &mut self,
+        storage: &Storage,
+        tasks: &[Task],
+        section_order: &[String],
+        selected: Option<usize>,
+        view: &SectionView,
+    ) -> Result<()> {
+        storage.save_view(tasks, section_order, selected, view.saved_key())?;
+
+        self.selected = crate::storage::valid_selection(tasks, selected);
+        self.view = view.clone();
+        self.needs_migration = false;
+
+        Ok(())
+    }
+}
+
 pub struct App {
     pub tasks: Vec<Task>,
     // Lowercase keys of the named section tabs in display order; see `settled_section_order`.
@@ -442,9 +470,7 @@ pub struct App {
     task_register: Option<String>,
     history: VecDeque<UndoState>,
     redo_history: VecDeque<UndoState>,
-    persisted_selection: Option<usize>,
-    persisted_view: SectionView,
-    needs_migration: bool,
+    persisted: Persisted,
 }
 
 impl App {
@@ -484,9 +510,11 @@ impl App {
             task_register: None,
             history: VecDeque::new(),
             redo_history: VecDeque::new(),
-            persisted_selection: selected,
-            persisted_view: SectionView::All,
-            needs_migration: false,
+            persisted: Persisted {
+                selected,
+                view: SectionView::All,
+                needs_migration: false,
+            },
         }
     }
 
@@ -494,10 +522,12 @@ impl App {
         let mut app = Self::new(document.tasks);
         app.section_order = document.section_order;
         app.list.select(document.selected);
-        app.persisted_selection = document.selected;
         app.view = SectionView::from_saved_key(document.section);
-        app.persisted_view = app.view.clone();
-        app.needs_migration = document.needs_migration;
+        app.persisted = Persisted {
+            selected: document.selected,
+            view: app.view.clone(),
+            needs_migration: document.needs_migration,
+        };
 
         if !app.section_tabs().iter().any(|(view, _)| *view == app.view) {
             app.view = SectionView::All;
@@ -518,14 +548,12 @@ impl App {
 
         let selected = crate::storage::valid_selection(&self.tasks, selected);
 
-        if self.needs_migration
-            || selected != self.persisted_selection
-            || view != self.persisted_view
+        if self.persisted.needs_migration
+            || selected != self.persisted.selected
+            || view != self.persisted.view
         {
-            storage.save_view(&self.tasks, &self.section_order, selected, view.saved_key())?;
-            self.persisted_selection = selected;
-            self.persisted_view = view;
-            self.needs_migration = false;
+            self.persisted
+                .save(storage, &self.tasks, &self.section_order, selected, &view)?;
         }
 
         Ok(())
@@ -1041,10 +1069,8 @@ impl App {
         let section_order = settled_section_order(&section_order, &tasks);
         let view = settled_view(&tasks, &section_order, &view, selected);
 
-        storage.save_view(&tasks, &section_order, selected, view.saved_key())?;
-        self.persisted_selection = crate::storage::valid_selection(&tasks, selected);
-        self.persisted_view = view.clone();
-        self.needs_migration = false;
+        self.persisted
+            .save(storage, &tasks, &section_order, selected, &view)?;
 
         let previous_tasks = std::mem::replace(&mut self.tasks, tasks);
         let previous_order = std::mem::replace(&mut self.section_order, section_order);
@@ -1224,15 +1250,13 @@ impl App {
             (view, selected)
         };
 
-        storage.save_view(
+        self.persisted.save(
+            storage,
             &previous.tasks,
             &previous.section_order,
             selected,
-            view.saved_key(),
+            &view,
         )?;
-        self.persisted_selection = crate::storage::valid_selection(&previous.tasks, selected);
-        self.persisted_view = view.clone();
-        self.needs_migration = false;
         let previous = source.pop_back().unwrap();
 
         let verb = if redo { "Redid" } else { "Undid" };
@@ -2491,11 +2515,11 @@ mod tests {
 
         block_saves(&fixture);
         assert!(app.save_selection(&fixture.storage).is_err());
-        assert!(app.needs_migration);
+        assert!(app.persisted.needs_migration);
 
         restore_saves(&fixture);
         app.save_selection(&fixture.storage).unwrap();
-        assert!(!app.needs_migration && !app.can_undo());
+        assert!(!app.persisted.needs_migration && !app.can_undo());
         assert!(!fixture.storage.load_document().unwrap().needs_migration);
 
         // A clean quit writes the migrated, versioned document.
@@ -2507,7 +2531,7 @@ mod tests {
 
         block_saves(&fixture);
         assert!(app.save_selection(&fixture.storage).is_err());
-        assert_eq!(app.persisted_selection, Some(0));
+        assert_eq!(app.persisted.selected, Some(0));
         assert_eq!(app.list.selected(), Some(2));
 
         restore_saves(&fixture);
@@ -2549,7 +2573,7 @@ mod tests {
         assert!(app.undo(&fixture.storage).is_err());
         assert!(app.redo(&fixture.storage).is_err());
         assert_eq!(task_state(&app), before);
-        assert_eq!(app.persisted_selection, Some(1));
+        assert_eq!(app.persisted.selected, Some(1));
     }
 
     #[test]
@@ -5049,7 +5073,7 @@ mod tests {
 
             assert!(result.is_err(), "{keys:?}");
             assert_eq!(app.view, SectionView::Named("work".into()), "{keys:?}");
-            assert_eq!(app.persisted_view, SectionView::All, "{keys:?}");
+            assert_eq!(app.persisted.view, SectionView::All, "{keys:?}");
             assert_eq!(task_state(&app), before, "{keys:?}");
         }
     }
@@ -5169,7 +5193,7 @@ mod tests {
         assert_eq!(texts(&app), ["Work: a", "Home: b", "Personal: c"]);
         assert_eq!(app.view, SectionView::Named("personal".into()));
         assert_eq!(app.list.selected(), Some(2));
-        assert_eq!(app.persisted_view, app.view);
+        assert_eq!(app.persisted.view, app.view);
         assert_eq!(saved_view(&fixture), app.view);
     }
 
@@ -5210,7 +5234,7 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Enter);
 
         assert_eq!(app.view, SectionView::Named("home".into()));
-        assert_eq!(app.persisted_view, app.view);
+        assert_eq!(app.persisted.view, app.view);
         assert_eq!(saved_view(&fixture), app.view);
     }
 
@@ -5234,7 +5258,7 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(app.view, SectionView::Named("work".into()));
-        assert_eq!(app.persisted_view, SectionView::All);
+        assert_eq!(app.persisted.view, SectionView::All);
         assert_eq!(task_state(&app), before);
     }
 
