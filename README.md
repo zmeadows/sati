@@ -174,7 +174,7 @@ it. Adding a task from a section tab starts with that section suggested; from `[
 `[-]`, nothing is suggested until you press `Tab`. A section with no task text after it
 adds nothing.
 
-**Search:** Press `/` and type; the first match after your current task is focused as you type. `Tab` / `Shift+Tab` cycle through the matches, and `Enter` selects the focused one and returns to the checklist. `Esc` cancels and restores your previous selection. Exiting search clears highlighting; the query is not remembered.
+**Search:** Press `/` and type. Each change to the query focuses the first match starting from the task that was selected when search began (that task itself if it matches), wrapping to the top. `Tab` / `Shift+Tab` cycle through the matches, and moving the cursor within the query keeps the focused match. `Enter` selects the focused match and returns to the checklist. `Esc` cancels and restores your previous selection. Exiting search clears highlighting; the query is not remembered.
 
 ## Options
 

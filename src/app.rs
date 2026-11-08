@@ -1005,10 +1005,16 @@ impl App {
         self.reveal_selection = true;
     }
 
-    fn refresh_search(&mut self) {
+    // Refocuses search from its anchor, but only when the query changed: cursor moves, Tab,
+    // and ignored keys keep whichever match is focused.
+    fn refresh_search(&mut self, previous_query: Option<&str>) {
         let Mode::Searching { input, original } = &self.mode else {
             return;
         };
+
+        if previous_query == Some(input.text()) {
+            return;
+        }
 
         let anchor = original.unwrap_or(0).min(self.tasks.len());
         let selected = (anchor..self.tasks.len()).chain(0..anchor).find(|&index| {
@@ -1524,7 +1530,10 @@ impl App {
             self.completion = None;
         }
 
+        let previous_query = self.search_query().map(str::to_owned);
+
         if self.consume_modified_key(key, storage)? {
+            self.refresh_search(previous_query.as_deref());
             self.refresh_section_picker();
             self.explain_rename_problem();
             return Ok(false);
@@ -1546,6 +1555,7 @@ impl App {
             }
         };
 
+        self.refresh_search(previous_query.as_deref());
         self.refresh_section_picker();
         self.explain_rename_problem();
 
@@ -1642,7 +1652,6 @@ impl App {
             && !character.is_control()
         {
             input.insert(single_line_character(character).encode_utf8(&mut [0; 4]));
-            self.refresh_search();
             return Ok(true);
         }
 
@@ -1661,7 +1670,6 @@ impl App {
                 _ => unreachable!(),
             }
 
-            self.refresh_search();
             return Ok(true);
         }
 
@@ -1736,7 +1744,6 @@ impl App {
                 }
             }
 
-            self.refresh_search();
             return Ok(true);
         }
 
@@ -1892,8 +1899,6 @@ impl App {
             }
             _ => {}
         }
-
-        self.refresh_search();
 
         Ok(())
     }
@@ -2071,8 +2076,6 @@ impl App {
             _ => {}
         }
 
-        self.refresh_search();
-
         Ok(false)
     }
 
@@ -2085,6 +2088,7 @@ impl App {
         self.pending_count = None;
         self.pending_section_jump = false;
         self.accept_completion();
+        let previous_query = self.search_query().map(str::to_owned);
 
         if let Mode::Adding(input, _)
         | Mode::Editing { input, .. }
@@ -2101,7 +2105,7 @@ impl App {
             input.insert(&normalized);
         }
 
-        self.refresh_search();
+        self.refresh_search(previous_query.as_deref());
         self.refresh_section_picker();
         self.explain_rename_problem();
     }
@@ -2329,14 +2333,14 @@ mod tests {
     }
 
     #[test]
-    fn modifier_early_returns_preserve_search_refresh_and_notification_dismissal() {
+    fn ignored_modifier_keys_keep_the_focused_match_and_dismiss_notifications() {
         let fixture = Fixture::new();
 
-        for (modifiers, refresh) in [
-            (KeyModifiers::CONTROL, true),
-            (KeyModifiers::CONTROL | KeyModifiers::SHIFT, true),
-            (KeyModifiers::ALT, false),
-            (KeyModifiers::SUPER, false),
+        for modifiers in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyModifiers::ALT,
+            KeyModifiers::SUPER,
         ] {
             for kind in [
                 KeyEventKind::Press,
@@ -2360,10 +2364,7 @@ mod tests {
                 let accepted = kind != KeyEventKind::Release;
 
                 assert_eq!(app.notification.is_none(), accepted);
-                assert_eq!(
-                    app.list.selected(),
-                    Some(if accepted && refresh { 0 } else { 2 })
-                );
+                assert_eq!(app.list.selected(), Some(2));
                 assert!(
                     matches!(&app.mode, Mode::Searching { input, .. } if input.text() == "hit")
                 );
@@ -4412,6 +4413,44 @@ mod tests {
         assert_eq!(app.list.selected(), Some(0));
 
         assert_eq!(app.search_query(), Some("hit"));
+    }
+
+    #[test]
+    fn moving_the_search_cursor_keeps_the_match_chosen_with_tab_until_the_query_changes() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["hit 0", "miss 1", "hit 2", "hit 3"]);
+        app.list.select(Some(1));
+
+        press(&mut app, &fixture, KeyCode::Char('/'));
+        app.paste("hit");
+        press(&mut app, &fixture, KeyCode::Tab);
+
+        assert_eq!(app.list.selected(), Some(3));
+
+        for key in [
+            KeyEvent::from(KeyCode::Left),
+            KeyEvent::from(KeyCode::Right),
+            KeyEvent::from(KeyCode::Home),
+            KeyEvent::from(KeyCode::End),
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT),
+            KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
+            KeyEvent::from(KeyCode::PageDown),
+        ] {
+            press(&mut app, &fixture, key);
+            assert_eq!(app.list.selected(), Some(3), "{key:?}");
+        }
+
+        app.paste("");
+        assert_eq!(app.list.selected(), Some(3));
+
+        // Editing the query starts again from the task selected before searching.
+        press(&mut app, &fixture, KeyCode::Char(' '));
+        assert_eq!(app.list.selected(), Some(2));
+        assert_eq!(app.search_query(), Some("hit "));
     }
 
     #[test]
