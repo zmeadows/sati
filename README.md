@@ -88,9 +88,15 @@ Then run `sati`.
 | Quit | `q` |
 
 As in Vim, type a count before navigating or reordering to repeat it: `5j` moves
-down five tasks and `3K` moves the selected task up three. Counts also work with the
-arrow and `Ctrl+N` / `Ctrl+P` aliases, and counted moves stop at the first or last
-task instead of wrapping. `Esc` cancels a count.
+down five tasks, `3K` moves the selected task up three, `3l` switches three section tabs
+right, and `2H` moves the current section two places left. Counts also work with the
+arrow and `Ctrl+N` / `Ctrl+P` aliases of `j` / `k`, and counted moves stop at the first
+or last task or tab instead of wrapping. A counted reorder is a single change for `u`.
+`Esc` cancels a count.
+
+Holding a key repeats navigation (`j` / `k`, `h` / `l`, arrows, `Tab`, `Alt+B` / `Alt+F`,
+Page Up/Down), but commands that change tasks or section order, such as `d`, `J` / `K`,
+or `H` / `L`, run once per key press.
 
 Task copies use one in-memory register, separate from the system clipboard. Pasted
 tasks start incomplete and unmarked; the register remains available for repeated
@@ -119,7 +125,7 @@ past the last tab does nothing, and any other key after `s` just cancels the jum
 Press `` ` `` to find a section by name. `[*]` turns into a small input, and the tabs to
 its right narrow to the sections that fuzzy-match what you type (`wl` finds `Wishlist`),
 best match first; `[-]` matches as "unsectioned". Each change to the query shows the best
-match's tasks right away. `Tab` / `Shift+Tab` (or `Ctrl+→` / `Ctrl+←`) step through the
+match's tasks right away. `Tab` / `Shift+Tab` (or `Ctrl+N` / `Ctrl+P`) step through the
 matches and wrap around. `Enter` stays on the highlighted match; opened from `[*]`, it
 waits until typing or `Tab` highlights one. `Esc` or `Ctrl+G` returns to the tab, task,
 and scroll position you started from. While nothing matches, the last shown section stays
@@ -127,7 +133,7 @@ on screen, and `Tab` and `Enter` wait until the query matches again. On a narrow
 terminal, a long section name is shortened with `…` so the current tab stays visible.
 
 Press `L` / `H` (or `Alt+N` / `Alt+P`) on a section tab to move it one place right or
-left among the named sections. `[*]` and `[-]` stay first, the ends don't wrap, and the
+left among the named sections; a count such as `3L` moves it further. `[*]` and `[-]` stay first, the ends don't wrap, and the
 tasks themselves keep their order; `u` undoes a move. Renaming a section keeps its place.
 A section disappears from the order with its last task, and comes back at the right end
 if you use it again. On macOS, the `Alt` shortcuts need the terminal to send Option as
@@ -157,7 +163,7 @@ The add, edit, search, rename, and section-picker prompts share these shortcuts:
 | --- | --- |
 | Move cursor | `←` / `→`, `Ctrl+B` / `Ctrl+F` |
 | Start / end of text | `Home` / `End`, `Ctrl+A` / `Ctrl+E` |
-| Previous / next word | `Ctrl+←` / `Ctrl+→` (not in the section picker), `Alt+B` / `Alt+F` |
+| Previous / next word | `Ctrl+←` / `Ctrl+→`, `Alt+B` / `Alt+F` |
 | Delete next word | `Alt+D` |
 | Delete previous word | `Ctrl+Backspace`, `Ctrl+W` |
 | Delete character at cursor | `Delete`, `Ctrl+D` |
@@ -167,14 +173,15 @@ The add, edit, search, rename, and section-picker prompts share these shortcuts:
 `Ctrl+G` also cancels confirmation dialogs; it does nothing in Normal mode.
 
 **Section suggestions:** While adding or editing, if the input is empty or a single
-partial word (such as `wo`), `Tab` / `Shift+Tab` cycle through matching sections, shown
-as dim text after the cursor. `Space` or `Enter` accepts the suggestion, and typing any
-other character accepts it and continues after `Work: `. `Backspace` or `Esc` dismisses
-it. Adding a task from a section tab starts with that section suggested; from `[*]` or
+partial word (such as `wo`), `Tab` / `Shift+Tab` (or `Ctrl+N` / `Ctrl+P`) cycle through
+matching sections, shown as dim text after the cursor. `Space` or `Enter` accepts the
+suggestion, and typing any other character accepts it and continues after `Work: `.
+`Backspace` dismisses it and keeps the input open; `Esc` or `Ctrl+G` cancels the whole add
+or edit, suggestion included. Adding a task from a section tab starts with that section suggested; from `[*]` or
 `[-]`, nothing is suggested until you press `Tab`. A section with no task text after it
 adds nothing.
 
-**Search:** Press `/` and type. Each change to the query focuses the first match starting from the task that was selected when search began (that task itself if it matches), wrapping to the top. `Tab` / `Shift+Tab` cycle through the matches, and moving the cursor within the query keeps the focused match. `Enter` selects the focused match and returns to the checklist. `Esc` cancels and restores your previous selection. Exiting search clears highlighting; the query is not remembered.
+**Search:** Press `/` and type. Each change to the query focuses the first match starting from the task that was selected when search began (that task itself if it matches), wrapping to the top. `Tab` / `Shift+Tab` (or `Ctrl+N` / `Ctrl+P`) cycle through the matches, and moving the cursor within the query keeps the focused match. `Enter` selects the focused match and returns to the checklist. `Esc` cancels and restores your previous selection. Exiting search clears highlighting; the query is not remembered.
 
 ## Options
 

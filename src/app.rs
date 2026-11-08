@@ -537,7 +537,7 @@ impl App {
         self.reveal_selection = true;
     }
 
-    fn cycle_section(&mut self, forward: bool) {
+    fn cycle_section(&mut self, forward: bool, count: Option<usize>) {
         let tabs = self.section_tabs();
 
         if tabs.is_empty() {
@@ -551,10 +551,15 @@ impl App {
             .position(|(view, _)| *view == self.view)
             .unwrap_or(0);
 
-        let next = if forward {
-            (current + 1) % tabs.len()
-        } else {
-            (current + tabs.len() - 1) % tabs.len()
+        // Like `navigate`, a counted motion stops at the ends; a plain motion wraps around.
+        let last = tabs.len() - 1;
+        let next = match (count, forward) {
+            (Some(count), true) => current.saturating_add(count).min(last),
+            (Some(count), false) => current.saturating_sub(count),
+            (None, true) if current == last => 0,
+            (None, true) => current + 1,
+            (None, false) if current == 0 => last,
+            (None, false) => current - 1,
         };
 
         self.show_section(tabs[next].0.clone());
@@ -719,9 +724,9 @@ impl App {
         self.reveal_selection = original.reveal_selection;
     }
 
-    // Swap the current section tab with its neighbor. [*] and [-] stay where they are, and the
+    // Move the current section tab `count` places. [*] and [-] stay where they are, and the
     // ends do not wrap around.
-    fn move_section(&mut self, right: bool, storage: &Storage) -> Result<()> {
+    fn move_section(&mut self, right: bool, count: usize, storage: &Storage) -> Result<()> {
         let SectionView::Named(key) = &self.view else {
             return Ok(());
         };
@@ -731,20 +736,21 @@ impl App {
         };
 
         let target = if right {
-            position + 1
+            position
+                .saturating_add(count)
+                .min(self.section_order.len() - 1)
         } else {
-            match position.checked_sub(1) {
-                Some(target) => target,
-                None => return Ok(()),
-            }
+            position.saturating_sub(count)
         };
 
-        if target >= self.section_order.len() {
+        if target == position {
             return Ok(());
         }
 
+        // One remove/insert keeps a counted move to a single save and undo step.
         let mut section_order = self.section_order.clone();
-        section_order.swap(position, target);
+        let moved = section_order.remove(position);
+        section_order.insert(target, moved);
 
         // Only the tab order changes; the tasks and their order in [*] stay as they are.
         self.replace_with(
@@ -1643,15 +1649,21 @@ impl App {
                 ..key
             }
         } else if key.modifiers == KeyModifiers::CONTROL
-            && self.mode == Mode::Normal
             && matches!(key.code, KeyCode::Char('p' | 'P' | 'n' | 'N'))
         {
+            // Ctrl+N/P step through whatever is selectable: tasks like Down/Up in Normal mode,
+            // and search results, picker matches, or section suggestions like Tab/Shift+Tab.
+            let next = matches!(key.code, KeyCode::Char('n' | 'N'));
+
+            let code = match (self.mode == Mode::Normal, next) {
+                (true, true) => KeyCode::Down,
+                (true, false) => KeyCode::Up,
+                (false, true) => KeyCode::Tab,
+                (false, false) => KeyCode::BackTab,
+            };
+
             KeyEvent {
-                code: if matches!(key.code, KeyCode::Char('p' | 'P')) {
-                    KeyCode::Up
-                } else {
-                    KeyCode::Down
-                },
+                code,
                 modifiers: KeyModifiers::NONE,
                 ..key
             }
@@ -1665,6 +1677,10 @@ impl App {
             Mode::Normal if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) => {
                 key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
             }
+            // Alt+B/F switch tabs like h/l; Alt+P/N reorder sections and fire once per press.
+            Mode::Normal if key.modifiers == KeyModifiers::ALT => {
+                matches!(key.code, KeyCode::Char('b' | 'B' | 'f' | 'F'))
+            }
             Mode::Normal => {
                 key.modifiers.is_empty()
                     && matches!(
@@ -1676,9 +1692,12 @@ impl App {
                             | KeyCode::PageDown
                     )
             }
-            // Stepping through search or picker matches repeats like switching tabs in Normal
-            // mode.
-            Mode::Searching { .. } | Mode::FuzzySection { .. }
+            // Stepping through search results, picker matches, or section suggestions repeats
+            // like switching tabs in Normal mode; none of them commits anything.
+            Mode::Adding(_, _)
+            | Mode::Editing { .. }
+            | Mode::Searching { .. }
+            | Mode::FuzzySection { .. }
                 if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) =>
             {
                 true
@@ -1746,10 +1765,10 @@ impl App {
         if self.mode == Mode::Normal && key.modifiers == KeyModifiers::ALT {
             match key.code {
                 KeyCode::Char('w' | 'W') => self.yank_task(),
-                KeyCode::Char('b' | 'B') => self.cycle_section(false),
-                KeyCode::Char('f' | 'F') => self.cycle_section(true),
-                KeyCode::Char('p' | 'P') => self.move_section(false, storage)?,
-                KeyCode::Char('n' | 'N') => self.move_section(true, storage)?,
+                KeyCode::Char('b' | 'B') => self.cycle_section(false, None),
+                KeyCode::Char('f' | 'F') => self.cycle_section(true, None),
+                KeyCode::Char('p' | 'P') => self.move_section(false, 1, storage)?,
+                KeyCode::Char('n' | 'N') => self.move_section(true, 1, storage)?,
                 KeyCode::Char('s' | 'S') => self.pending_section_jump = true,
                 _ => {}
             }
@@ -1777,16 +1796,6 @@ impl App {
                         KeyCode::Char('f' | 'F') => self.start_search(),
                         _ => {}
                     }
-
-                    return Ok(true);
-                }
-
-                // In the section picker, Ctrl+Left/Right step through matches like
-                // Shift+Tab/Tab; every other input keeps them for moving by word.
-                if matches!(self.mode, Mode::FuzzySection { .. })
-                    && matches!(key.code, KeyCode::Left | KeyCode::Right)
-                {
-                    self.cycle_section_match(key.code == KeyCode::Right);
 
                     return Ok(true);
                 }
@@ -1888,10 +1897,12 @@ impl App {
                 }
                 // Typing continues after the suggested section.
                 KeyCode::Char(character) if !character.is_control() => self.accept_completion(),
-                KeyCode::Backspace | KeyCode::Esc => {
+                KeyCode::Backspace => {
                     self.completion = None;
                     return Ok(());
                 }
+                // Esc lands here too: it drops the suggestion, then cancels the add or edit
+                // below like it does without one.
                 _ => self.completion = None,
             }
         }
@@ -2040,22 +2051,23 @@ impl App {
             }
             KeyCode::Char('j') | KeyCode::Down => self.navigate(true, count),
             KeyCode::Char('k') | KeyCode::Up => self.navigate(false, count),
-            KeyCode::Char('H') => self.move_section(false, storage)?,
-            KeyCode::Char('L') => self.move_section(true, storage)?,
+            KeyCode::Char('H') => self.move_section(false, count.unwrap_or(1), storage)?,
+            KeyCode::Char('L') => self.move_section(true, count.unwrap_or(1), storage)?,
             KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.move_section(false, storage)?;
+                self.move_section(false, count.unwrap_or(1), storage)?;
             }
             KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.move_section(true, storage)?;
+                self.move_section(true, count.unwrap_or(1), storage)?;
             }
-            KeyCode::Char('h') => self.cycle_section(false),
-            KeyCode::Char('l') => self.cycle_section(true),
+            KeyCode::Char('h') => self.cycle_section(false, count),
+            KeyCode::Char('l') => self.cycle_section(true, count),
             KeyCode::Char('s') => self.pending_section_jump = true,
             KeyCode::Tab | KeyCode::BackTab
                 if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
             {
                 self.cycle_section(
                     key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT),
+                    None,
                 );
             }
             KeyCode::PageUp => self.page(false),
@@ -3030,6 +3042,58 @@ mod tests {
     }
 
     #[test]
+    fn counted_section_switches_stop_at_the_ends_while_plain_ones_wrap() {
+        let fixture = Fixture::new();
+        // Tabs: [*], [-], Errands, Home, Work.
+        let mut app = app_with_texts(&["Work: a", "Home: b", "Errands: c", "plain"]);
+
+        type_keys(&mut app, &fixture, "3l");
+        assert_eq!(app.view, SectionView::Named("home".into()));
+
+        type_keys(&mut app, &fixture, "9l");
+        assert_eq!(app.view, SectionView::Named("work".into()));
+
+        type_keys(&mut app, &fixture, "2h");
+        assert_eq!(app.view, SectionView::Named("errands".into()));
+
+        type_keys(&mut app, &fixture, "9h");
+        assert_eq!(app.view, SectionView::All);
+
+        // The count was consumed, so a plain motion wraps again.
+        type_keys(&mut app, &fixture, "h");
+        assert_eq!(app.view, SectionView::Named("work".into()));
+
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn held_section_switches_repeat_but_held_section_moves_do_not() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "plain"]);
+
+        repeat(&mut app, &fixture, KeyCode::Char('f'), KeyModifiers::ALT);
+        repeat(&mut app, &fixture, KeyCode::Char('f'), KeyModifiers::ALT);
+        assert_eq!(app.view, SectionView::Named("home".into()));
+
+        repeat(&mut app, &fixture, KeyCode::Char('b'), KeyModifiers::ALT);
+        assert_eq!(app.view, SectionView::Unsectioned);
+
+        app.show_section(SectionView::Named("home".into()));
+
+        for (code, modifiers) in [
+            (KeyCode::Char('L'), KeyModifiers::SHIFT),
+            (KeyCode::Char('n'), KeyModifiers::ALT),
+        ] {
+            repeat(&mut app, &fixture, code, modifiers);
+        }
+
+        assert_eq!(app.section_order, ["home", "work"]);
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
     fn alt_b_and_f_still_move_by_word_while_adding() {
         let fixture = Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b"]);
@@ -3215,9 +3279,9 @@ mod tests {
     }
 
     #[test]
-    fn tab_and_ctrl_arrows_step_through_picker_matches_and_wrap() {
+    fn tab_and_control_n_p_step_through_picker_matches_and_wrap() {
         let fixture = Fixture::new();
-        let ctrl = |code| KeyEvent::new(code, KeyModifiers::CONTROL);
+        let ctrl = |character| KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL);
 
         // From [*], nothing is focused yet: Tab starts at the first match, Shift+Tab at the
         // last.
@@ -3228,9 +3292,9 @@ mod tests {
             (KeyEvent::from(KeyCode::Tab), SectionView::Unsectioned),
             (KeyEvent::from(KeyCode::BackTab), named("work")),
             (KeyEvent::from(KeyCode::Tab), SectionView::Unsectioned),
-            (ctrl(KeyCode::Right), named("home")),
-            (ctrl(KeyCode::Left), SectionView::Unsectioned),
-            (ctrl(KeyCode::Left), named("work")),
+            (ctrl('n'), named("home")),
+            (ctrl('p'), SectionView::Unsectioned),
+            (ctrl('p'), named("work")),
         ] {
             press(&mut app, &fixture, key);
 
@@ -3256,6 +3320,39 @@ mod tests {
         assert!(matches!(app.mode, Mode::FuzzySection { .. }));
         assert!(!app.can_undo());
         assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn control_arrows_move_by_word_in_the_picker_query() {
+        let fixture = Fixture::new();
+        let mut app = picker_app();
+        press(&mut app, &fixture, KeyCode::Char('`'));
+        app.paste("wo rk");
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL),
+        );
+        press(&mut app, &fixture, KeyCode::Backspace);
+
+        let Mode::FuzzySection { input, .. } = &app.mode else {
+            panic!("expected the section picker");
+        };
+        assert_eq!(input.text(), "work");
+
+        press(&mut app, &fixture, KeyCode::Char('x'));
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL),
+        );
+        press(&mut app, &fixture, KeyCode::Backspace);
+
+        let Mode::FuzzySection { input, .. } = &app.mode else {
+            panic!("expected the section picker");
+        };
+        assert_eq!(input.text(), "woxr");
     }
 
     #[test]
@@ -3492,6 +3589,52 @@ mod tests {
             KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
         );
         assert_eq!(app.section_order, ["home", "work", "errands"]);
+        assert_eq!(
+            fixture.storage.load_document().unwrap().section_order,
+            app.section_order
+        );
+    }
+
+    #[test]
+    fn a_counted_section_move_is_one_saved_and_undoable_change_that_stops_at_the_ends() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "Errands: c", "Gym: d"]);
+        app.show_section(SectionView::Named("errands".into()));
+
+        type_keys(&mut app, &fixture, "2L");
+
+        assert_eq!(app.section_order, ["gym", "home", "errands", "work"]);
+        assert_eq!(app.history.len(), 1);
+        assert_eq!(
+            fixture.storage.load_document().unwrap().section_order,
+            app.section_order
+        );
+
+        type_keys(&mut app, &fixture, "9L");
+        assert_eq!(app.section_order, ["gym", "home", "work", "errands"]);
+
+        type_keys(&mut app, &fixture, "3H");
+        assert_eq!(app.section_order, ["errands", "gym", "home", "work"]);
+        assert_eq!(app.view, SectionView::Named("errands".into()));
+        assert_eq!(app.history.len(), 3);
+
+        // Already first, so a counted move left is a no-op that leaves history alone.
+        type_keys(&mut app, &fixture, "2H");
+        assert_eq!(app.history.len(), 3);
+
+        type_keys(&mut app, &fixture, "u");
+        assert_eq!(app.section_order, ["gym", "home", "work", "errands"]);
+        assert_eq!(notice(&app), Some("Undid: move section"));
+
+        type_keys(&mut app, &fixture, "uu");
+        assert_eq!(app.section_order, ["errands", "gym", "home", "work"]);
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.section_order, ["gym", "home", "errands", "work"]);
         assert_eq!(
             fixture.storage.load_document().unwrap().section_order,
             app.section_order
@@ -3813,7 +3956,7 @@ mod tests {
     }
 
     #[test]
-    fn space_or_enter_accept_a_suggestion_and_backspace_or_esc_dismiss_it() {
+    fn space_or_enter_accept_a_suggestion_and_backspace_dismisses_it() {
         let fixture = Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b"]);
         app.show_section(SectionView::Named("work".into()));
@@ -3831,16 +3974,14 @@ mod tests {
             assert_eq!(app.tasks.len(), 2);
         }
 
-        for dismiss in [KeyCode::Backspace, KeyCode::Esc] {
-            press(&mut app, &fixture, KeyCode::Char('a'));
-            press(&mut app, &fixture, dismiss);
+        press(&mut app, &fixture, KeyCode::Char('a'));
+        press(&mut app, &fixture, KeyCode::Backspace);
 
-            assert_eq!(input_text(&app), "");
-            assert_eq!(app.completion_ghost(), None);
+        assert_eq!(input_text(&app), "");
+        assert_eq!(app.completion_ghost(), None);
 
-            press(&mut app, &fixture, KeyCode::Esc);
-            assert_eq!(app.mode, Mode::Normal);
-        }
+        press(&mut app, &fixture, KeyCode::Esc);
+        assert_eq!(app.mode, Mode::Normal);
 
         press(&mut app, &fixture, KeyCode::Char('a'));
         press(&mut app, &fixture, KeyCode::Backspace);
@@ -3851,6 +3992,78 @@ mod tests {
         assert_eq!(app.view, SectionView::Unsectioned);
         assert!(!app.can_redo());
         assert_eq!(app.history.len(), 1);
+    }
+
+    #[test]
+    fn esc_and_ctrl_g_cancel_an_add_or_edit_even_while_a_suggestion_shows() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.show_section(SectionView::Named("work".into()));
+        let tasks = app.tasks.clone();
+        let selected = app.list.selected();
+
+        for cancel in [
+            KeyEvent::from(KeyCode::Esc),
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+        ] {
+            for start in ['o', 'e'] {
+                press(&mut app, &fixture, KeyCode::Char(start));
+
+                // Editing erases the text first so a suggestion can show.
+                if start == 'e' {
+                    press(
+                        &mut app,
+                        &fixture,
+                        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+                    );
+                    press(&mut app, &fixture, KeyCode::Tab);
+                }
+
+                assert!(app.completion_ghost().is_some(), "{start}");
+
+                press(&mut app, &fixture, cancel);
+
+                assert_eq!(app.mode, Mode::Normal, "{cancel:?} after {start}");
+                assert_eq!(app.completion_ghost(), None);
+            }
+        }
+
+        assert_eq!(app.tasks, tasks);
+        assert_eq!(app.list.selected(), selected);
+        assert!(!app.can_undo() && !app.can_redo());
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn control_n_and_p_cycle_section_suggestions_like_tab_without_accepting() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "Errands: c"]);
+        press(&mut app, &fixture, KeyCode::Char('a'));
+        let ctrl = |character| KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL);
+
+        for (key, ghost) in [
+            (ctrl('n'), "Errands: "),
+            (ctrl('n'), "Home: "),
+            (ctrl('p'), "Errands: "),
+            (ctrl('p'), "Work: "),
+        ] {
+            press(&mut app, &fixture, key);
+
+            assert_eq!(app.completion_ghost().as_deref(), Some(ghost), "{key:?}");
+            assert_eq!(input_text(&app), "");
+        }
+
+        // Held, Ctrl+N keeps cycling like a held Tab.
+        repeat(
+            &mut app,
+            &fixture,
+            KeyCode::Char('n'),
+            KeyModifiers::CONTROL,
+        );
+        assert_eq!(app.completion_ghost().as_deref(), Some("Errands: "));
+
+        assert_eq!(app.tasks.len(), 3);
+        assert!(!app.can_undo());
     }
 
     #[test]
@@ -3875,7 +4088,7 @@ mod tests {
             assert_eq!(app.completion_ghost().as_deref(), Some(ghost), "{key:?}");
         }
 
-        press(&mut app, &fixture, KeyCode::Esc);
+        press(&mut app, &fixture, KeyCode::Backspace);
         type_keys(&mut app, &fixture, "wO");
         press(&mut app, &fixture, KeyCode::Tab);
         assert_eq!(app.completion_ghost().as_deref(), Some("rk: "));
@@ -4482,6 +4695,31 @@ mod tests {
         assert_eq!(app.list.selected(), Some(0));
 
         assert_eq!(app.search_query(), Some("hit"));
+    }
+
+    #[test]
+    fn control_n_and_p_step_through_search_results_like_tab_and_esc_still_restores() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["hit 0", "miss 1", "hit 2", "miss 3", "hit 4"]);
+        app.list.select(Some(1));
+        let ctrl = |character| KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL);
+
+        press(&mut app, &fixture, KeyCode::Char('/'));
+        app.paste("hit");
+
+        for (key, expected) in [(ctrl('n'), 4), (ctrl('n'), 0), (ctrl('p'), 4)] {
+            press(&mut app, &fixture, key);
+
+            assert_eq!(app.list.selected(), Some(expected), "{key:?}");
+        }
+
+        assert_eq!(app.search_query(), Some("hit"));
+
+        press(&mut app, &fixture, KeyCode::Esc);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.list.selected(), Some(1));
+        assert!(!app.can_undo());
     }
 
     #[test]
