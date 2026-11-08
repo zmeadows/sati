@@ -5,7 +5,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{
+    Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
+    event::{AccessKind, AccessMode, MetadataKind, ModifyKind},
+};
 
 use crate::config::{ConfigFile, ConfigText};
 
@@ -79,9 +82,9 @@ impl ConfigWatch {
     pub fn check(&mut self, now: Instant) -> Option<ConfigText> {
         while let Ok(result) = self.events.try_recv() {
             match result {
-                Ok(event) if self.names_directory(&event) => {
-                    // The directory itself changed and may be gone or moved, taking the
-                    // watch with it. The next poll starts a fresh watch.
+                Ok(event) if self.invalidates_directory(&event) => {
+                    // The directory itself was removed or moved, taking the watch with it.
+                    // The next poll starts a fresh one.
                     self.watcher = None;
                     self.settle_at = Some(now + SETTLE_DELAY);
                 }
@@ -126,6 +129,17 @@ impl ConfigWatch {
         Some(text)
     }
 
+    // Only removal or renaming ends a directory watch. Opening or listing the directory,
+    // or changing its permissions, leaves the watch working.
+    fn invalidates_directory(&self, event: &Event) -> bool {
+        let removed_or_moved = matches!(
+            event.kind,
+            EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+        );
+
+        removed_or_moved && self.names_directory(event)
+    }
+
     fn names_directory(&self, event: &Event) -> bool {
         event
             .paths
@@ -133,15 +147,37 @@ impl ConfigWatch {
             .any(|path| Some(path) == self.directory.as_ref())
     }
 
-    // Other files can share the directory (tasks.json on macOS and Windows); only events
-    // naming the configuration file, or ones that may have lost track of it, matter.
+    // Other files can share the directory (tasks.json on macOS and Windows); only changes
+    // to the configuration file or its directory, or events that may have lost track of
+    // them, matter.
     fn concerns_file(&self, event: &Event) -> bool {
-        event.need_rescan()
-            || event.paths.is_empty()
+        if event.need_rescan() {
+            return true;
+        }
+
+        if !may_change_file(&event.kind) {
+            return false;
+        }
+
+        event.paths.is_empty()
+            || self.names_directory(event)
             || event
                 .paths
                 .iter()
                 .any(|path| path.file_name() == self.file_name.as_deref())
+    }
+}
+
+// Opening, reading, or closing a file without writing changes nothing. sati's own reads
+// produce exactly these events, so counting them would schedule a read after every read.
+// Unknown kinds count, since they might be changes.
+fn may_change_file(kind: &EventKind) -> bool {
+    match kind {
+        // Closing after writing ends a save.
+        EventKind::Access(AccessKind::Close(AccessMode::Write)) => true,
+        EventKind::Access(_) => false,
+        EventKind::Modify(ModifyKind::Metadata(MetadataKind::AccessTime)) => false,
+        _ => true,
     }
 }
 
@@ -156,7 +192,7 @@ fn watch_directory(directory: &Path, sender: &Sender<EventResult>) -> Option<Rec
 mod tests {
     use super::*;
     use crate::storage::tests::Fixture;
-    use notify::EventKind;
+    use notify::event::{CreateKind, DataChange, RemoveKind, RenameMode};
     use std::fs;
 
     fn watch(path: PathBuf, now: Instant) -> ConfigWatch {
@@ -236,7 +272,7 @@ mod tests {
     fn only_events_that_may_concern_the_config_file_schedule_a_read() {
         let fixture = Fixture::new();
         let watch = watch(fixture.directory.join("config.toml"), Instant::now());
-        let modify = || Event::new(EventKind::Modify(notify::event::ModifyKind::Any));
+        let modify = || Event::new(EventKind::Modify(ModifyKind::Any));
 
         assert!(watch.concerns_file(&modify().add_path(fixture.directory.join("config.toml"))));
         assert!(watch.concerns_file(&modify()));
@@ -244,6 +280,89 @@ mod tests {
         assert!(
             !watch.concerns_file(&modify().add_path(fixture.directory.join(".config.toml.swp")))
         );
+    }
+
+    #[test]
+    fn opening_and_reading_the_config_file_is_not_a_change() {
+        let fixture = Fixture::new();
+        let path = fixture.directory.join("config.toml");
+        let watch = watch(path.clone(), Instant::now());
+        let event = |kind| Event::new(kind).add_path(path.clone());
+
+        for kind in [
+            EventKind::Access(AccessKind::Open(AccessMode::Any)),
+            EventKind::Access(AccessKind::Read),
+            EventKind::Access(AccessKind::Close(AccessMode::Read)),
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::AccessTime)),
+        ] {
+            assert!(!watch.concerns_file(&event(kind)), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn writes_creation_removal_renames_and_permission_changes_are_changes() {
+        let fixture = Fixture::new();
+        let path = fixture.directory.join("config.toml");
+        let watch = watch(path.clone(), Instant::now());
+        let event = |kind| Event::new(kind).add_path(path.clone());
+
+        for kind in [
+            EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            EventKind::Access(AccessKind::Close(AccessMode::Write)),
+            EventKind::Create(CreateKind::File),
+            EventKind::Remove(RemoveKind::File),
+            EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Permissions)),
+            EventKind::Any,
+        ] {
+            assert!(watch.concerns_file(&event(kind)), "{kind:?}");
+        }
+
+        let rescan = Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan);
+        assert!(watch.concerns_file(&rescan));
+    }
+
+    #[test]
+    fn only_removing_or_moving_the_directory_ends_its_watch() {
+        let fixture = Fixture::new();
+        let watch = watch(fixture.directory.join("config.toml"), Instant::now());
+        let event = |kind| Event::new(kind).add_path(fixture.directory.clone());
+
+        for kind in [
+            EventKind::Remove(RemoveKind::Folder),
+            EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+        ] {
+            assert!(watch.invalidates_directory(&event(kind)), "{kind:?}");
+        }
+
+        let opened = event(EventKind::Access(AccessKind::Open(AccessMode::Any)));
+        assert!(!watch.invalidates_directory(&opened));
+        assert!(!watch.concerns_file(&opened));
+
+        // A permission change keeps the watch but may make the file unreadable.
+        let permissions = event(EventKind::Modify(ModifyKind::Metadata(
+            MetadataKind::Permissions,
+        )));
+        assert!(!watch.invalidates_directory(&permissions));
+        assert!(watch.concerns_file(&permissions));
+    }
+
+    #[test]
+    fn reading_the_config_file_does_not_schedule_another_read() {
+        let fixture = Fixture::new();
+        let path = fixture.directory.join("config.toml");
+        fs::write(&path, "theme = 'nord'").unwrap();
+        let start = Instant::now();
+        let mut watch = watch(path, start);
+
+        // Give the backend time to deliver the open and close events of this read.
+        watch.file.read();
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert_eq!(watch.check(start), None);
+        assert_eq!(watch.settle_at, None);
+        assert!(watch.watcher.is_some());
     }
 
     #[test]
