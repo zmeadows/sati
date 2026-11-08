@@ -553,6 +553,14 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
             app.styles.normal
         };
 
+        // Matches are reversed, so the focused result's accent becomes their background and
+        // the theme's background becomes their text, legible in light and dark themes alike.
+        let match_color = if selected == Some(index) {
+            app.styles.accent.fg.unwrap_or(Color::Reset)
+        } else {
+            Color::Reset
+        };
+
         for (row, (source, text)) in wrapped.into_iter().enumerate() {
             row_tasks.push(Some(index));
 
@@ -600,6 +608,7 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
                 tag_end,
                 &matches,
                 text_style,
+                match_color,
             ));
             lines.push(line);
         }
@@ -785,9 +794,10 @@ fn task_spans(
     tag_end: usize,
     matches: &[Range<usize>],
     base: Style,
+    match_color: Color,
 ) -> Vec<Span<'static>> {
     let highlight = base
-        .fg(Color::Reset)
+        .fg(match_color)
         .bg(base.bg.unwrap_or(Color::Reset))
         .remove_modifier(Modifier::DIM)
         .add_modifier(Modifier::REVERSED);
@@ -2010,9 +2020,10 @@ mod tests {
             assert_eq!(marker.fg, accent);
             assert!(!marker.modifier.contains(Modifier::DIM));
 
+            // The only task is the focused result, so its match sits on the accent.
             for x in 7..11 {
                 let cell = &buffer[(x, 2)];
-                assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
+                assert_eq!((cell.fg, cell.bg), (accent, Color::Reset));
                 assert!(
                     cell.modifier
                         .contains(Modifier::REVERSED | Modifier::BOLD | Modifier::CROSSED_OUT)
@@ -2035,6 +2046,7 @@ mod tests {
             0,
             std::slice::from_ref(&(1..2)),
             Styles::default().muted.add_modifier(Modifier::ITALIC),
+            Color::Reset,
         );
 
         assert!(
@@ -2156,7 +2168,7 @@ mod tests {
             render(&mut terminal, &mut app);
             let cell = &terminal.backend().buffer()[(7, 2)];
 
-            assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
+            assert_eq!((cell.fg, cell.bg), (Color::Blue, Color::Reset));
             assert!(
                 cell.modifier
                     .contains(Modifier::REVERSED | Modifier::BOLD | Modifier::CROSSED_OUT)
@@ -2986,7 +2998,10 @@ mod tests {
         assert_eq!(buffer[(7, 2)].symbol(), "w");
         assert!(buffer[(7, 2)].modifier.contains(Modifier::BOLD));
 
-        for (y, expected) in [(2, "İfooİFOO"), (3, "İfoo")] {
+        // Only the focused result's matches take the accent.
+        let accent = app.styles.accent.fg.unwrap();
+
+        for (y, expected, match_fg) in [(2, "İfooİFOO", accent), (3, "İfoo", Color::Reset)] {
             let mut highlighted = String::new();
 
             for x in 7..39 {
@@ -2994,7 +3009,7 @@ mod tests {
 
                 if cell.modifier.contains(Modifier::REVERSED) {
                     highlighted.push_str(cell.symbol());
-                    assert_eq!(cell.fg, Color::Reset);
+                    assert_eq!(cell.fg, match_fg);
                     assert_eq!(cell.bg, Color::Reset);
                     assert!(!cell.modifier.contains(Modifier::DIM));
                     assert_eq!(cell.modifier.contains(Modifier::CROSSED_OUT), y == 3);
@@ -3007,6 +3022,13 @@ mod tests {
         key(&mut app, KeyCode::Tab);
         render(&mut terminal, &mut app);
         assert!(screen(&terminal).contains("search › i\u{307}foo"));
+
+        // The accent follows focus to the completed task and leaves the first one.
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(13, 2)].fg, Color::Reset);
+        assert!(buffer[(13, 2)].modifier.contains(Modifier::REVERSED));
+        assert_eq!(buffer[(7, 3)].fg, accent);
+        assert!(buffer[(7, 3)].modifier.contains(Modifier::REVERSED));
 
         key(&mut app, KeyCode::Enter);
         render(&mut terminal, &mut app);
@@ -3023,6 +3045,46 @@ mod tests {
         }
 
         assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn focused_search_matches_use_the_accent_across_wrapped_rows_and_repeated_matches() {
+        let accent = Color::Rgb(20, 40, 60);
+        let background = Color::Rgb(250, 248, 240);
+
+        let mut app = App::new(vec![Task::new("abcdef abcdefabcdef")]);
+        app.styles.normal = app.styles.normal.bg(background);
+        app.styles.accent = app.styles.accent.fg(accent);
+        app.mode = Mode::Searching {
+            input: "abcdef".into(),
+            original: Some(0),
+        };
+        app.list.select(Some(0));
+        let mut terminal = test_terminal(17, 8);
+
+        render(&mut terminal, &mut app);
+
+        // Text starts at column 7 with nine cells per row: "abcdef", "abcdefabc", "def", so
+        // the last of the three matches spans a wrap.
+        let buffer = terminal.backend().buffer();
+        let mut highlighted = String::new();
+
+        for y in 1..7 {
+            for x in 7..16 {
+                let cell = &buffer[(x, y)];
+
+                if cell.modifier.contains(Modifier::REVERSED) {
+                    highlighted.push_str(cell.symbol());
+                    assert_eq!(cell.fg, accent);
+                    assert_eq!(cell.bg, background);
+                } else if cell.symbol() != " " {
+                    assert_ne!(cell.fg, accent);
+                    assert_eq!(cell.bg, background);
+                }
+            }
+        }
+
+        assert_eq!(highlighted, "abcdefabcdefabcdef");
     }
 
     #[test]
