@@ -5,13 +5,12 @@ use ratatui::crossterm::event::{
 };
 use ratatui::{layout::Rect, widgets::ListState};
 use serde::{Deserialize, Serialize};
-
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::input::TextInput;
 use crate::notification::Notification;
 use crate::storage::{Result, Storage};
-use crate::timestamp::Timestamp;
 
 const HISTORY_LIMIT: usize = 256;
 
@@ -20,7 +19,8 @@ const HISTORY_LIMIT: usize = 256;
 pub struct Task {
     // Unique and stable for the task's lifetime, for cross-referencing tasks.
     pub id: Uuid,
-    pub created_at: Timestamp,
+    #[serde(with = "utc_seconds")]
+    pub created_at: OffsetDateTime,
     pub text: String,
     pub completed: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -31,7 +31,7 @@ impl Task {
     pub fn new(text: String) -> Self {
         Self {
             id: Uuid::new_v4(),
-            created_at: Timestamp::now(),
+            created_at: current_time(),
             text,
             completed: false,
             carried: false,
@@ -50,6 +50,47 @@ impl Task {
         } else {
             None
         }
+    }
+}
+
+// The current UTC time in whole seconds, the precision `created_at` is stored with.
+pub(crate) fn current_time() -> OffsetDateTime {
+    OffsetDateTime::now_utc()
+        .replace_nanosecond(0)
+        .expect("zero nanoseconds is always valid")
+}
+
+// `created_at` is stored as whole-second UTC RFC 3339, such as "2026-11-07T19:24:05Z".
+mod utc_seconds {
+    use serde::{Deserialize, Deserializer, Serializer, de};
+    use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
+
+    pub fn serialize<S: Serializer>(
+        time: &OffsetDateTime,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        time::serde::rfc3339::serialize(time, serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<OffsetDateTime, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        let time = OffsetDateTime::parse(&text, &Rfc3339).map_err(de::Error::custom)?;
+
+        // Accept only the canonical form: UTC, whole seconds, and spelled exactly as it would
+        // be written back (which rules out "+00:00", lowercase "t"/"z", and similar variants).
+        let canonical = time.offset() == UtcOffset::UTC
+            && time.nanosecond() == 0
+            && time.format(&Rfc3339).ok().as_deref() == Some(text.as_str());
+
+        if !canonical {
+            return Err(de::Error::custom(
+                "expected a UTC time in whole seconds like 2026-11-07T19:24:05Z",
+            ));
+        }
+
+        Ok(time)
     }
 }
 
@@ -4662,6 +4703,64 @@ mod tests {
         }
     }
 
+    fn task_json(created_at: &str) -> String {
+        format!(
+            r#"{{"id":"00000000-0000-4000-8000-000000000001","created_at":"{created_at}","text":"t","completed":false}}"#
+        )
+    }
+
+    #[test]
+    fn creation_times_round_trip_as_whole_second_utc() {
+        for (text, unix_seconds) in [
+            ("1970-01-01T00:00:00Z", 0),
+            ("2000-02-29T00:00:00Z", 951_782_400),
+            ("1999-12-31T23:59:59Z", 946_684_799),
+            ("2100-03-01T00:00:00Z", 4_107_542_400),
+            ("2026-11-07T19:24:05Z", 1_794_079_445),
+        ] {
+            let task: Task = serde_json::from_str(&task_json(text)).unwrap();
+
+            assert_eq!(task.created_at.unix_timestamp(), unix_seconds);
+            assert_eq!(serde_json::to_string(&task).unwrap(), task_json(text));
+        }
+
+        let now = current_time();
+        assert_eq!(now.offset(), time::UtcOffset::UTC);
+        assert_eq!(now.nanosecond(), 0);
+
+        let written = serde_json::to_value(Task::new("new".into())).unwrap();
+        let written = written["created_at"].as_str().unwrap();
+        assert!(written.len() == 20 && written.ends_with('Z'), "{written}");
+    }
+
+    #[test]
+    fn non_canonical_or_impossible_creation_times_are_rejected() {
+        for text in [
+            "",
+            "2026-11-07",
+            "2026-11-07T19:24:05",
+            "2026-11-07 19:24:05Z",
+            "2026-11-07t19:24:05z",
+            "2026-11-07T19:24:05.5Z",
+            "2026-11-07T19:24:05+00:00",
+            "2026-11-07T21:24:05+02:00",
+            "2026-02-29T00:00:00Z",
+            "2100-02-29T00:00:00Z",
+            "2026-11-31T00:00:00Z",
+            "2026-11-07T24:00:00Z",
+            "2026-11-07T23:60:00Z",
+            "2026-11-07T23:59:60Z",
+            "２026-11-07T19:24:05Z",
+        ] {
+            assert!(
+                serde_json::from_str::<Task>(&task_json(text)).is_err(),
+                "{text:?}"
+            );
+        }
+
+        assert!(serde_json::from_str::<Task>(&task_json("2024-02-29T00:00:00Z")).is_ok());
+    }
+
     #[test]
     fn task_identity_survives_changes_and_new_tasks_get_their_own() {
         let fixture = Fixture::new();
@@ -4695,14 +4794,14 @@ mod tests {
             app.tasks.iter().map(|task| task.id).collect::<Vec<_>>()
         );
 
-        let before = Timestamp::now();
+        let before = current_time();
         type_keys(&mut app, &fixture, "a");
         type_keys(&mut app, &fixture, "new");
         press(&mut app, &fixture, KeyCode::Enter);
 
         let added = app.tasks.last().unwrap();
         assert!(original.iter().all(|(id, _)| *id != added.id));
-        assert!(added.created_at >= before && added.created_at <= Timestamp::now());
+        assert!(added.created_at >= before && added.created_at <= current_time());
     }
 
     fn saved_ids(fixture: &Fixture) -> Vec<Uuid> {

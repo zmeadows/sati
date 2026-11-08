@@ -14,8 +14,7 @@ use serde_json::Value;
 
 use uuid::Uuid;
 
-use crate::app::Task;
-use crate::timestamp::Timestamp;
+use crate::app::{Task, current_time};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -52,7 +51,10 @@ fn v1_to_v2(value: Value) -> std::result::Result<Value, String> {
         return Err("expected a task list".to_owned());
     };
 
-    let created_at = Value::String(Timestamp::now().to_string());
+    let created_at = current_time()
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|error| error.to_string())?;
+    let created_at = Value::String(created_at);
 
     for (index, task) in tasks.iter_mut().enumerate() {
         let Value::Object(task) = task else {
@@ -598,7 +600,7 @@ pub mod tests {
             format!(r#"{{"schema_version":1,"tasks":{tasks},"selected":0,"section":"work"}}"#),
         ] {
             fs::write(fixture.task_path(), &json).unwrap();
-            let before = Timestamp::now();
+            let before = current_time();
             let document = fixture.storage.load_document().unwrap();
 
             let content: Vec<_> = document
@@ -623,7 +625,7 @@ pub mod tests {
             };
             assert_ne!(first.id, second.id);
             assert_eq!(first.created_at, second.created_at);
-            assert!(first.created_at >= before && first.created_at <= Timestamp::now());
+            assert!(first.created_at >= before && first.created_at <= current_time());
             assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
         }
 
