@@ -18,7 +18,7 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 
 ## Features
 
-- **One local list.** Changes are saved automatically, without accounts or synchronization. The border shows `[completed/total]`, with a small `? help` beside it.
+- **One local list.** Changes are saved automatically, without accounts or synchronization. A muted `? for help` in the bottom-right corner is the only on-screen hint.
 - **Shortcuts on demand.** Press `?` for a keyboard reference instead of a permanent shortcut footer.
 - **Keyboard-first, with mouse support.** Navigate, reorder, and complete tasks from the keyboard. Click a task to toggle it, or scroll with the mouse wheel.
 - **Search in place.** Find tasks as you type, see matching text highlighted, and jump to a result without filtering or rearranging the list.
@@ -91,7 +91,7 @@ Then run `sati`.
 | Quit | `q` |
 
 `?` opens a keyboard reference over the checklist, in place of a permanent shortcut
-footer; the muted `? help` beside the `[completed/total]` counter is the only reminder of it.
+footer; the muted `? for help` in the bottom-right corner is the only reminder of it.
 Scroll it with `j` / `k`, `↓` / `↑`, `Ctrl+N` / `Ctrl+P`, `PageDown` / `PageUp`,
 `Home` / `End`, or the mouse wheel, and close it with `?`, `Esc`, or `Ctrl+G`. It changes
 nothing: the tasks, selection, and section tab are exactly as you left them. On a narrow

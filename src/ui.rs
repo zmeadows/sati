@@ -36,12 +36,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         })
         .border_style(app.styles.border);
 
-    let completed = app
-        .tasks
-        .iter()
-        .filter(|task| task.status == TaskStatus::Completed)
-        .count();
-    let counter = format!("[{completed}/{}]", app.tasks.len());
     let mut notifying = false;
 
     if let Some(notice) = &app.notification
@@ -51,7 +45,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
             app.styles.normal,
         )
     {
-        let available = usize::from(list_area.width).saturating_sub(counter.width() + 3);
+        // Notifications may use the whole border between the corners.
+        let available = usize::from(list_area.width).saturating_sub(2);
         let short = notice.compact_message();
 
         let message = if notice.message().width() <= available {
@@ -66,22 +61,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         }
     }
 
-    // The `? help` hint points to the keyboard reference from just left of the counter. It
-    // only shows on the plain checklist, and gives the border to brief notifications.
-    // Right-aligned titles are laid out from the right, so the hint goes in first.
-    let hint_width = HELP_HINT.width() + 1 + counter.width() + 2;
-
+    // The hint points to the keyboard reference from the bottom-right corner. It only shows
+    // on the plain checklist, and gives the border to brief notifications.
     if app.mode == Mode::Normal
         && !notifying
         && list_area.height >= 2
-        && hint_width <= usize::from(list_area.width)
+        && HELP_HINT.width() + 2 <= usize::from(list_area.width)
     {
         block = block.title_bottom(Line::styled(HELP_HINT, app.styles.muted).right_aligned());
-    }
-
-    if list_area.height >= 2 && counter.width() + 2 <= usize::from(list_area.width) {
-        block =
-            block.title_bottom(Line::styled(counter.as_str(), app.styles.muted).right_aligned());
     }
 
     let mut rows = block.inner(list_area);
@@ -168,7 +155,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     rows
 }
 
-const HELP_HINT: &str = "? help";
+const HELP_HINT: &str = "? for help";
 
 const TAB_MARKER: usize = 1;
 
@@ -2255,7 +2242,7 @@ mod tests {
             .collect()
     }
     #[test]
-    fn copy_feedback_uses_the_border_without_changing_the_viewport_or_counter() {
+    fn copy_feedback_uses_the_border_without_changing_the_viewport() {
         for width in [0, 1, 2, 8, 15, 17, 24, 32, 80] {
             for rounded in [false, true] {
                 let mut app = App::new(Vec::new());
@@ -2278,10 +2265,6 @@ mod tests {
 
                     let text = screen(&terminal);
 
-                    if width >= 7 {
-                        assert!(text.contains("[0/0]"));
-                    }
-
                     if width == 80 {
                         assert!(text.contains(notice));
                     } else if width == 24 || width == 32 {
@@ -2290,7 +2273,7 @@ mod tests {
                         if notice.starts_with("Theme: ") {
                             assert_eq!(
                                 text.contains(compact),
-                                compact.width() <= usize::from(width) - 8
+                                compact.width() <= usize::from(width) - 2
                             );
                         } else {
                             assert!(text.contains(if notice == "Copied task" {
@@ -2319,171 +2302,6 @@ mod tests {
                 app.notification = None;
                 render(&mut terminal, &mut app);
                 assert!(!screen(&terminal).contains("Copy"));
-            }
-        }
-    }
-
-    #[test]
-    fn completion_counter_fits_the_bottom_border_in_all_modes_and_styles() {
-        for (completed, total, carried, expected) in [
-            (0, 0, false, "[0/0]"),
-            (0, 3, false, "[0/3]"),
-            (3, 3, false, "[3/3]"),
-            (1, 3, true, "[1/3]"),
-            (9, 12, true, "[9/12]"),
-        ] {
-            for rounded in [false, true] {
-                for mode in 0..6 {
-                    if mode == 2 && total == 0 {
-                        continue;
-                    }
-
-                    for width in [0, 1, 2, 6, 7, 8, 24] {
-                        let mut app = App::new(
-                            (0..total)
-                                .map(|index| Task {
-                                    status: if index < completed {
-                                        TaskStatus::Completed
-                                    } else if carried && index == total - 1 {
-                                        TaskStatus::Carried
-                                    } else {
-                                        TaskStatus::Pending
-                                    },
-                                    ..Task::new(format!("task {index}"))
-                                })
-                                .collect(),
-                        );
-                        app.rounded = rounded;
-                        app.mode = match mode {
-                            0 => Mode::Normal,
-                            1 => Mode::Adding("draft".into(), AddPlacement::End),
-                            2 => Mode::Editing {
-                                index: 0,
-                                input: "edited".into(),
-                            },
-                            3 => Mode::Searching {
-                                input: "task".into(),
-                                original: Some(0),
-                            },
-                            4 => Mode::Searching {
-                                input: "".into(),
-                                original: Some(0),
-                            },
-                            _ => Mode::ConfirmClear,
-                        };
-                        let mut terminal = test_terminal(width, 12);
-                        let rows = render(&mut terminal, &mut app);
-
-                        if mode == 5 {
-                            continue;
-                        } // The existing dialog may cover the border.
-
-                        if width >= 2 {
-                            let y = rows.bottom();
-                            let buffer = terminal.backend().buffer();
-                            assert_eq!(buffer[(0, y)].symbol(), if rounded { "╰" } else { "└" });
-                            assert_eq!(
-                                buffer[(width - 1, y)].symbol(),
-                                if rounded { "╯" } else { "┘" }
-                            );
-
-                            let fits = expected.width() + 2 <= usize::from(width);
-
-                            if fits {
-                                let start = width - 1 - expected.len() as u16;
-
-                                for (offset, character) in expected.chars().enumerate() {
-                                    let cell = &buffer[(start + offset as u16, y)];
-                                    assert_eq!(cell.symbol(), character.to_string());
-                                    assert_eq!(cell.fg, Color::Reset);
-                                }
-                            } else {
-                                for x in 1..width - 1 {
-                                    assert_eq!(buffer[(x, y)].symbol(), "─");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        for height in [0, 1] {
-            let mut app = App::new(Vec::new());
-            let mut terminal = test_terminal(24, height);
-            render(&mut terminal, &mut app);
-
-            assert!(!screen(&terminal).contains('['));
-        }
-    }
-
-    #[test]
-    fn completion_counter_tracks_mutations_clearing_and_history() {
-        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        let fixture = crate::storage::tests::Fixture::new();
-
-        let mut app = App::new(vec![
-            Task::new("ordinary"),
-            Task {
-                status: TaskStatus::Completed,
-                ..Task::new("done")
-            },
-            Task {
-                status: TaskStatus::Carried,
-                ..Task::new("carried")
-            },
-        ]);
-        let mut terminal = test_terminal(30, 10);
-
-        let mut check = |app: &mut App, expected: &str| {
-            let rows = render(&mut terminal, app);
-            assert_eq!(rows, Rect::new(1, 1, 28, 8));
-            assert!(
-                screen(&terminal)
-                    .lines()
-                    .last()
-                    .unwrap()
-                    .ends_with(&format!("{expected}┘"))
-            );
-        };
-
-        check(&mut app, "[1/3]");
-
-        for (code, modifiers, expected) in [
-            (KeyCode::Char(' '), KeyModifiers::NONE, "[2/3]"),
-            (KeyCode::Char(' '), KeyModifiers::NONE, "[1/3]"),
-        ] {
-            app.key(KeyEvent::new(code, modifiers), &fixture.storage)
-                .unwrap();
-            check(&mut app, expected);
-        }
-
-        app.key(
-            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
-            &fixture.storage,
-        )
-        .unwrap();
-        app.paste("new");
-        app.key(
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-            &fixture.storage,
-        )
-        .unwrap();
-        check(&mut app, "[1/4]");
-
-        for (code, modifiers, expected) in [
-            (KeyCode::Char('d'), KeyModifiers::NONE, "[1/3]"),
-            (KeyCode::Char('x'), KeyModifiers::NONE, "[0/2]"),
-            (KeyCode::Char('D'), KeyModifiers::NONE, ""),
-            (KeyCode::Enter, KeyModifiers::NONE, "[0/1]"),
-            (KeyCode::Char('u'), KeyModifiers::NONE, "[0/2]"),
-            (KeyCode::Char('r'), KeyModifiers::CONTROL, "[0/1]"),
-            (KeyCode::Char('d'), KeyModifiers::NONE, "[0/0]"),
-        ] {
-            app.key(KeyEvent::new(code, modifiers), &fixture.storage)
-                .unwrap();
-            if !expected.is_empty() {
-                check(&mut app, expected);
             }
         }
     }
@@ -4365,13 +4183,14 @@ mod tests {
     }
 
     #[test]
-    fn the_help_hint_sits_left_of_the_counter_only_on_the_plain_checklist() {
+    fn the_help_hint_sits_in_the_bottom_right_corner_only_on_the_plain_checklist() {
         let mut app = app_with_texts(&["a", "b"]);
         let mut terminal = test_terminal(40, 8);
 
         let rows = render(&mut terminal, &mut app);
 
-        assert!(row_text(&terminal, 7).ends_with("? help─[0/2]┘"));
+        assert!(row_text(&terminal, 7).ends_with("─? for help┘"));
+        assert!(!screen(&terminal).contains("[0/2]"), "no task counter");
 
         for mode in [
             help_mode(),
@@ -4385,7 +4204,7 @@ mod tests {
             app.mode = mode;
             render(&mut terminal, &mut app);
 
-            assert!(!screen(&terminal).contains("? help"), "{:?}", app.mode);
+            assert!(!screen(&terminal).contains("? for help"), "{:?}", app.mode);
         }
 
         app.mode = Mode::Normal;
@@ -4396,24 +4215,23 @@ mod tests {
     #[test]
     fn the_help_hint_is_omitted_when_narrow_or_while_a_notification_shows() {
         let mut app = app_with_texts(&["a", "b"]);
-        let fits = "? help".width() + 1 + "[0/2]".width() + 2;
+        let fits = "? for help".width() + 2;
         let mut terminal = test_terminal(fits as u16, 6);
 
         render(&mut terminal, &mut app);
 
-        assert!(row_text(&terminal, 5).contains("? help─[0/2]"));
+        assert!(row_text(&terminal, 5).contains("? for help"));
 
         terminal.backend_mut().resize(fits as u16 - 1, 6);
         render(&mut terminal, &mut app);
 
         assert!(!screen(&terminal).contains("help"));
-        assert!(row_text(&terminal, 5).contains("[0/2]"));
 
         terminal.backend_mut().resize(40, 6);
         app.notification = Some(crate::notification::Notification::new("Wrap off"));
         render(&mut terminal, &mut app);
 
         assert!(row_text(&terminal, 5).contains("Wrap off"));
-        assert!(!screen(&terminal).contains("? help"));
+        assert!(!screen(&terminal).contains("? for help"));
     }
 }
