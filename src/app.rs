@@ -194,6 +194,85 @@ pub(crate) fn settled_section_order(order: &[String], tasks: &[Task]) -> Vec<Str
     settled
 }
 
+// Tabs in display order for `tasks`: [*], [-] when some tasks have no section, then sections
+// in `section_order`. Empty when no task has a section, which hides the tab bar.
+fn section_tabs_of(tasks: &[Task], section_order: &[String]) -> Vec<(SectionView, String)> {
+    // One pass over the tasks: the first spelling of each key in list order labels its
+    // tab, and any task without a section brings in [-].
+    let mut labels: HashMap<String, &str> = HashMap::new();
+    let mut has_unsectioned = false;
+
+    for task in tasks {
+        match &task.section {
+            Some(section) => {
+                labels.entry(section.to_lowercase()).or_insert(section);
+            }
+            None => has_unsectioned = true,
+        }
+    }
+
+    let named: Vec<(SectionView, String)> = section_order
+        .iter()
+        .filter_map(|key| {
+            let label = labels.get(key)?;
+
+            Some((SectionView::Named(key.clone()), (*label).to_owned()))
+        })
+        .collect();
+
+    if named.is_empty() {
+        return Vec::new();
+    }
+
+    let mut tabs = vec![(SectionView::All, "[*]".to_owned())];
+
+    if has_unsectioned {
+        tabs.push((SectionView::Unsectioned, "[-]".to_owned()));
+    }
+
+    tabs.extend(named);
+
+    tabs
+}
+
+fn view_shows(view: &SectionView, task: &Task) -> bool {
+    match view {
+        SectionView::All => true,
+        SectionView::Named(key) => task.section_key().as_ref() == Some(key),
+        SectionView::Unsectioned => task.section.is_none(),
+    }
+}
+
+// The view that fits `tasks` when `view` is proposed with `selected`. A selection that left
+// the proposed tab pulls the view along to the task's own tab (an edit or undo moved it); a
+// tab that is gone otherwise falls back to [*]. Removals that empty a tab propose [*]
+// themselves. Mutations resolve this before saving, so the saved tab is the one shown.
+fn settled_view(
+    tasks: &[Task],
+    section_order: &[String],
+    view: &SectionView,
+    selected: Option<usize>,
+) -> SectionView {
+    let tabs = section_tabs_of(tasks, section_order);
+    let mut view = view.clone();
+
+    if !tabs.is_empty()
+        && let Some(task) = selected.and_then(|index| tasks.get(index))
+        && !view_shows(&view, task)
+    {
+        view = match task.section_key() {
+            Some(key) => SectionView::Named(key),
+            None => SectionView::Unsectioned,
+        };
+    }
+
+    if !tabs.iter().any(|(tab, _)| *tab == view) {
+        view = SectionView::All;
+    }
+
+    view
+}
+
 // Which tasks are shown: all of them, one section (by lowercase key), or unsectioned ones.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum SectionView {
@@ -415,56 +494,12 @@ impl App {
         Ok(())
     }
 
-    // Tabs in display order: [*], [-] when some tasks have no section, then sections in
-    // `section_order`. Empty when no task has a section, which hides the tab bar.
     pub fn section_tabs(&self) -> Vec<(SectionView, String)> {
-        // One pass over the tasks: the first spelling of each key in list order labels its
-        // tab, and any task without a section brings in [-].
-        let mut labels: HashMap<String, &str> = HashMap::new();
-        let mut has_unsectioned = false;
-
-        for task in &self.tasks {
-            match &task.section {
-                Some(section) => {
-                    labels.entry(section.to_lowercase()).or_insert(section);
-                }
-                None => has_unsectioned = true,
-            }
-        }
-
-        let named: Vec<(SectionView, String)> = self
-            .section_order
-            .iter()
-            .filter_map(|key| {
-                let label = labels.get(key)?;
-
-                Some((SectionView::Named(key.clone()), (*label).to_owned()))
-            })
-            .collect();
-
-        if named.is_empty() {
-            return Vec::new();
-        }
-
-        let mut tabs = vec![(SectionView::All, "[*]".to_owned())];
-
-        if has_unsectioned {
-            tabs.push((SectionView::Unsectioned, "[-]".to_owned()));
-        }
-
-        tabs.extend(named);
-
-        tabs
+        section_tabs_of(&self.tasks, &self.section_order)
     }
 
     pub fn is_visible(&self, index: usize) -> bool {
-        let task = &self.tasks[index];
-
-        match &self.view {
-            SectionView::All => true,
-            SectionView::Named(key) => task.section_key().as_ref() == Some(key),
-            SectionView::Unsectioned => task.section.is_none(),
-        }
+        view_shows(&self.view, &self.tasks[index])
     }
 
     fn visible_indices(&self) -> Vec<usize> {
@@ -483,31 +518,14 @@ impl App {
         }
     }
 
-    // The tab a task belongs to, given that sections exist.
-    fn home_view(&self, index: usize) -> SectionView {
-        match self.tasks[index].section_key() {
-            Some(key) => SectionView::Named(key),
-            None => SectionView::Unsectioned,
-        }
-    }
-
-    // Keep the view valid after tasks change. A selection that left the current tab pulls
-    // the view along to the task's own tab (an edit or undo moved it); a tab that is gone
-    // otherwise falls back to [*]. Removals that empty a tab switch to [*] themselves.
+    // Keep a loaded view valid; see `settled_view`.
     fn settle_view(&mut self) {
-        let tabs = self.section_tabs();
-
-        if !tabs.is_empty()
-            && let Some(index) = self.list.selected()
-            && index < self.tasks.len()
-            && !self.is_visible(index)
-        {
-            self.view = self.home_view(index);
-        }
-
-        if !tabs.iter().any(|(view, _)| *view == self.view) {
-            self.view = SectionView::All;
-        }
+        self.view = settled_view(
+            &self.tasks,
+            &self.section_order,
+            &self.view,
+            self.list.selected(),
+        );
     }
 
     pub fn show_section(&mut self, view: SectionView) {
@@ -975,6 +993,7 @@ impl App {
         storage: &Storage,
     ) -> Result<()> {
         let section_order = settled_section_order(&section_order, &tasks);
+        let view = settled_view(&tasks, &section_order, &view, selected);
 
         storage.save_view(&tasks, &section_order, selected, view.saved_key())?;
         self.persisted_selection = crate::storage::valid_selection(&tasks, selected);
@@ -987,7 +1006,6 @@ impl App {
         let previous_view = std::mem::replace(&mut self.view, view);
         self.list.select(selected);
         self.reveal_selection = true;
-        self.settle_view();
 
         if self.history.len() == HISTORY_LIMIT {
             self.history.pop_front();
@@ -1119,22 +1137,44 @@ impl App {
             return Ok(());
         };
 
-        // Return to the snapshot's tab only if the user hasn't switched tabs since the change;
-        // otherwise keep their tab, which `settle_view` still corrects if it no longer fits.
-        let view = if self.view == previous.left_view {
-            previous.view.clone()
+        let selected = previous
+            .selected
+            .filter(|&index| index < previous.tasks.len());
+
+        // Return to the snapshot's tab and selection only if the user hasn't switched tabs
+        // since the change. Otherwise keep their tab ([*] if it no longer exists) and move
+        // the selection into it, so a task from another tab cannot pull the view away.
+        let (view, selected) = if self.view == previous.left_view {
+            let view = settled_view(
+                &previous.tasks,
+                &previous.section_order,
+                &previous.view,
+                selected,
+            );
+
+            (view, selected)
         } else {
-            self.view.clone()
+            let view = settled_view(&previous.tasks, &previous.section_order, &self.view, None);
+
+            let selected = selected
+                .filter(|&index| view_shows(&view, &previous.tasks[index]))
+                .or_else(|| {
+                    previous
+                        .tasks
+                        .iter()
+                        .position(|task| view_shows(&view, task))
+                });
+
+            (view, selected)
         };
 
         storage.save_view(
             &previous.tasks,
             &previous.section_order,
-            previous.selected,
+            selected,
             view.saved_key(),
         )?;
-        self.persisted_selection =
-            crate::storage::valid_selection(&previous.tasks, previous.selected);
+        self.persisted_selection = crate::storage::valid_selection(&previous.tasks, selected);
         self.persisted_view = view.clone();
         self.needs_migration = false;
         let previous = source.pop_back().unwrap();
@@ -1146,10 +1186,8 @@ impl App {
         let current_order = std::mem::replace(&mut self.section_order, previous.section_order);
         let current_selected = self.list.selected();
         let current_view = std::mem::replace(&mut self.view, view);
-        self.list
-            .select(previous.selected.filter(|&index| index < self.tasks.len()));
+        self.list.select(selected);
         self.reveal_selection = true;
-        self.settle_view();
 
         let destination = if redo {
             &mut self.history
@@ -4719,6 +4757,96 @@ mod tests {
         assert_eq!(app.view, SectionView::Named("work".into()));
         assert_eq!(app.tasks.len(), 2);
         assert!(app.can_redo());
+    }
+
+    fn app_on_work_with_three_sections() -> App {
+        let mut app = app_with_texts(&["Work: a", "Home: b", "Personal: c"]);
+        app.show_section(SectionView::Named("work".into()));
+
+        app
+    }
+
+    #[test]
+    fn undo_keeps_a_manually_chosen_section_tab_and_selects_a_task_in_it() {
+        let fixture = Fixture::new();
+        let mut app = app_on_work_with_three_sections();
+
+        press(&mut app, &fixture, KeyCode::Char('d'));
+        assert_eq!(app.view, SectionView::All);
+
+        app.show_section(SectionView::Named("personal".into()));
+        press(&mut app, &fixture, KeyCode::Char('u'));
+
+        assert_eq!(texts(&app), ["Work: a", "Home: b", "Personal: c"]);
+        assert_eq!(app.view, SectionView::Named("personal".into()));
+        assert_eq!(app.list.selected(), Some(2));
+        assert_eq!(app.persisted_view, app.view);
+        assert_eq!(saved_view(&fixture), app.view);
+    }
+
+    #[test]
+    fn redo_keeps_a_section_tab_chosen_between_undo_and_redo() {
+        let fixture = Fixture::new();
+        let mut app = app_on_work_with_three_sections();
+
+        press(&mut app, &fixture, KeyCode::Char('d'));
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.view, SectionView::Named("work".into()));
+
+        app.show_section(SectionView::Named("personal".into()));
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        );
+
+        assert_eq!(texts(&app), ["Home: b", "Personal: c"]);
+        assert_eq!(app.view, SectionView::Named("personal".into()));
+        assert_eq!(app.list.selected(), Some(1));
+        assert_eq!(saved_view(&fixture), app.view);
+    }
+
+    #[test]
+    fn editing_a_task_into_another_section_saves_the_tab_it_moves_to() {
+        let fixture = Fixture::new();
+        let mut app = app_on_work_with_three_sections();
+
+        press(&mut app, &fixture, KeyCode::Char('e'));
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        app.paste("Home: moved");
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(app.view, SectionView::Named("home".into()));
+        assert_eq!(app.persisted_view, app.view);
+        assert_eq!(saved_view(&fixture), app.view);
+    }
+
+    #[test]
+    fn a_failed_save_of_an_edit_that_moves_sections_keeps_the_view() {
+        let fixture = Fixture::new();
+        let mut app = app_on_work_with_three_sections();
+        fixture.storage.save(&app.tasks).unwrap();
+
+        press(&mut app, &fixture, KeyCode::Char('e'));
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        app.paste("Home: moved");
+        let before = task_state(&app);
+        block_saves(&fixture);
+
+        let result = app.key(KeyEvent::from(KeyCode::Enter), &fixture.storage);
+
+        assert!(result.is_err());
+        assert_eq!(app.view, SectionView::Named("work".into()));
+        assert_eq!(app.persisted_view, SectionView::All);
+        assert_eq!(task_state(&app), before);
     }
 
     #[test]
