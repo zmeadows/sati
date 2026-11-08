@@ -329,7 +329,7 @@ impl App {
     pub fn new(tasks: Vec<Task>) -> Self {
         let selected = (!tasks.is_empty()).then_some(0);
         // Without a saved order, tabs start alphabetically, as they were before orders were
-        // saved (and as `v3_to_v4` migrates them).
+        // saved.
         let mut section_order = settled_section_order(&[], &tasks);
         section_order.sort();
 
@@ -2304,30 +2304,16 @@ mod tests {
 
         assert!(!fixture.task_path().exists());
 
-        fixture.storage.save(&[]).unwrap();
-        std::fs::write(fixture.task_path(), "[]").unwrap();
-        let mut empty = App::from_document(fixture.storage.load_document().unwrap());
-        empty.save_selection(&fixture.storage).unwrap();
-
-        assert!(!fixture.storage.load_document().unwrap().needs_migration);
-
         let tasks = app_with_tasks(3).tasks;
         fixture.storage.save(&tasks).unwrap();
-        // A real legacy file: a bare array of tasks without ids or creation times.
-        let legacy = serde_json::to_vec(
-            &tasks
-                .iter()
-                .map(|task| {
-                    let completed = task.status == TaskStatus::Completed;
-                    serde_json::json!({"text": task.text, "completed": completed})
-                })
-                .collect::<Vec<_>>(),
-        )
-        .unwrap();
-        std::fs::write(fixture.task_path(), &legacy).unwrap();
-        let mut app = App::from_document(fixture.storage.load_document().unwrap());
+        let original = std::fs::read(fixture.task_path()).unwrap();
 
-        assert_eq!(std::fs::read(fixture.task_path()).unwrap(), legacy);
+        // Stands in for a document that a registered migration upgraded in memory.
+        let mut document = fixture.storage.load_document().unwrap();
+        document.needs_migration = true;
+        let mut app = App::from_document(document);
+
+        assert_eq!(std::fs::read(fixture.task_path()).unwrap(), original);
 
         block_saves(&fixture);
         assert!(app.save_selection(&fixture.storage).is_err());

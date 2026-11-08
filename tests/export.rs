@@ -45,7 +45,7 @@ impl Fixture {
     }
     fn prepare(&self) {
         fs::create_dir_all(&self.data).unwrap();
-        fs::write(self.data.join("tasks.json"), r#"[{"text":"Work: 日本語","completed":false,"carried":true},{"text":"done","completed":true}]"#).unwrap();
+        fs::write(self.data.join("tasks.json"), tasks_document("")).unwrap();
         fs::write(
             self.data.join("history.json"),
             "deliberately invalid unused history",
@@ -59,6 +59,13 @@ impl Drop for Fixture {
     }
 }
 const MARKDOWN: &str = "- [ ] Work: 日本語\n- [x] done\n";
+
+// A current-format task file with a carried sectioned task and a completed one.
+fn tasks_document(extra_fields: &str) -> String {
+    format!(
+        r#"{{"schema_version":5,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Work","text":"日本語","status":"carried"}},{{"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:06Z","text":"done","status":"completed"}}]{extra_fields},"section_order":["work"]}}"#
+    )
+}
 
 #[test]
 fn export_reads_committed_tasks_while_the_writer_lock_is_held() {
@@ -86,10 +93,7 @@ fn export_reads_committed_tasks_while_the_writer_lock_is_held() {
     assert!(output.stderr.is_empty());
     assert_eq!(fs::read(fixture.data.join("tasks.json")).unwrap(), before);
 
-    let document = format!(
-        r#"{{"tasks":{},"selected":1}}"#,
-        String::from_utf8(before).unwrap()
-    );
+    let document = tasks_document(r#","selected":1"#);
     fs::write(fixture.data.join("tasks.json"), &document).unwrap();
     let output = fixture.run(&[]);
 
@@ -127,8 +131,8 @@ fn missing_and_invalid_storage_never_get_created_or_repaired() {
 
     for invalid in [
         "malformed",
-        r#"[{"text":"bad","completed":true,"carried":true}]"#,
-        r#"[{"text":"bad\ntext","completed":false}]"#,
+        r#"{"schema_version":5,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"bad","status":"done"}]}"#,
+        r#"{"schema_version":5,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"bad\ntext","status":"pending"}]}"#,
     ] {
         fs::write(fixture.data.join("tasks.json"), invalid).unwrap();
         let output = fixture.run(&[]);

@@ -12,311 +12,26 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use uuid::Uuid;
-
-use crate::app::{Task, current_time, settled_section_order, split_section};
+use crate::app::{Task, settled_section_order};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-// The `tasks.json` format written by this build. Files without `schema_version` are version 0.
+// The `tasks.json` format written by this build.
 const SCHEMA_VERSION: u64 = 5;
 
-// `MIGRATIONS[n]` upgrades a version `n` document to version `n + 1`. To change the format,
-// bump `SCHEMA_VERSION` and append one migration; the array length enforces the pairing.
-// Migrations run in memory on load; the upgraded document is written by the next save.
-const MIGRATIONS: [fn(Value) -> std::result::Result<Value, String>; SCHEMA_VERSION as usize] =
-    [v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5];
+// The oldest `tasks.json` format this build can still upgrade. Older files are refused.
+const OLDEST_SCHEMA_VERSION: u64 = 5;
 
-// Versions 0 and 1 share one document shape; version 0 also allows a bare task array.
-// Parsing into these strict types validates legacy data before it is migrated, so
-// unexpected fields or malformed values are rejected instead of silently carried along.
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct LegacyDocument {
-    tasks: Vec<LegacyTask>,
-    #[serde(default)]
-    selected: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    section: Option<String>,
-}
+// A migration receives a document without its `schema_version` field, which the loader owns.
+type Migration = fn(Value) -> std::result::Result<Value, String>;
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct LegacyTask {
-    text: String,
-    completed: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    carried: bool,
-}
-
-fn legacy_document(value: Value) -> std::result::Result<LegacyDocument, String> {
-    let value = match value {
-        Value::Array(tasks) => serde_json::json!({ "tasks": tasks }),
-        // `load_document` has already checked the version.
-        Value::Object(mut fields) => {
-            fields.remove("schema_version");
-            Value::Object(fields)
-        }
-        value => value,
-    };
-
-    serde_json::from_value(value).map_err(|error| error.to_string())
-}
-
-fn versioned(version: u64, document: impl Serialize) -> std::result::Result<Value, String> {
-    let mut value = serde_json::to_value(document).map_err(|error| error.to_string())?;
-
-    if let Value::Object(fields) = &mut value {
-        fields.insert("schema_version".to_owned(), version.into());
-    }
-
-    Ok(value)
-}
-
-// Version 0 is a bare task array or an unversioned `{tasks, selected, section}` object.
-fn v0_to_v1(value: Value) -> std::result::Result<Value, String> {
-    versioned(1, legacy_document(value)?)
-}
-
-// Version 2 documents, the output of `v1_to_v2` and the input of `v2_to_v3`. Each step
-// uses its own types so that migrations never depend on today's `Task`.
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct V2Document {
-    tasks: Vec<V2Task>,
-    #[serde(default)]
-    selected: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    section: Option<String>,
-}
-
-// Version 2 tasks still carry their section as a "Name: " prefix in `text`. `id` and
-// `created_at` pass through unchanged and are validated once the current `Task` is parsed.
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct V2Task {
-    id: String,
-    created_at: String,
-    text: String,
-    completed: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    carried: bool,
-}
-
-fn parse_version(value: Value) -> std::result::Result<Value, String> {
-    // `load_document` has already checked the version.
-    match value {
-        Value::Object(mut fields) => {
-            fields.remove("schema_version");
-            Ok(Value::Object(fields))
-        }
-        _ => Err("expected an object".to_owned()),
-    }
-}
-
-// Version 2 gives every task a unique `id` and a `created_at` time. Their true creation times
-// are unknown, so all existing tasks share the moment of migration.
-fn v1_to_v2(value: Value) -> std::result::Result<Value, String> {
-    let legacy = legacy_document(value)?;
-    let created_at = current_time()
-        .format(&time::format_description::well_known::Rfc3339)
-        .map_err(|error| error.to_string())?;
-    let mut ids = std::collections::HashSet::new();
-
-    let tasks = legacy
-        .tasks
-        .into_iter()
-        .map(|task| {
-            // A repeated random id is practically impossible, but must never reach the file.
-            let id = std::iter::repeat_with(Uuid::new_v4)
-                .find(|id| ids.insert(*id))
-                .unwrap();
-
-            V2Task {
-                id: id.to_string(),
-                created_at: created_at.clone(),
-                text: task.text,
-                completed: task.completed,
-                carried: task.carried,
-            }
-        })
-        .collect();
-
-    let document = V2Document {
-        tasks,
-        selected: legacy.selected,
-        section: legacy.section,
-    };
-
-    versioned(2, document)
-}
-
-// Version 3 documents, the output of `v2_to_v3` and the input of `v3_to_v4`. Version 4 keeps
-// the same task shape, so `V3Task` is also how `v3_to_v4` writes tasks back out.
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct V3Document {
-    tasks: Vec<V3Task>,
-    #[serde(default)]
-    selected: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    section: Option<String>,
-}
-
-// `id`, `created_at`, and `section` pass through unchanged and are validated once the current
-// `Task` is parsed.
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct V3Task {
-    id: String,
-    created_at: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    section: Option<String>,
-    text: String,
-    completed: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    carried: bool,
-}
-
-// Version 3 stores each task's section in its own field instead of a "Name: " text prefix,
-// so the meaning of stored tasks no longer depends on how typed text is parsed.
-fn v2_to_v3(value: Value) -> std::result::Result<Value, String> {
-    let document: V2Document =
-        serde_json::from_value(parse_version(value)?).map_err(|error| error.to_string())?;
-
-    let tasks = document
-        .tasks
-        .into_iter()
-        .map(|task| {
-            let (section, text) = split_section(&task.text);
-
-            V3Task {
-                id: task.id,
-                created_at: task.created_at,
-                section,
-                text,
-                completed: task.completed,
-                carried: task.carried,
-            }
-        })
-        .collect();
-
-    let document = V3Document {
-        tasks,
-        selected: document.selected,
-        section: document.section,
-    };
-
-    versioned(3, document)
-}
-
-// Version 4 stores the order of the section tabs. Older versions sorted them alphabetically,
-// so that is where the custom order starts.
-fn v3_to_v4(value: Value) -> std::result::Result<Value, String> {
-    #[derive(Serialize)]
-    struct Document {
-        tasks: Vec<V3Task>,
-        selected: Option<usize>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section: Option<String>,
-        section_order: Vec<String>,
-    }
-
-    let document: V3Document =
-        serde_json::from_value(parse_version(value)?).map_err(|error| error.to_string())?;
-
-    let mut section_order: Vec<String> = document
-        .tasks
-        .iter()
-        .filter_map(|task| task.section.as_deref())
-        .map(str::to_lowercase)
-        .collect();
-    section_order.sort();
-    section_order.dedup();
-
-    let document = Document {
-        tasks: document.tasks,
-        selected: document.selected,
-        section: document.section,
-        section_order,
-    };
-
-    versioned(4, document)
-}
-
-// Version 4 documents, the input of `v4_to_v5`. Their tasks have the `V3Task` shape, and
-// `section_order` may be absent when no task has a section.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct V4Document {
-    tasks: Vec<V3Task>,
-    #[serde(default)]
-    selected: Option<usize>,
-    #[serde(default)]
-    section: Option<String>,
-    #[serde(default)]
-    section_order: Vec<String>,
-}
-
-// Version 5 replaces the `completed` and `carried` flags with one `status`, so a task can no
-// longer be both. A version 4 task marked both is invalid data and is refused, not guessed at.
-fn v4_to_v5(value: Value) -> std::result::Result<Value, String> {
-    #[derive(Serialize)]
-    struct Document {
-        tasks: Vec<V5Task>,
-        selected: Option<usize>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section: Option<String>,
-        section_order: Vec<String>,
-    }
-
-    // The status is spelled out here so this step never depends on today's `TaskStatus`.
-    #[derive(Serialize)]
-    struct V5Task {
-        id: String,
-        created_at: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section: Option<String>,
-        text: String,
-        status: &'static str,
-    }
-
-    let document: V4Document =
-        serde_json::from_value(parse_version(value)?).map_err(|error| error.to_string())?;
-
-    let mut tasks = Vec::with_capacity(document.tasks.len());
-
-    for (index, task) in document.tasks.into_iter().enumerate() {
-        let status = match (task.completed, task.carried) {
-            (false, false) => "pending",
-            (true, false) => "completed",
-            (false, true) => "carried",
-            (true, true) => {
-                return Err(format!(
-                    "task {} cannot be both completed and carried",
-                    index + 1
-                ));
-            }
-        };
-
-        tasks.push(V5Task {
-            id: task.id,
-            created_at: task.created_at,
-            section: task.section,
-            text: task.text,
-            status,
-        });
-    }
-
-    let document = Document {
-        tasks,
-        selected: document.selected,
-        section: document.section,
-        section_order: document.section_order,
-    };
-
-    versioned(5, document)
-}
+// `MIGRATIONS[n]` upgrades a version `OLDEST_SCHEMA_VERSION + n` document to the next version.
+// To change the format, bump `SCHEMA_VERSION` and append one migration; the array length
+// enforces the pairing. Each step should first parse the previous version strictly into its
+// own typed struct with `deny_unknown_fields`, then build the next version, so unexpected or
+// malformed data is rejected instead of silently carried along. Migrations run in memory on
+// load; the upgraded document is written by the next save.
+const MIGRATIONS: [Migration; (SCHEMA_VERSION - OLDEST_SCHEMA_VERSION) as usize] = [];
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -488,18 +203,19 @@ impl Storage {
             )
         };
 
-        let mut value: Value =
+        let value: Value =
             serde_json::from_slice(&contents).map_err(|error| invalid_file(error.to_string()))?;
 
-        let version = match &value {
-            Value::Object(document) => match document.get("schema_version") {
-                None => 0,
-                Some(version) => version.as_u64().ok_or_else(|| {
-                    invalid_file("schema_version must be a non-negative integer".to_owned())
-                })?,
-            },
-            _ => 0,
+        let Value::Object(mut fields) = value else {
+            return Err(invalid_file("expected an object".to_owned()).into());
         };
+
+        let version = fields
+            .remove("schema_version")
+            .ok_or_else(|| invalid_file("missing schema_version".to_owned()))?;
+        let version = version.as_u64().ok_or_else(|| {
+            invalid_file("schema_version must be a non-negative integer".to_owned())
+        })?;
 
         if version > SCHEMA_VERSION {
             return Err(format!(
@@ -509,20 +225,28 @@ impl Storage {
             .into());
         }
 
+        if version < OLDEST_SCHEMA_VERSION {
+            return Err(format!(
+                "task file {} uses schema version {version}, but this sati only opens version {OLDEST_SCHEMA_VERSION} and later. The file has been left untouched; open it once with an older sati release to upgrade it",
+                self.path.display()
+            )
+            .into());
+        }
+
         // Upgrade in memory only; nothing is written until the next save.
-        for (from, migrate) in MIGRATIONS.iter().enumerate().skip(version as usize) {
+        let mut value = Value::Object(fields);
+        let applied_from = (version - OLDEST_SCHEMA_VERSION) as usize;
+
+        for (offset, migrate) in MIGRATIONS.iter().enumerate().skip(applied_from) {
+            let from = OLDEST_SCHEMA_VERSION + offset as u64;
+
             value = migrate(value).map_err(|problem| {
                 invalid_file(format!("migrating from version {from}: {problem}"))
             })?;
         }
 
-        let Value::Object(mut fields) = value else {
-            return Err(invalid_file("expected an object".to_owned()).into());
-        };
-
-        fields.remove("schema_version");
-        let mut document: TaskDocument = serde_json::from_value(Value::Object(fields))
-            .map_err(|error| invalid_file(error.to_string()))?;
+        let mut document: TaskDocument =
+            serde_json::from_value(value).map_err(|error| invalid_file(error.to_string()))?;
         document.needs_migration = version < SCHEMA_VERSION;
 
         let mut first_with_id = std::collections::HashMap::new();
@@ -738,70 +462,23 @@ pub mod tests {
     }
 
     #[test]
-    fn task_documents_load_every_version_and_normalize_selection_without_writing() {
+    fn task_documents_load_and_normalize_selection_without_writing() {
         let fixture = Fixture::new();
         let absent = fixture.storage.load_document().unwrap();
         assert!(absent.tasks.is_empty() && !absent.needs_migration);
         assert!(!fixture.task_path().exists());
 
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-        let tasks = r#"[{"text":"first","completed":false},{"text":"second","completed":false}]"#;
+        let document = |tasks: &str, selected: &str| {
+            format!(r#"{{"schema_version":5,"tasks":{tasks}{selected},"section_order":[]}}"#)
+        };
 
-        // Bare arrays and unversioned objects are version 0 and migrate on the next save.
-        for (json, selected, needs_migration) in [
-            (tasks.to_owned(), Some(0), true),
-            (
-                format!(r#"{{"tasks":{tasks},"selected":1}}"#),
-                Some(1),
-                true,
-            ),
-            (format!(r#"{{"tasks":{tasks}}}"#), Some(0), true),
-            (
-                format!(r#"{{"tasks":{tasks},"selected":null}}"#),
-                Some(0),
-                true,
-            ),
-            (
-                format!(r#"{{"tasks":{tasks},"selected":99}}"#),
-                Some(0),
-                true,
-            ),
-            (r#"{"tasks":[],"selected":5}"#.into(), None, true),
-            (
-                format!(r#"{{"schema_version":0,"tasks":{tasks},"selected":1}}"#),
-                Some(1),
-                true,
-            ),
-            (
-                format!(r#"{{"schema_version":1,"tasks":{tasks},"selected":1}}"#),
-                Some(1),
-                true,
-            ),
-            (
-                format!(r#"{{"schema_version":2,"tasks":{IDENTIFIED_TASKS},"selected":1}}"#),
-                Some(1),
-                true,
-            ),
-            (
-                format!(r#"{{"schema_version":3,"tasks":{IDENTIFIED_TASKS},"selected":1}}"#),
-                Some(1),
-                true,
-            ),
-            (
-                format!(
-                    r#"{{"schema_version":4,"tasks":{IDENTIFIED_TASKS},"selected":1,"section_order":[]}}"#
-                ),
-                Some(1),
-                true,
-            ),
-            (
-                format!(
-                    r#"{{"schema_version":5,"tasks":{},"selected":1,"section_order":[]}}"#,
-                    IDENTIFIED_TASKS.replace(r#""completed":false"#, r#""status":"pending""#)
-                ),
-                Some(1),
-                false,
-            ),
+        for (json, selected) in [
+            (document(IDENTIFIED_TASKS, r#","selected":1"#), Some(1)),
+            (document(IDENTIFIED_TASKS, ""), Some(0)),
+            (document(IDENTIFIED_TASKS, r#","selected":null"#), Some(0)),
+            (document(IDENTIFIED_TASKS, r#","selected":99"#), Some(0)),
+            (document("[]", r#","selected":5"#), None),
         ] {
             fs::write(fixture.task_path(), &json).unwrap();
             let document = fixture.storage.load_document().unwrap();
@@ -810,14 +487,14 @@ pub mod tests {
                 document.tasks.len(),
                 if json.contains("first") { 2 } else { 0 }
             );
-            assert_eq!(document.selected, selected);
-            assert_eq!(document.needs_migration, needs_migration, "{json}");
+            assert_eq!(document.selected, selected, "{json}");
+            assert!(!document.needs_migration, "{json}");
             assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
         }
 
         for json in [
-            r#"{"tasks":[],"selected":null,"extra":true}"#,
-            r#"{"tasks":[{"text":"bad\ntext","completed":false}],"selected":0}"#,
+            r#"{"schema_version":5,"tasks":[],"selected":null,"extra":true}"#,
+            r#"{"schema_version":5,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"bad\ntext","status":"pending"}],"selected":0}"#,
         ] {
             fs::write(fixture.task_path(), json).unwrap();
             assert!(fixture.storage.load_document().is_err());
@@ -869,301 +546,11 @@ pub mod tests {
         serde_json::from_value(saved["tasks"].clone()).unwrap()
     }
 
-    // Two tasks with valid ids and creation times and no section, valid in versions 2 and 3.
+    // Two pending tasks with valid ids and creation times and no section.
     const IDENTIFIED_TASKS: &str = r#"[
-        {"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"first","completed":false},
-        {"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:06Z","text":"second","completed":false}
+        {"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"first","status":"pending"},
+        {"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:06Z","text":"second","status":"pending"}
     ]"#;
-
-    #[test]
-    fn older_files_keep_their_data_and_gain_unique_ids_and_one_creation_time() {
-        let fixture = Fixture::new();
-        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-        let tasks = r#"[{"text":"Work: keep","completed":false,"carried":true},{"text":"other","completed":true}]"#;
-
-        for json in [
-            tasks.to_owned(),
-            format!(r#"{{"tasks":{tasks},"selected":0,"section":"work"}}"#),
-            format!(r#"{{"schema_version":1,"tasks":{tasks},"selected":0,"section":"work"}}"#),
-        ] {
-            fs::write(fixture.task_path(), &json).unwrap();
-            let before = current_time();
-            let document = fixture.storage.load_document().unwrap();
-
-            let content: Vec<_> = document
-                .tasks
-                .iter()
-                .map(|task| (task.display_text(), task.status))
-                .collect();
-            assert_eq!(
-                content,
-                [
-                    ("Work: keep".into(), TaskStatus::Carried),
-                    ("other".into(), TaskStatus::Completed)
-                ]
-            );
-            assert_eq!(document.tasks[0].section.as_deref(), Some("Work"));
-            assert_eq!(document.tasks[0].text, "keep");
-            assert_eq!(document.selected, Some(0));
-            assert_eq!(
-                document.section.as_deref(),
-                json.contains("section").then_some("work")
-            );
-            assert!(document.needs_migration);
-
-            // Unknown creation times are all set to the moment of migration.
-            let [first, second] = &document.tasks[..] else {
-                panic!("expected two tasks");
-            };
-            assert_ne!(first.id, second.id);
-            assert_eq!(first.created_at, second.created_at);
-            assert!(first.created_at >= before && first.created_at <= current_time());
-            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
-        }
-
-        // Saving writes the generated identities, and reloading keeps them.
-        let document = fixture.storage.load_document().unwrap();
-        fixture.storage.save(&document.tasks).unwrap();
-        let reloaded = fixture.storage.load_document().unwrap();
-
-        assert_eq!(reloaded.tasks, document.tasks);
-        assert!(!reloaded.needs_migration);
-        assert_eq!(saved_tasks(fixture.task_path()), document.tasks);
-    }
-
-    #[test]
-    fn legacy_data_is_validated_before_migration_and_never_overwritten() {
-        let fixture = Fixture::new();
-        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-        let id = r#""id":"00000000-0000-4000-8000-000000000001""#;
-
-        for (json, step) in [
-            // Fields that only exist in version 2 must not be silently replaced.
-            (format!(r#"[{{{id},"text":"a","completed":false}}]"#), 0),
-            (format!(r#"{{"schema_version":1,"tasks":[{{{id},"text":"a","completed":false}}]}}"#), 1),
-            (r#"{"schema_version":1,"tasks":[{"created_at":"2026-11-07T19:24:05Z","text":"a","completed":false}]}"#.to_owned(), 1),
-            // Unknown or malformed legacy data is rejected rather than repaired.
-            (r#"[{"text":"a","completed":false,"priority":1}]"#.to_owned(), 0),
-            (r#"{"tasks":[],"extra":true}"#.to_owned(), 0),
-            (r#"[{"text":1,"completed":false}]"#.to_owned(), 0),
-            (r#"{"schema_version":1,"tasks":[{"text":"a","completed":"no"}]}"#.to_owned(), 1),
-            (r#"{"schema_version":1,"tasks":[{"text":"a","completed":false,"carried":"yes"}]}"#.to_owned(), 1),
-            (r#"{"schema_version":1,"tasks":[],"selected":"first"}"#.to_owned(), 1),
-            (r#"{"schema_version":1,"tasks":[],"section":5}"#.to_owned(), 1),
-            (r#"{"schema_version":1,"tasks":{"text":"a"}}"#.to_owned(), 1),
-            (r#"{"schema_version":1,"tasks":[["a"]]}"#.to_owned(), 1),
-        ] {
-            fs::write(fixture.task_path(), &json).unwrap();
-            let error = fixture
-                .storage
-                .load_document()
-                .err()
-                .expect("rejected")
-                .to_string();
-
-            assert!(error.contains("invalid task file"), "{json}: {error}");
-            assert!(
-                error.contains(&format!("migrating from version {step}")),
-                "{json}: {error}"
-            );
-            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
-        }
-    }
-
-    #[test]
-    fn migrated_tasks_get_distinct_ids_and_keep_their_order() {
-        let fixture = Fixture::new();
-        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-        let tasks: Vec<_> = (0..500)
-            .map(|index| serde_json::json!({"text": format!("task {index}"), "completed": index % 2 == 0}))
-            .collect();
-        fs::write(fixture.task_path(), serde_json::to_vec(&tasks).unwrap()).unwrap();
-
-        let document = fixture.storage.load_document().unwrap();
-        let ids: std::collections::HashSet<_> = document.tasks.iter().map(|task| task.id).collect();
-
-        assert_eq!(ids.len(), 500);
-
-        for (index, task) in document.tasks.iter().enumerate() {
-            assert_eq!(task.text, format!("task {index}"));
-            let expected = if index % 2 == 0 {
-                TaskStatus::Completed
-            } else {
-                TaskStatus::Pending
-            };
-
-            assert_eq!(task.status, expected);
-        }
-    }
-
-    #[test]
-    fn version_2_prefixes_become_section_fields_exactly_once() {
-        let fixture = Fixture::new();
-        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-        let texts = ["Work: a", "plain", "a:b", "https://x", "Home: Work: nested"];
-        let tasks: Vec<_> = texts
-            .iter()
-            .enumerate()
-            .map(|(index, text)| {
-                serde_json::json!({
-                    "id": format!("00000000-0000-4000-8000-00000000000{index}"),
-                    "created_at": format!("2026-11-07T19:24:0{index}Z"),
-                    "text": text,
-                    "completed": index == 1,
-                    "carried": index == 0,
-                })
-            })
-            .collect();
-        let json = serde_json::json!({
-            "schema_version": 2, "tasks": tasks, "selected": 2, "section": "work"
-        })
-        .to_string();
-        fs::write(fixture.task_path(), &json).unwrap();
-
-        let document = fixture.storage.load_document().unwrap();
-
-        let fields: Vec<_> = document
-            .tasks
-            .iter()
-            .map(|task| (task.section.as_deref(), task.text.as_str()))
-            .collect();
-        assert_eq!(
-            fields,
-            [
-                (Some("Work"), "a"),
-                (None, "plain"),
-                (None, "a:b"),
-                (None, "https://x"),
-                (Some("Home"), "Work: nested"),
-            ]
-        );
-
-        for (index, task) in document.tasks.iter().enumerate() {
-            assert_eq!(
-                task.id.to_string(),
-                format!("00000000-0000-4000-8000-00000000000{index}")
-            );
-            assert_eq!(task.created_at.second(), index as u8);
-            let expected = match index {
-                0 => TaskStatus::Carried,
-                1 => TaskStatus::Completed,
-                _ => TaskStatus::Pending,
-            };
-
-            assert_eq!(task.status, expected);
-        }
-
-        assert_eq!(document.selected, Some(2));
-        assert_eq!(document.section.as_deref(), Some("work"));
-        assert!(document.needs_migration);
-        assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
-    }
-
-    // A version 4 file with every flag combination sati wrote, two sections, and a view.
-    const VERSION_4_TASKS: &str = r#"{"schema_version":4,"tasks":[
-        {"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:01Z","section":"Work","text":"open","completed":false},
-        {"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:02Z","text":"unsectioned","completed":false,"carried":false},
-        {"id":"00000000-0000-4000-8000-000000000003","created_at":"2026-11-07T19:24:03Z","section":"Home","text":"done","completed":true},
-        {"id":"00000000-0000-4000-8000-000000000004","created_at":"2026-11-07T19:24:04Z","section":"Work","text":"kept","completed":false,"carried":true}
-    ],"selected":3,"section":"work","section_order":["work","home"]}"#;
-
-    #[test]
-    fn version_4_flags_become_one_status_and_everything_else_is_kept() {
-        let fixture = Fixture::new();
-        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-        fs::write(fixture.task_path(), VERSION_4_TASKS).unwrap();
-
-        let document = fixture.storage.load_document().unwrap();
-        let id = |number: u8| format!("00000000-0000-4000-8000-00000000000{number}");
-
-        let tasks: Vec<_> = document
-            .tasks
-            .iter()
-            .map(|task| {
-                let created = task.created_at.second();
-                (
-                    task.id.to_string(),
-                    created,
-                    task.display_text(),
-                    task.status,
-                )
-            })
-            .collect();
-        assert_eq!(
-            tasks,
-            [
-                (id(1), 1, "Work: open".to_owned(), TaskStatus::Pending),
-                (id(2), 2, "unsectioned".to_owned(), TaskStatus::Pending),
-                (id(3), 3, "Home: done".to_owned(), TaskStatus::Completed),
-                (id(4), 4, "Work: kept".to_owned(), TaskStatus::Carried),
-            ]
-        );
-        assert_eq!(document.selected, Some(3));
-        assert_eq!(document.section.as_deref(), Some("work"));
-        assert_eq!(document.section_order, ["work", "home"]);
-
-        // Loading never writes; the next save writes version 5 with `status` only.
-        assert!(document.needs_migration);
-        assert_eq!(
-            fs::read_to_string(fixture.task_path()).unwrap(),
-            VERSION_4_TASKS
-        );
-
-        fixture
-            .storage
-            .save_view(
-                &document.tasks,
-                &document.section_order,
-                document.selected,
-                document.section.as_deref(),
-            )
-            .unwrap();
-        let saved: serde_json::Value =
-            serde_json::from_slice(&fs::read(fixture.task_path()).unwrap()).unwrap();
-
-        assert_eq!(saved["schema_version"], 5);
-
-        let statuses: Vec<_> = saved["tasks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|task| {
-                assert!(task.get("completed").is_none() && task.get("carried").is_none());
-                task["status"].as_str().unwrap().to_owned()
-            })
-            .collect();
-        assert_eq!(statuses, ["pending", "pending", "completed", "carried"]);
-        assert_eq!(
-            fixture.storage.load_document().unwrap().tasks,
-            document.tasks
-        );
-    }
-
-    #[test]
-    fn a_version_4_task_both_completed_and_carried_is_refused_untouched() {
-        let fixture = Fixture::new();
-        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-        let both = VERSION_4_TASKS.replace(
-            r#""completed":false,"carried":true"#,
-            r#""completed":true,"carried":true"#,
-        );
-        fs::write(fixture.task_path(), &both).unwrap();
-
-        let error = fixture
-            .storage
-            .load_document()
-            .err()
-            .expect("rejected")
-            .to_string();
-
-        assert!(error.contains("migrating from version 4"), "{error}");
-        assert!(
-            error.contains("task 4 cannot be both completed and carried"),
-            "{error}"
-        );
-        assert!(error.contains("left untouched"), "{error}");
-        assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), both);
-    }
 
     #[test]
     fn version_5_files_need_one_known_status_per_task() {
@@ -1251,18 +638,6 @@ pub mod tests {
         let saved: serde_json::Value =
             serde_json::from_slice(&fs::read(fixture.task_path()).unwrap()).unwrap();
         assert!(saved["tasks"][0].get("section").is_none());
-
-        let stray = r#"{"schema_version":2,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Work","text":"a","completed":false}]}"#;
-        fs::write(fixture.task_path(), stray).unwrap();
-        let error = fixture
-            .storage
-            .load_document()
-            .err()
-            .expect("rejected")
-            .to_string();
-
-        assert!(error.contains("migrating from version 2"), "{error}");
-        assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), stray);
     }
 
     #[test]
@@ -1272,13 +647,13 @@ pub mod tests {
         let id = "00000000-0000-4000-8000-000000000001";
         let task = |id: &str, created_at: &str| {
             format!(
-                r#"{{"id":"{id}","created_at":"{created_at}","text":"task","completed":false}}"#
+                r#"{{"id":"{id}","created_at":"{created_at}","text":"task","status":"pending"}}"#
             )
         };
         let time = "2026-11-07T19:24:05Z";
 
         let duplicate = format!(
-            r#"{{"schema_version":2,"tasks":[{},{},{}]}}"#,
+            r#"{{"schema_version":5,"tasks":[{},{},{}]}}"#,
             task(id, time),
             task("00000000-0000-4000-8000-000000000002", time),
             task(id, time),
@@ -1300,20 +675,20 @@ pub mod tests {
 
         for json in [
             format!(
-                r#"{{"schema_version":2,"tasks":[{}]}}"#,
+                r#"{{"schema_version":5,"tasks":[{}]}}"#,
                 task("not-a-uuid", time)
             ),
             format!(
-                r#"{{"schema_version":2,"tasks":[{}]}}"#,
+                r#"{{"schema_version":5,"tasks":[{}]}}"#,
                 task(id, "2026-11-07")
             ),
             format!(
-                r#"{{"schema_version":2,"tasks":[{}]}}"#,
+                r#"{{"schema_version":5,"tasks":[{}]}}"#,
                 task(id, "2026-02-30T00:00:00Z")
             ),
-            r#"{"schema_version":2,"tasks":[{"text":"no id","completed":false}]}"#.to_owned(),
-            r#"{"schema_version":1,"tasks":["not an object"]}"#.to_owned(),
-            r#"{"schema_version":1}"#.to_owned(),
+            r#"{"schema_version":5,"tasks":[{"text":"no id","status":"pending"}]}"#.to_owned(),
+            r#"{"schema_version":5,"tasks":["not an object"]}"#.to_owned(),
+            r#"{"schema_version":5}"#.to_owned(),
         ] {
             fs::write(fixture.task_path(), &json).unwrap();
             let error = fixture
@@ -1326,33 +701,6 @@ pub mod tests {
             assert!(error.contains("invalid task file"), "{json}: {error}");
             assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
         }
-    }
-
-    #[test]
-    fn version_3_files_get_their_alphabetical_tab_order_without_writing() {
-        let fixture = Fixture::new();
-        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-        let tasks: Vec<_> = ["Work", "home", "Errands", "work"]
-            .iter()
-            .enumerate()
-            .map(|(index, section)| {
-                serde_json::json!({
-                    "id": format!("00000000-0000-4000-8000-00000000000{index}"),
-                    "created_at": "2026-11-07T19:24:05Z",
-                    "section": section,
-                    "text": "task",
-                    "completed": false,
-                })
-            })
-            .collect();
-        let json = serde_json::json!({"schema_version": 3, "tasks": tasks}).to_string();
-        fs::write(fixture.task_path(), &json).unwrap();
-
-        let document = fixture.storage.load_document().unwrap();
-
-        assert_eq!(document.section_order, ["errands", "home", "work"]);
-        assert!(document.needs_migration);
-        assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
     }
 
     #[test]
@@ -1435,43 +783,46 @@ pub mod tests {
     }
 
     #[test]
-    fn legacy_tasks_default_to_unmarked_and_invalid_carryover_is_left_untouched() {
+    fn older_and_unversioned_files_are_refused_without_writing() {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-        let legacy = r#"[{"text":"old","completed":false},{"text":"done","completed":true}]"#;
-        fs::write(fixture.task_path(), legacy).unwrap();
-        let mut tasks = fixture.storage.load().unwrap();
 
-        let statuses: Vec<_> = tasks.iter().map(|task| task.status).collect();
-        assert_eq!(statuses, [TaskStatus::Pending, TaskStatus::Completed]);
+        for version in 0..OLDEST_SCHEMA_VERSION {
+            let json = format!(r#"{{"schema_version":{version},"tasks":[]}}"#);
+            fs::write(fixture.task_path(), &json).unwrap();
 
-        tasks[0].status = TaskStatus::Carried;
-        fixture.storage.save(&tasks).unwrap();
-        assert_eq!(fixture.storage.load().unwrap(), tasks);
+            let error = fixture
+                .storage
+                .load_document()
+                .err()
+                .expect("rejected")
+                .to_string();
 
-        // Each task stores exactly one `status`, and no longer the old flags.
-        let json = serde_json::to_value(&tasks).unwrap();
-        assert_eq!(json[0]["status"], "carried");
-        assert_eq!(json[1]["status"], "completed");
-
-        for task in json.as_array().unwrap() {
-            assert!(task.get("completed").is_none() && task.get("carried").is_none());
+            assert!(
+                error.contains(&format!("schema version {version}")),
+                "{error}"
+            );
+            assert!(error.contains("only opens version 5 and later"), "{error}");
+            assert!(error.contains("left untouched"), "{error}");
+            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
         }
 
-        for invalid in [
-            r#"[{"text":"bad","completed":true,"carried":true}]"#,
-            r#"[{"text":"bad","completed":false,"carried":null}]"#,
-            r#"[{"text":"bad","completed":false,"carried":"true"}]"#,
+        for (json, problem) in [
+            (r#"{"tasks":[]}"#, "missing schema_version"),
+            (r#"[{"text":"a","completed":false}]"#, "expected an object"),
         ] {
-            fs::write(fixture.task_path(), invalid).unwrap();
-            let error = fixture.storage.load().unwrap_err().to_string();
-            assert!(error.contains("invalid task file"));
+            fs::write(fixture.task_path(), json).unwrap();
 
-            if invalid.contains(r#""completed":true"#) {
-                assert!(error.contains("task 1 cannot be both completed and carried"));
-            }
+            let error = fixture
+                .storage
+                .load_document()
+                .err()
+                .expect("rejected")
+                .to_string();
 
-            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), invalid);
+            assert!(error.contains("invalid task file"), "{json}: {error}");
+            assert!(error.contains(problem), "{json}: {error}");
+            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
         }
     }
 
@@ -1535,7 +886,7 @@ pub mod tests {
         let lock_path = directory.join("tasks.lock");
         fs::write(&lock_path, "").unwrap();
         fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o640)).unwrap();
-        fs::write(fixture.task_path(), "[]\n").unwrap();
+        fs::write(fixture.task_path(), r#"{"schema_version":5,"tasks":[]}"#).unwrap();
         fs::set_permissions(fixture.task_path(), fs::Permissions::from_mode(0o640)).unwrap();
         let unrelated = fixture.directory.join("other-user-file");
         fs::write(&unrelated, "Keep this file unchanged").unwrap();
@@ -1766,8 +1117,8 @@ pub mod tests {
             "not json",
             "{}",
             "null",
-            r#"[{"text":"missing completion"}]"#,
-            r#"[{"text":"future data","completed":false,"extra":1}]"#,
+            r#"{"schema_version":5,"tasks":[{"text":"missing identity and status"}]}"#,
+            r#"{"schema_version":5,"tasks":[],"extra":1}"#,
         ] {
             fs::write(fixture.task_path(), invalid).unwrap();
             assert!(fixture.storage.load().is_err());

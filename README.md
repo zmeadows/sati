@@ -363,18 +363,14 @@ its own `section` field, separate from its `text`; typing `Work: fix bug` sets t
 to `Work` and the text to `fix bug`, and the task is still shown, edited, and exported as
 `Work: fix bug`.
 
-The file starts with a `schema_version` (currently `5`). Older files, including the
-original bare task lists, are upgraded in memory when sati starts and written in the
-current format on the next save or normal quit; starting sati never rewrites the file by
-itself. Upgraded tasks receive new ids and share the upgrade time as their `created_at`,
-since their real creation times are unknown, and `Name: ` prefixes in older files move into
-the `section` field once. Upgraded files order their section tabs alphabetically, as
-earlier versions showed them, and the older `completed` / `carried` flags become one
-`status`. A file written by a newer version of sati is refused and left untouched, as is
-any file that cannot be read or upgraded (including an older file that marks a task both
-completed and carried, or a task with a missing or unknown `status`), that gives two tasks
-the same `id`, or whose `section_order` doesn't list each section exactly once. Older
-versions of sati cannot open version 5 files.
+The file starts with a `schema_version` (currently `5`). Files from older formats, including
+the original bare task lists, are no longer upgraded: sati refuses them and leaves them
+untouched, so open such a file once with an older sati release to upgrade it. Future format
+changes will be upgraded in memory when sati starts and written in the current format on
+the next save or normal quit; starting sati never rewrites the file by itself. A file
+written by a newer version of sati is refused and left untouched, as is any file that cannot
+be read (including a task with a missing or unknown `status`), that gives two tasks the
+same `id`, or whose `section_order` doesn't list each section exactly once.
 
 ## Credits
 
