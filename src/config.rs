@@ -5,6 +5,7 @@ use std::{
     env,
     ffi::OsString,
     fs, io,
+    ops::Range,
     path::{Path, PathBuf},
 };
 
@@ -111,38 +112,126 @@ fn accent_style<'de, D: Deserializer<'de>>(
     Ok(style)
 }
 
-impl Config {
-    pub fn load(explicit: Option<&Path>) -> Result<Self> {
-        let discovered;
+// The configuration file sati reads and watches. Only an explicit `--config` file is
+// required to exist; a missing default file means built-in defaults.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConfigFile {
+    pub path: PathBuf,
+    pub required: bool,
+}
 
-        let path = match explicit {
-            Some(path) => path,
-            None => {
-                discovered = default_path(|name| env::var_os(name))?;
+// The raw state of the file at one moment. Checks compare it with the previous state so
+// identical contents are never parsed or applied twice.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConfigText {
+    Missing,
+    Text(String),
+    Unreadable(String),
+}
 
-                let Some(path) = discovered.as_deref() else {
-                    return Ok(Self::default());
-                };
+// Why a configuration file could not be used, kept structured so the error overlay can
+// show the offending source line instead of one flattened string.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConfigError {
+    pub path: PathBuf,
+    pub message: String,
+    pub location: Option<SourceLocation>,
+}
 
-                path
-            }
-        };
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourceLocation {
+    // 1-based, as editors number lines.
+    pub line_number: usize,
+    // The source line without its line ending.
+    pub line: String,
+    // The offending bytes within `line`, on character boundaries; may be empty at the end.
+    pub columns: Range<usize>,
+}
 
-        let text = match fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(error) if explicit.is_none() && error.kind() == io::ErrorKind::NotFound => {
-                return Ok(Self::default());
-            }
-            Err(error) => {
-                return Err(
-                    format!("could not read configuration {}: {error}", path.display()).into(),
-                );
-            }
-        };
+impl ConfigFile {
+    // Only an unusable environment is an error here: no file change could fix it.
+    pub fn locate(explicit: Option<&Path>) -> Result<Option<Self>> {
+        if let Some(path) = explicit {
+            // Watch events report absolute paths, and the working directory never changes.
+            return Ok(Some(Self {
+                path: std::path::absolute(path)?,
+                required: true,
+            }));
+        }
 
-        toml::from_str(&text)
-            .map_err(|error| format!("invalid configuration {}: {error}", path.display()).into())
+        let path = default_path(|name| env::var_os(name))?;
+
+        Ok(path.map(|path| Self {
+            path,
+            required: false,
+        }))
     }
+
+    pub fn read(&self) -> ConfigText {
+        match fs::read_to_string(&self.path) {
+            Ok(text) => ConfigText::Text(text),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => ConfigText::Missing,
+            Err(error) => ConfigText::Unreadable(error.to_string()),
+        }
+    }
+}
+
+impl Config {
+    pub fn parse(file: &ConfigFile, text: &ConfigText) -> std::result::Result<Self, ConfigError> {
+        let error = |message: String, location| ConfigError {
+            path: file.path.clone(),
+            message,
+            location,
+        };
+
+        let text = match text {
+            ConfigText::Text(text) => text,
+            ConfigText::Missing if !file.required => return Ok(Self::default()),
+            ConfigText::Missing => {
+                return Err(error(
+                    "The file does not exist. sati applies it as soon as it is created.".into(),
+                    None,
+                ));
+            }
+            ConfigText::Unreadable(reason) => {
+                return Err(error(format!("Could not read the file: {reason}"), None));
+            }
+        };
+
+        toml::from_str(text).map_err(|parse_error| {
+            let location = parse_error
+                .span()
+                .and_then(|span| source_location(text, span));
+
+            error(parse_error.message().trim_end().to_string(), location)
+        })
+    }
+}
+
+fn source_location(text: &str, span: Range<usize>) -> Option<SourceLocation> {
+    if span.start > text.len() || !text.is_char_boundary(span.start) {
+        return None;
+    }
+
+    let line_start = text[..span.start].rfind('\n').map_or(0, |index| index + 1);
+    let line_end = text[span.start..]
+        .find('\n')
+        .map_or(text.len(), |index| span.start + index);
+    let line = text[line_start..line_end].trim_end_matches('\r');
+
+    // Clamp the span to its first line; a multi-line value is marked from its start.
+    let start = (span.start - line_start).min(line.len());
+    let end = span.end.saturating_sub(line_start).clamp(start, line.len());
+
+    if !line.is_char_boundary(end) {
+        return None;
+    }
+
+    Some(SourceLocation {
+        line_number: text[..line_start].matches('\n').count() + 1,
+        line: line.to_string(),
+        columns: start..end,
+    })
 }
 
 fn default_path(get: impl Fn(&str) -> Option<OsString>) -> Result<Option<PathBuf>> {
@@ -274,5 +363,119 @@ mod tests {
                 Some(root.join(".config/sati/config.toml"))
             );
         }
+    }
+
+    fn file(fixture: &crate::storage::tests::Fixture, required: bool) -> ConfigFile {
+        ConfigFile {
+            path: fixture.directory.join("config.toml"),
+            required,
+        }
+    }
+
+    fn parse_error(text: &str) -> ConfigError {
+        let fixture = crate::storage::tests::Fixture::new();
+
+        Config::parse(&file(&fixture, false), &ConfigText::Text(text.into())).unwrap_err()
+    }
+
+    #[test]
+    fn reading_tells_missing_readable_and_unreadable_files_apart() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let file = file(&fixture, false);
+
+        assert_eq!(file.read(), ConfigText::Missing);
+
+        fs::write(&file.path, "theme = 'nord'").unwrap();
+        assert_eq!(file.read(), ConfigText::Text("theme = 'nord'".into()));
+
+        fs::remove_file(&file.path).unwrap();
+        fs::create_dir(&file.path).unwrap();
+        assert!(matches!(file.read(), ConfigText::Unreadable(_)));
+    }
+
+    #[test]
+    fn missing_default_files_use_defaults_but_missing_explicit_files_are_errors() {
+        let fixture = crate::storage::tests::Fixture::new();
+
+        let config = Config::parse(&file(&fixture, false), &ConfigText::Missing).unwrap();
+        assert_eq!(config.display, Display::default());
+
+        let error = Config::parse(&file(&fixture, true), &ConfigText::Missing).unwrap_err();
+        assert_eq!(error.path, fixture.directory.join("config.toml"));
+        assert!(
+            error.message.contains("does not exist"),
+            "{}",
+            error.message
+        );
+        assert_eq!(error.location, None);
+    }
+
+    #[test]
+    fn unreadable_files_are_errors_without_a_source_line() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let text = ConfigText::Unreadable("permission denied".into());
+
+        let error = Config::parse(&file(&fixture, false), &text).unwrap_err();
+
+        assert!(error.message.contains("permission denied"));
+        assert_eq!(error.location, None);
+    }
+
+    #[test]
+    fn invalid_values_point_at_their_line_and_columns() {
+        let error = parse_error("[display]\nwrap = 'x'\nkeybinds = true\n");
+
+        assert!(
+            error.message.contains("expected a boolean"),
+            "{}",
+            error.message
+        );
+        assert_eq!(
+            error.location,
+            Some(SourceLocation {
+                line_number: 2,
+                line: "wrap = 'x'".into(),
+                columns: 7..10,
+            })
+        );
+    }
+
+    #[test]
+    fn malformed_toml_and_unknown_keys_report_their_position() {
+        let location = parse_error("bad toml").location.unwrap();
+        assert_eq!((location.line_number, location.columns), (1, 4..4));
+
+        let error = parse_error("[display]\r\nwrpa = true\r\n");
+
+        assert!(error.message.contains("unknown field `wrpa`"));
+        assert_eq!(
+            error.location,
+            Some(SourceLocation {
+                line_number: 2,
+                line: "wrpa = true".into(),
+                columns: 0..4,
+            })
+        );
+    }
+
+    #[test]
+    fn unknown_themes_keep_the_list_of_available_themes() {
+        let error = parse_error("theme='unknown'");
+
+        assert!(error.message.contains("Available themes: default"));
+        assert_eq!(error.location.unwrap().columns, 6..15);
+    }
+
+    #[test]
+    fn spans_are_clamped_to_their_first_line_and_character_boundaries() {
+        let text = "a = 1\nb = '''\nfirst\nsecond'''\n";
+
+        let location = source_location(text, 10..30).unwrap();
+
+        assert_eq!(location.line_number, 2);
+        assert_eq!(location.line, "b = '''");
+        assert_eq!(location.columns, 4..7);
+        assert!(source_location(text, 99..100).is_none());
+        assert!(source_location("é", 1..2).is_none());
     }
 }
