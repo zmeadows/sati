@@ -204,7 +204,7 @@ fn default_path(get: impl Fn(&str) -> Option<OsString>) -> Result<Option<PathBuf
         if !base.is_absolute() {
             return Err("configuration directory must be an absolute path".into());
         }
-        Ok(base.join("sati/config.toml"))
+        Ok(base.join("sati").join("config.toml"))
     })
     .transpose()
 }
