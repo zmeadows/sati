@@ -2,7 +2,7 @@
 name = "sati"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "A quiet, persistent terminal checklist"
 license = "MIT"
 readme = "README.md"
@@ -13,7 +13,6 @@ todo = "warn"
 unimplemented = "warn"
 
 [dependencies]
-fs4 = "1.1.0"
 nucleo-matcher = "0.3.1"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "layout-cache"] }
 serde = { version = "1.0", features = ["derive"] }

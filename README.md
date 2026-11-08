@@ -46,7 +46,7 @@ Builds target Linux x86_64 and ARM64 (GNU/glibc, built on Ubuntu 22.04), macOS
 Apple Silicon and Intel, and Windows x86_64. Ubuntu 22.04 provides an older glibc
 baseline; compatibility with older Linux systems is not guaranteed.
 
-With [Rust and Cargo](https://www.rust-lang.org/tools/install) (Rust 1.88 or newer):
+With [Rust and Cargo](https://www.rust-lang.org/tools/install) (Rust 1.89 or newer):
 
 ```sh
 cargo install --git https://github.com/zmeadows/sati --locked

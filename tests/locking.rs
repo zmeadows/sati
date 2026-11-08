@@ -21,7 +21,7 @@ fn second_process_cannot_read_tasks_while_the_directory_is_locked() {
             .open(data.join("tasks.lock"))
             .unwrap();
 
-        fs4::FileExt::try_lock(&held).unwrap();
+        held.try_lock().unwrap();
         fs::write(data.join("ready"), "").unwrap();
         std::io::stdin().read_line(&mut String::new()).unwrap();
         return;

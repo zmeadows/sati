@@ -1,7 +1,7 @@
 use std::{
     env,
     error::Error,
-    fs::{self, DirBuilder, File, OpenOptions},
+    fs::{self, DirBuilder, File, OpenOptions, TryLockError},
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -121,10 +121,12 @@ impl Storage {
             .map_err(|error| format!("could not open {}: {error}", path.display()))?;
 
         // Keep this file open and never unlink it: every instance must lock the same inode.
-        match fs4::FileExt::try_lock(&file) {
+        match file.try_lock() {
             Ok(()) => Ok(file),
-            Err(fs4::TryLockError::WouldBlock) => Err("already running".into()),
-            Err(error) => Err(format!("could not lock {}: {error}", path.display()).into()),
+            Err(TryLockError::WouldBlock) => Err("already running".into()),
+            Err(TryLockError::Error(error)) => {
+                Err(format!("could not lock {}: {error}", path.display()).into())
+            }
         }
     }
 

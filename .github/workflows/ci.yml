@@ -38,9 +38,9 @@ jobs:
       - name: Build release
         if: ${{ !cancelled() }}
         run: cargo build --release --locked
-      - name: Install Rust 1.88
+      - name: Install Rust 1.89
         if: matrix.os == 'ubuntu-latest'
-        uses: dtolnay/rust-toolchain@1.88.0
-      - name: Check Rust 1.88 compatibility
+        uses: dtolnay/rust-toolchain@1.89.0
+      - name: Check Rust 1.89 compatibility
         if: matrix.os == 'ubuntu-latest'
-        run: cargo +1.88.0 check --locked --all-targets
+        run: cargo +1.89.0 check --locked --all-targets

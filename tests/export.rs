@@ -80,7 +80,7 @@ fn export_reads_committed_tasks_while_the_writer_lock_is_held() {
         .open(fixture.data.join("tasks.lock"))
         .unwrap();
 
-    fs4::FileExt::try_lock(&held).unwrap();
+    held.try_lock().unwrap();
     let before = fs::read(fixture.data.join("tasks.json")).unwrap();
     let output = fixture.run(&[]);
 
@@ -108,14 +108,13 @@ fn export_reads_committed_tasks_while_the_writer_lock_is_held() {
         "deliberately invalid unused history"
     );
     assert!(
-        fs4::FileExt::try_lock(
-            &OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(fixture.data.join("tasks.lock"))
-                .unwrap()
-        )
-        .is_err()
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(fixture.data.join("tasks.lock"))
+            .unwrap()
+            .try_lock()
+            .is_err()
     );
 }
 

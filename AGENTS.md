@@ -11,9 +11,9 @@
 
 ## Stack and source layout
 
-- Rust 2024 edition; minimum supported Rust version (MSRV) **1.88** (`Cargo.toml`).
+- Rust 2024 edition; minimum supported Rust version (MSRV) **1.89** (`Cargo.toml`).
 - Ratatui **0.30.2** with its Crossterm backend (default features off; see `Cargo.toml` for the enabled set). Import Crossterm via **`ratatui::crossterm`**, not an independently versioned direct dependency.
-- Serde/JSON for persisted tasks; `toml` for optional configuration; `fs4` for advisory file locks; `unicode-segmentation` and `unicode-width` for text handling; `nucleo-matcher` for the section picker's fuzzy matching (kept separate from task search).
+- Serde/JSON for persisted tasks; `toml` for optional configuration; the standard library (`File::try_lock`) for advisory file locks; `unicode-segmentation` and `unicode-width` for text handling; `nucleo-matcher` for the section picker's fuzzy matching (kept separate from task search).
 - `src/main.rs`: CLI arguments (hand-parsed, no CLI framework), `export` subcommand dispatch, startup, applying the effective configuration, terminal lifecycle, event loop, and platform-specific terminal capabilities.
 - `src/app.rs`: `Task`, application modes, key/mouse dispatch, task mutations, selection, scrolling, and bounded undo history.
 - `src/input.rs`: single-line, grapheme-aware `TextInput`; cursor is a UTF-8 byte offset kept at a grapheme boundary.
@@ -163,10 +163,10 @@ cargo test --locked -- --exact path::to::test_name         # one exact test
 When possible, also check the declared MSRV:
 
 ```sh
-cargo +1.88.0 check --locked --all-targets
+cargo +1.89.0 check --locked --all-targets
 ```
 
-`.github/workflows/ci.yml` checks Linux, macOS, and Windows; strict Clippy runs on all three, while formatting and Rust 1.88 checks run on Ubuntu. Report commands you could not run, rather than claiming they passed.
+`.github/workflows/ci.yml` checks Linux, macOS, and Windows; strict Clippy runs on all three, while formatting and Rust 1.89 checks run on Ubuntu. Report commands you could not run, rather than claiming they passed.
 
 ## Scope discipline
 
