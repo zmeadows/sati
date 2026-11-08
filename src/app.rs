@@ -277,6 +277,10 @@ struct UndoState {
     tasks: Vec<Task>,
     section_order: Vec<String>,
     selected: Option<usize>,
+    view: SectionView,
+    // The view the change from this snapshot left behind. Undo and redo return to `view`
+    // only while the user is still there, so a later manual tab switch is kept.
+    left_view: SectionView,
     // Describes the change from this snapshot to the next state, e.g. "delete task".
     label: String,
 }
@@ -718,9 +722,10 @@ impl App {
         section_order.swap(position, target);
 
         // Only the tab order changes; the tasks and their order in [*] stay as they are.
-        self.replace_with_section_order(
+        self.replace_with(
             self.tasks.clone(),
             section_order,
+            self.view.clone(),
             self.list.selected(),
             "move section",
             storage,
@@ -937,42 +942,53 @@ impl App {
         storage: &Storage,
     ) -> Result<()> {
         let section_order = self.section_order.clone();
+        let view = self.view.clone();
 
-        self.replace_with_section_order(tasks, section_order, selected, label, storage)
+        self.replace_with(tasks, section_order, view, selected, label, storage)
     }
 
     // Update memory only after a successful save. Any save error exits the event loop;
     // after a post-replacement error, the next run reloads the file already on disk.
+    // `view` is the tab the change switches to (e.g. [*] once a tab empties); it is saved
+    // with the tasks and, like them, only takes effect once the save succeeds.
     // `section_order` is settled against `tasks`, so new sections join at the end.
-    fn replace_with_section_order(
+    fn replace_with(
         &mut self,
         tasks: Vec<Task>,
         section_order: Vec<String>,
+        view: SectionView,
         selected: Option<usize>,
         label: impl Into<String>,
         storage: &Storage,
     ) -> Result<()> {
         let section_order = settled_section_order(&section_order, &tasks);
 
-        storage.save_view(&tasks, &section_order, selected, self.view.saved_key())?;
+        storage.save_view(&tasks, &section_order, selected, view.saved_key())?;
         self.persisted_selection = crate::storage::valid_selection(&tasks, selected);
-        self.persisted_view = self.view.clone();
+        self.persisted_view = view.clone();
         self.needs_migration = false;
+
+        let previous_tasks = std::mem::replace(&mut self.tasks, tasks);
+        let previous_order = std::mem::replace(&mut self.section_order, section_order);
+        let previous_selected = self.list.selected();
+        let previous_view = std::mem::replace(&mut self.view, view);
+        self.list.select(selected);
+        self.reveal_selection = true;
+        self.settle_view();
 
         if self.history.len() == HISTORY_LIMIT {
             self.history.pop_front();
         }
 
         self.history.push_back(UndoState {
-            tasks: std::mem::replace(&mut self.tasks, tasks),
-            section_order: std::mem::replace(&mut self.section_order, section_order),
-            selected: self.list.selected(),
+            tasks: previous_tasks,
+            section_order: previous_order,
+            selected: previous_selected,
+            view: previous_view,
+            left_view: self.view.clone(),
             label: label.into(),
         });
         self.redo_history.clear();
-        self.list.select(selected);
-        self.reveal_selection = true;
-        self.settle_view();
 
         Ok(())
     }
@@ -1074,10 +1090,10 @@ impl App {
     }
 
     fn restore_snapshot(&mut self, storage: &Storage, redo: bool) -> Result<()> {
-        let (source, destination) = if redo {
-            (&mut self.redo_history, &mut self.history)
+        let source = if redo {
+            &mut self.redo_history
         } else {
-            (&mut self.history, &mut self.redo_history)
+            &mut self.history
         };
 
         let Some(previous) = source.back() else {
@@ -1090,36 +1106,57 @@ impl App {
             return Ok(());
         };
 
+        // Return to the snapshot's tab only if the user hasn't switched tabs since the change;
+        // otherwise keep their tab, which `settle_view` still corrects if it no longer fits.
+        let view = if self.view == previous.left_view {
+            previous.view.clone()
+        } else {
+            self.view.clone()
+        };
+
         storage.save_view(
             &previous.tasks,
             &previous.section_order,
             previous.selected,
-            self.view.saved_key(),
+            view.saved_key(),
         )?;
         self.persisted_selection =
             crate::storage::valid_selection(&previous.tasks, previous.selected);
-        self.persisted_view = self.view.clone();
+        self.persisted_view = view.clone();
         self.needs_migration = false;
         let previous = source.pop_back().unwrap();
+
+        let verb = if redo { "Redid" } else { "Undid" };
+        let message = format!("{verb}: {}", previous.label);
+
+        let current_tasks = std::mem::replace(&mut self.tasks, previous.tasks);
+        let current_order = std::mem::replace(&mut self.section_order, previous.section_order);
+        let current_selected = self.list.selected();
+        let current_view = std::mem::replace(&mut self.view, view);
+        self.list
+            .select(previous.selected.filter(|&index| index < self.tasks.len()));
+        self.reveal_selection = true;
+        self.settle_view();
+
+        let destination = if redo {
+            &mut self.history
+        } else {
+            &mut self.redo_history
+        };
 
         if destination.len() == HISTORY_LIMIT {
             destination.pop_front();
         }
 
-        let verb = if redo { "Redid" } else { "Undid" };
-        let message = format!("{verb}: {}", previous.label);
-
         // The label describes the same change in either direction, so it moves with it.
         destination.push_back(UndoState {
-            tasks: std::mem::replace(&mut self.tasks, previous.tasks),
-            section_order: std::mem::replace(&mut self.section_order, previous.section_order),
-            selected: self.list.selected(),
+            tasks: current_tasks,
+            section_order: current_order,
+            selected: current_selected,
+            view: current_view,
+            left_view: self.view.clone(),
             label: previous.label,
         });
-        self.list
-            .select(previous.selected.filter(|&index| index < self.tasks.len()));
-        self.reveal_selection = true;
-        self.settle_view();
         self.notify(message);
 
         Ok(())
@@ -1199,11 +1236,15 @@ impl App {
         let cleared = self.tasks_phrase(removed, "");
 
         // Emptying the current tab returns to [*].
-        if visible_survivors.is_empty() {
-            self.view = SectionView::All;
-        }
+        let view = if visible_survivors.is_empty() {
+            SectionView::All
+        } else {
+            self.view.clone()
+        };
 
-        self.replace(tasks, selected, format!("clear {cleared}"), storage)?;
+        let section_order = self.section_order.clone();
+        let label = format!("clear {cleared}");
+        self.replace_with(tasks, section_order, view, selected, label, storage)?;
 
         if kept == 0 {
             self.notify(format!("Cleared {cleared}"));
@@ -1287,11 +1328,15 @@ impl App {
         let cleared = self.tasks_phrase(removed, "completed ");
 
         // Emptying the current tab returns to [*].
-        if visible_survivors.is_empty() {
-            self.view = SectionView::All;
-        }
+        let view = if visible_survivors.is_empty() {
+            SectionView::All
+        } else {
+            self.view.clone()
+        };
 
-        self.replace(tasks, selected, format!("clear {cleared}"), storage)?;
+        let section_order = self.section_order.clone();
+        let label = format!("clear {cleared}");
+        self.replace_with(tasks, section_order, view, selected, label, storage)?;
         self.notify(format!("Cleared {cleared}"));
 
         Ok(())
@@ -1408,21 +1453,14 @@ impl App {
         }
 
         // The new tab is saved with the renamed tasks; a failed save keeps the old one.
-        let old_view = std::mem::replace(&mut self.view, SectionView::Named(new_key));
-
-        let renamed_tasks = self.replace_with_section_order(
+        self.replace_with(
             tasks,
             section_order,
+            SectionView::Named(new_key),
             self.list.selected(),
             "rename section",
             storage,
-        );
-
-        if let Err(error) = renamed_tasks {
-            self.view = old_view;
-
-            return Err(error);
-        }
+        )?;
 
         self.notify(format!(
             "Renamed {old_label} to {name} ({renamed} {})",
@@ -2055,14 +2093,24 @@ impl App {
                     let visible_neighbor = next.map(|&next| next - 1).or(previous);
 
                     // Deleting a tab's last task returns to [*].
-                    if visible_neighbor.is_none() {
-                        self.view = SectionView::All;
-                    }
+                    let view = if visible_neighbor.is_none() {
+                        SectionView::All
+                    } else {
+                        self.view.clone()
+                    };
 
                     let selected = visible_neighbor
                         .or_else(|| (!tasks.is_empty()).then(|| index.min(tasks.len() - 1)));
 
-                    self.replace(tasks, selected, "delete task", storage)?;
+                    let section_order = self.section_order.clone();
+                    self.replace_with(
+                        tasks,
+                        section_order,
+                        view,
+                        selected,
+                        "delete task",
+                        storage,
+                    )?;
                     self.notify("Deleted task");
                 }
             }
@@ -4524,6 +4572,143 @@ mod tests {
             assert_eq!(task_state(&app), before);
             assert!(app.notification.is_none());
         }
+    }
+
+    // Each way to remove the last tasks of a tab, as keys pressed in Normal mode.
+    const TAB_EMPTYING_KEYS: [&[KeyCode]; 3] = [
+        &[KeyCode::Char('d')],
+        &[KeyCode::Char('x')],
+        &[KeyCode::Char('D'), KeyCode::Enter],
+    ];
+
+    fn app_on_a_tab_with_one_completed_task() -> App {
+        let mut app = app_with_texts(&["Home: a", "Work: b"]);
+        app.tasks[1].status = TaskStatus::Completed;
+        app.show_section(SectionView::Named("work".into()));
+
+        app
+    }
+
+    fn saved_view(fixture: &Fixture) -> SectionView {
+        App::from_document(fixture.storage.load_document().unwrap()).view
+    }
+
+    #[test]
+    fn failed_saves_that_would_empty_a_tab_keep_its_view_tasks_and_history() {
+        for keys in TAB_EMPTYING_KEYS {
+            let fixture = Fixture::new();
+            let mut app = app_on_a_tab_with_one_completed_task();
+            fixture.storage.save(&app.tasks).unwrap();
+            let before = task_state(&app);
+            block_saves(&fixture);
+
+            let (last, setup) = keys.split_last().unwrap();
+
+            for &key in setup {
+                press(&mut app, &fixture, key);
+            }
+
+            let result = app.key(KeyEvent::from(*last), &fixture.storage);
+
+            assert!(result.is_err(), "{keys:?}");
+            assert_eq!(app.view, SectionView::Named("work".into()), "{keys:?}");
+            assert_eq!(app.persisted_view, SectionView::All, "{keys:?}");
+            assert_eq!(task_state(&app), before, "{keys:?}");
+        }
+    }
+
+    #[test]
+    fn undo_returns_to_the_tab_a_removal_emptied_and_redo_leaves_it_again() {
+        for keys in TAB_EMPTYING_KEYS {
+            let fixture = Fixture::new();
+            let mut app = app_on_a_tab_with_one_completed_task();
+            let original = app.tasks.clone();
+
+            for &key in keys {
+                press(&mut app, &fixture, key);
+            }
+
+            assert_eq!(app.view, SectionView::All, "{keys:?}");
+            assert_eq!(app.tasks.len(), 1, "{keys:?}");
+
+            press(&mut app, &fixture, KeyCode::Char('u'));
+
+            assert_eq!(app.view, SectionView::Named("work".into()), "{keys:?}");
+            assert_eq!(app.tasks, original, "{keys:?}");
+            assert_eq!(app.list.selected(), Some(1), "{keys:?}");
+            assert_eq!(saved_view(&fixture), app.view, "{keys:?}");
+
+            press(
+                &mut app,
+                &fixture,
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            );
+
+            assert_eq!(app.view, SectionView::All, "{keys:?}");
+            assert_eq!(app.tasks.len(), 1, "{keys:?}");
+            assert_eq!(saved_view(&fixture), SectionView::All, "{keys:?}");
+        }
+    }
+
+    #[test]
+    fn undo_and_redo_of_a_rename_follow_the_section_between_its_names() {
+        let fixture = Fixture::new();
+        let mut app = app_on_a_tab_with_one_completed_task();
+
+        app.rename_section("Job", &fixture.storage).unwrap();
+        assert_eq!(app.view, SectionView::Named("job".into()));
+
+        press(&mut app, &fixture, KeyCode::Char('u'));
+        assert_eq!(app.view, SectionView::Named("work".into()));
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.view, SectionView::Named("job".into()));
+        assert_eq!(saved_view(&fixture), app.view);
+    }
+
+    #[test]
+    fn undo_keeps_a_tab_chosen_manually_after_the_change() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Work: b", "Home: c"]);
+        app.show_section(SectionView::Named("work".into()));
+
+        press(&mut app, &fixture, KeyCode::Char('d'));
+        assert_eq!(app.view, SectionView::Named("work".into()));
+
+        // The restored task is visible in [*], so nothing pulls the view back to Work.
+        app.show_section(SectionView::All);
+        press(&mut app, &fixture, KeyCode::Char('u'));
+
+        assert_eq!(app.tasks.len(), 3);
+        assert_eq!(app.view, SectionView::All);
+        assert_eq!(app.list.selected(), Some(0));
+        assert_eq!(saved_view(&fixture), SectionView::All);
+    }
+
+    #[test]
+    fn a_failed_undo_keeps_the_view_tasks_and_both_histories() {
+        let fixture = Fixture::new();
+        let mut app = app_on_a_tab_with_one_completed_task();
+        press(&mut app, &fixture, KeyCode::Char('d'));
+        let before = task_state(&app);
+        block_saves(&fixture);
+
+        assert!(app.undo(&fixture.storage).is_err());
+        assert_eq!(app.view, SectionView::All);
+        assert_eq!(task_state(&app), before);
+
+        restore_saves(&fixture);
+        app.undo(&fixture.storage).unwrap();
+        block_saves(&fixture);
+
+        assert!(app.redo(&fixture.storage).is_err());
+        assert_eq!(app.view, SectionView::Named("work".into()));
+        assert_eq!(app.tasks.len(), 2);
+        assert!(app.can_redo());
     }
 
     #[test]
