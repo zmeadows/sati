@@ -152,7 +152,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     if app.mode == Mode::ConfirmClear {
         let section = app.scope_label().map(|label| format!("{label} "));
         let question = format!("Clear unmarked {}tasks?", section.unwrap_or_default());
-        draw_confirmation(frame, area, &app.styles, &question);
+        draw_confirmation(frame, area, &app.styles, app.border_style, &question);
     }
 
     if matches!(app.mode, Mode::Help { .. }) {
@@ -974,7 +974,13 @@ fn draw_input_line(
     }
 }
 
-fn draw_confirmation(frame: &mut Frame, area: Rect, styles: &Styles, question: &str) {
+fn draw_confirmation(
+    frame: &mut Frame,
+    area: Rect,
+    styles: &Styles,
+    border_style: BorderStyle,
+    question: &str,
+) {
     let width = area.width.min(40);
     let height = area.height.min(7);
 
@@ -987,7 +993,9 @@ fn draw_confirmation(frame: &mut Frame, area: Rect, styles: &Styles, question: &
 
     frame.render_widget(Clear, dialog);
     frame.render_widget(Block::default().style(styles.normal), dialog);
-    let block = Block::bordered().border_style(styles.border);
+    let block = Block::bordered()
+        .border_type(border_type(border_style))
+        .border_style(styles.border);
     let inner = block.inner(dialog);
     frame.render_widget(block, dialog);
 
@@ -1561,6 +1569,31 @@ mod tests {
         render(&mut terminal, &mut app);
 
         assert!(screen(&terminal).contains("Clear unmarked Work tasks?"));
+    }
+
+    #[test]
+    fn the_clear_confirmation_uses_the_configured_border_style() {
+        for (border_style, corners) in [
+            (BorderStyle::Square, ['┌', '┐', '└', '┘']),
+            (BorderStyle::Rounded, ['╭', '╮', '╰', '╯']),
+        ] {
+            let mut app = app_with_texts(&["a"]);
+            app.border_style = border_style;
+            app.mode = Mode::ConfirmClear;
+            let mut terminal = test_terminal(80, 20);
+
+            render(&mut terminal, &mut app);
+
+            // Skip the list's own border columns so only the dialog's corners are counted.
+            let dialog_corners = screen(&terminal)
+                .lines()
+                .flat_map(|line| line.chars().skip(1).take(78).collect::<Vec<_>>())
+                .filter(|c| corners.contains(c))
+                .count();
+
+            assert!(screen(&terminal).contains("Clear unmarked tasks?"));
+            assert_eq!(dialog_corners, 4, "{border_style:?}");
+        }
     }
 
     #[test]

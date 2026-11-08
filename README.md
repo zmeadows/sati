@@ -18,14 +18,14 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 
 ## Features
 
-- **One local list.** Changes are saved automatically, without accounts or synchronization. A muted `? for help` in the bottom-right corner is the only on-screen hint.
-- **Shortcuts on demand.** Press `?` for a keyboard reference instead of a permanent shortcut footer.
+- **One local list.** Changes are saved automatically, without accounts or synchronization.
+- **Shortcuts on demand.** Press `?` for a keyboard reference instead of a permanent shortcut footer. A muted `? for help` in the bottom-right corner is the only on-screen hint.
 - **Keyboard-first, with optional mouse support.** Navigate, reorder, and complete tasks from the keyboard. Click a task to toggle it, or scroll with the mouse wheel; `--no-mouse` leaves the mouse to your terminal.
 - **Search in place.** Find tasks as you type, see matching text highlighted, and jump to a result without filtering or rearranging the list.
 - **Sections.** Start a task with `Name: ` to group it; a tab bar then lets you focus on one section at a time.
 - **Carryover.** Mark unfinished tasks with `m` (`[↪]`) to keep them when clearing the list.
 - **Undo and redo.** Up to 256 changes in either direction during the current session.
-- **Display options.** Wrap long tasks and change some style settings with command-line flags. When tasks don't fit, a scrollbar on the right border shows where you are.
+- **Display options.** Wrap long tasks, pick a theme, and adjust borders, markers, and colors with command-line flags or a configuration file. When tasks don't fit, a scrollbar on the right border shows where you are.
 
 ## Suggested usage
 
@@ -154,14 +154,13 @@ on screen, and `Tab` and `Enter` wait until the query matches again. On a narrow
 terminal, a long section name is shortened with `…` so the current tab stays visible.
 
 Press `L` / `H` (or `Alt+N` / `Alt+P`) on a section tab to move it one place right or
-left among the named sections; a count such as `3L` moves it further. `[*]` and `[-]` stay first, the ends don't wrap, and the
-tasks themselves keep their order; `u` undoes a move. Renaming a section keeps its place.
+left among the named sections; a count such as `3L` moves it further. `[*]` and `[-]` stay
+first, the ends don't wrap, and the tasks themselves keep their order; `u` undoes a move. Renaming a section keeps its place.
 A section disappears from the order with its last task, and comes back at the right end
 if you use it again. On macOS, the `Alt` shortcuts need the terminal to send Option as
 Meta (Esc+).
 
- A section tab hides the shared prefix
-and keeps navigation, counts, reordering (`J` / `K`), and search within its own tasks.
+A section tab hides the shared prefix and keeps navigation, counts, reordering (`J` / `K`), and search within its own tasks.
 `X`, `D`, and `c` clear or copy only the current tab's tasks; `sati export` always
 exports the whole list.
 If a change moves the selected task out of the tab (for example editing its prefix, or
@@ -199,8 +198,8 @@ partial word (such as `wo`), `Tab` / `Shift+Tab` (or `Ctrl+N` / `Ctrl+P`) cycle 
 matching sections, shown as dim text after the cursor. `Space` or `Enter` accepts the
 suggestion, and typing any other character accepts it and continues after `Work: `.
 `Backspace` dismisses it and keeps the input open; `Esc` or `Ctrl+G` cancels the whole add
-or edit, suggestion included. Adding a task from a section tab starts with that section suggested; from `[*]` or
-`[-]`, nothing is suggested until you press `Tab`. A section with no task text after it
+or edit, suggestion included. Adding a task from a section tab starts with that section
+suggested; from `[*]` or `[-]`, nothing is suggested until you press `Tab`. A section with no task text after it
 adds nothing.
 
 **Search:** Press `/` and type. Each change to the query focuses the first match starting from the task that was selected when search began (that task itself if it matches), wrapping to the top. `Tab` / `Shift+Tab` (or `Ctrl+N` / `Ctrl+P`) cycle through the matches, and moving the cursor within the query keeps the focused match. `Enter` selects the focused match and returns to the checklist. `Esc` cancels and restores your previous selection. Exiting search clears highlighting; the query is not remembered.
@@ -219,6 +218,10 @@ adds nothing.
 | `--mouse` / `--no-mouse` | Enable (default) / disable mouse capture. |
 | `--accent COLOR` | Override the theme/TOML accent foreground: ANSI name, hex RGB, or palette index 0–255. |
 
+Display and input flags override the matching [configuration](#configuration) settings.
+`--data-dir` is global: it can go before or after `export`. The other options apply only
+to the interactive checklist.
+
 Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--marker-style ascii` uses `>`, `[ ]`, `[x]`, and `[>]`; it changes only task markers, and other UI symbols remain Unicode.
 
 The `default` theme uses your terminal’s foreground and background, with dimming for muted
@@ -232,7 +235,7 @@ sati --accent '#a9b665'
 sati --accent 3
 ```
 
-Run `sati --help` for the command-line help (`-h` and `--help` are the same), `sati --version`
+Run `sati --help` for the command-line help (`-h` gives a shorter summary), `sati --version`
 for the version, and `sati export --help` for export's own help.
 
 ## Configuration
@@ -303,7 +306,8 @@ must be absolute; `--config` also accepts relative paths without expanding `~`.
 sati reads its configuration once, at startup. After editing the file, restart sati
 for the changes to take effect. A configuration problem (malformed TOML, an unknown
 key, a bad value or color, or a missing `--config` file) stops sati with an error
-before the interface opens.
+before the interface opens. `--help`, `--version`, and `sati export` don't read the
+configuration file.
 
 CLI pairs override either TOML value: `--no-wrap` disables wrapping, and `--wrap`
 re-enables it. When both flags of a pair are given, the last one wins.
@@ -364,7 +368,6 @@ that ignore OSC 11 still get cell backgrounds. OSC 111 restores the configured
 terminal background, if Sati changed it, on exit or when switching to a theme without an
 effective background. It cannot recover a temporary OSC override that existed before
 Sati started.
-Help, version output, and Markdown export do not load display configuration.
 
 ## Export
 
@@ -384,8 +387,8 @@ order and literal text preserved.
 
 Press `c` in the checklist to send the same Markdown, limited to the current section
 tab, to the terminal clipboard using OSC 52. The brief “Copy sent to terminal” message
-clears on subsequent activity or after `status_message_duration_ms`; clipboard acceptance depends on terminal and
-multiplexer support.
+clears on subsequent activity or after `status_message_duration_ms`; clipboard acceptance
+depends on terminal and multiplexer support.
 `--no-status-messages` (or `status_messages = false`) hides this and sati's other brief
 status messages (undo/redo descriptions, wrap, delete and clear confirmations, and hints such as
 “Nothing to undo”), but a failed copy is still reported.
@@ -407,6 +410,9 @@ so separate directories can be open at the same time. The interactive checklist 
 directory (and any missing parents) if needed; `sati export` only reads it, never creates
 it, and reports an error if it is missing or not a directory. An existing directory without
 a `tasks.json` is an empty checklist.
+
+Each running sati shows exactly one checklist; there is no switching between lists inside
+the app.
 
 `--data-dir` only chooses where tasks live. Configuration is still read from the default
 `config.toml` (or `--config PATH`), and neither option changes the other. For example, to

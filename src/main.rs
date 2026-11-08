@@ -95,10 +95,11 @@ struct Cli {
     #[command(subcommand)]
     command: Option<CliCommand>,
 
-    /// Use tasks.json and tasks.lock in this directory instead of the default data directory
+    /// Use the checklist in this directory instead of the default data directory
     ///
-    /// Each directory holds an independent checklist. sati creates the directory if needed;
-    /// export only reads it. This is unrelated to --config.
+    /// The directory holds tasks.json and tasks.lock; each directory is an independent
+    /// checklist. sati creates the directory if needed; export only reads it. It does not
+    /// change where config.toml is read from.
     #[arg(long, value_name = "PATH", global = true)]
     data_dir: Option<PathBuf>,
 
