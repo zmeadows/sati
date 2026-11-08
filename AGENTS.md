@@ -1,149 +1,127 @@
 # Agent instructions for sati
 
-## Project intent
+## Purpose and priorities
 
-`sati` is a small, persistent terminal checklist written in Rust. It aims to feel like a paper checklist: add tasks, cross them off, reorder them, and clear the list when the context changes. Simplicity is a product requirement, not an unfinished feature set.
+`sati` is a small, persistent terminal checklist written in Rust. It should feel like a paper checklist: add tasks, cross them off, reorder them, and clear the list when the context changes. Simplicity is an intentional product requirement, not a missing feature set.
 
-- Favor clear, small changes over new abstractions, dependencies, settings, or features.
-- Keep the interface quiet and keyboard-friendly. Do not add calendars, tags, priorities, reminders, projects, synchronization, or configurable keybindings unless explicitly requested. Sections (one optional section per task, shown as tabs) were explicitly requested. Each task stores its section in its own field; the `Word: ` typing syntax is only how users enter and edit it.
-- Preserve existing behavior and cross-platform support. Avoid unrelated cleanup while implementing a focused change.
-- Read the current code before editing; this file is orientation, not a replacement for the implementation.
+Prioritize, in order:
 
-## Stack and source layout
+1. Correctness and preservation of user data.
+2. Code that is easy to understand, debug, and change.
+3. A quiet, responsive, keyboard-friendly interface.
+4. Small changes with little ongoing maintenance cost.
 
-- Rust 2024 edition; minimum supported Rust version (MSRV) **1.89** (`Cargo.toml`).
-- Ratatui **0.30.2** with its Crossterm backend (default features off; see `Cargo.toml` for the enabled set). Import Crossterm via **`ratatui::crossterm`**, not an independently versioned direct dependency.
-- Clap (derive) for command-line parsing and help; Serde/JSON for persisted tasks; `toml` for optional configuration; the standard library (`File::try_lock`) for advisory file locks; `atomic-write-file` for atomic task-file saves; `unicode-segmentation` and `unicode-width` for text handling; `nucleo-matcher` for the section picker's fuzzy matching (kept separate from task search).
-- `src/main.rs`: the Clap derive CLI (`Cli`, with `CliOptions` for the interactive options and a `CliCommand` enum for subcommands such as `export`; add a subcommand as a new variant and a `run()` match arm), the global `--data-dir` (defined once on `Cli` with Clap's `global = true`, so it works before or after a subcommand), subcommand dispatch, startup, applying the effective configuration, terminal lifecycle, event loop, and platform-specific terminal capabilities.
-- `src/app.rs`: `Task`, application modes, key/mouse dispatch, task mutations, selection, scrolling, and bounded undo history.
-- `src/input.rs`: single-line, grapheme-aware `TextInput`; cursor is a UTF-8 byte offset kept at a grapheme boundary.
-- `src/ui.rs`: layout, wrapping, drawing, mouse row mapping, input cursor placement, and the `?` keyboard reference (`HELP_GROUPS`, `draw_help`).
-- `src/storage.rs`: platform data paths, exclusive instance lock, JSON loading/validation, schema versioning and migrations, and atomic replacement saves.
-- `src/config.rs`: TOML config discovery (`$XDG_CONFIG_HOME`/`~/.config`, macOS Application Support, `%APPDATA%`), reading, and parsing through `Config::load`. A missing default file means defaults; an explicit `--config` file must exist. Unknown keys and invalid files are errors; sati never writes config files. `status_message_duration_ms` and `show_help_hint` are TOML-only (no CLI flags). `[input] mouse` (default `true`, CLI `--mouse`/`--no-mouse`) decides whether sati captures the mouse. Precedence is CLI > TOML > defaults; within a CLI on/off pair (`--wrap`/`--no-wrap`), the last flag wins (Clap `overrides_with`).
-- `src/themes.rs` / `src/styles.rs`: built-in theme palettes and the resolved `Styles` (theme + TOML overrides + `--accent`).
-- `src/search.rs`: search matching and highlight ranges for `Searching`.
-- `src/export.rs`: Markdown rendering shared by `sati export` (stdout only) and the `c` OSC 52 clipboard copy. Export runs without taking the instance lock (it works while the TUI is open) and never writes files.
-- `src/status_message.rs`: `StatusMessage`, the timed status messages on the checklist's bottom border (e.g. theme name after `t` / `T`). They are TUI messages, not operating-system notifications. Each message carries its total lifetime (`display.status_message_duration_ms`, default `DEFAULT_DURATION` = 3560 ms, a positive integer): accented for the first 300 ms or the whole lifetime if shorter, then normal style. The event loop wakes only at phase boundaries via `next_redraw`; the renderer just asks the message for its current style.
-- Unit tests live in `#[cfg(test)] mod tests` inside each module; `tests/` holds integration tests that run the binary (`cli`, `config`, `directories`, `export`, `locking`). Integration tests isolate data/config by overriding `HOME`, `XDG_DATA_HOME`, and `APPDATA`; never point tests at the real user data directory. They run the binary without a terminal, so every run must fail or exit before terminal setup (invalid configuration stops startup before storage, and an invalid `tasks.json` stops it after a valid configuration); otherwise crossterm can take over the developer's `/dev/tty`.
+Do not introduce calendars, tags, priorities, reminders, projects, synchronization, configurable keybindings, or other product features unless requested. Sections are an intentional part of the existing design. Preserve existing behavior and Linux, macOS, and Windows support unless the task explicitly changes them.
 
-## Behavioral invariants
+Read the relevant implementation and documentation before editing. This file describes durable constraints and engineering standards; it is not an exhaustive behavior specification. `README.md` documents the user-facing interface, while the source is authoritative for implementation details.
 
-### Tasks and app state
+## Code organization
 
-- A task has `id` (UUID v4, unique within the file, kept through edits, toggles, moves, and undo; a paste is a new task with a new id), `created_at` (`time::OffsetDateTime`, stored as whole-second UTC RFC 3339 like `2026-11-07T19:24:05Z`; get new values from `current_time()`), optional `section` (the source of truth for the task's section; `text` holds only the body), `text`, and a required `status` (`TaskStatus`: `Pending`, `Completed`, or `Carried`, stored as `"pending"`, `"completed"`, `"carried"`); list order is meaningful. Create tasks from typed text with `Task::new`, which splits `Work: fix bug` into section and body; use `display_text()` for the composed form (editing, the copy register, search outside a section tab, export). A completed task cannot be carried, and the single `status` field makes that combination unrepresentable; match on `TaskStatus` rather than adding boolean accessors. `Space`/`Enter` complete a pending or carried task and return a completed one to pending; `m` toggles pending and carried (completed tasks only get a notice); `D` keeps carried tasks and `X` (deliberately shifted; plain `x` does nothing) removes completed ones, both within the current tab. New and pasted tasks start pending. Markdown export writes `- [x]` only for completed tasks.
-- Task text is a nonempty, trimmed, single-line description. Preserve arbitrary valid Unicode; reject corrupt persisted data rather than silently repairing or overwriting it.
-- The normal list selection refers to a **task**, not a wrapped display row. Keep indices valid after deletion, reordering, clearing, and undo.
-- A task's section comes from its `section` field, compared case-insensitively. Typed input sets it when the text starts with a word followed by `": "` (`task_prefix`, via `split_section`); stored text is never re-parsed for a section. Stored sections must be one word without spaces, colons, or control characters. `App::view` (`SectionView`) filters what is shown; the selection is always a full-list index of a **visible** task. Navigation, counts, `J`/`K`, and search work over visible tasks; in `[*]` they must behave exactly as without sections. `settled_view` falls back to `[*]` when the tab vanished and follows a selection that left the tab to its own section; mutations and undo/redo resolve it against the new tasks before saving (so the saved tab is the shown tab), and loading applies it through `settle_view`. The active tab is persisted as an optional `section` key in `tasks.json` (absent for `[*]`, `""` for `[-]`). Named tabs follow `App::section_order` (lowercase keys), the single source of the tab order: `settled_section_order` keeps it listing each used section exactly once (new sections append, a section leaves with its last task); it is saved with every mutation and carried in undo snapshots, `rename_section` keeps a renamed key in place, and `move_section` (`H`/`L`, `Alt+P`/`Alt+N`) moves the tab without wrapping or touching tasks (a counted `3L` is one remove/insert, one save, and one undo step). `h`/`l`, `Alt+B`/`Alt+F`, and `s`/`Alt+S` + digit (a transient prefix like a count; any non-digit only cancels it, and it expires like a count, with the event loop waking via `section_jump_expires_in` to hide its digit hint) are Normal-mode only. While adding or editing, a pending section suggestion (`Completion`) exists only while the input is one partial word with the cursor at its end; `Tab`/`Shift+Tab` (and `Ctrl+N`/`Ctrl+P`) cycle it, `Space`/`Enter`/typing/paste accept it, `Backspace` only dismisses it, `Esc`/`Ctrl+G` cancel the whole add/edit, and any other key dismisses it. `E` on a named tab enters `RenamingSection`, drawn as an input inside the active tab; confirming sets `section` on every task in that tab as one undo step ("rename section") and moves the view to the new key. `rename_problem` blocks names taken by another section (a case-only change of the same section is allowed) or invalid as stored sections, and its message is shown even with `--no-status-messages`. `` ` `` enters `FuzzySection`, the section picker, drawn as a label-free input in place of `[*]` followed by only the matching tabs (`section_matches`: nucleo fuzzy score, ties and the empty query in tab order, `[-]` matched as "unsectioned", never `[*]`). Its query, matches, and `NavigationCheckpoint` (view, selection, scroll, tab scroll, reveal flag) are transient mode state. The focused match is simply `App::view`: every query edit (detected via `matched_query`, so cursor moves don't count) previews the best match through `show_section`, and `Tab`/`Shift+Tab`/`Ctrl+N`/`Ctrl+P` step through matches with wrapping (`Ctrl+←`/`Ctrl+→` move by word as in every input); with no matches, the last preview stays and only editing or `Esc` act. `Enter` confirms only when `App::view` is one of the matches, keeping the preview as ordinary navigation (no undo entry, saved only on clean exit); `Esc`/`Ctrl+G` restore the checkpoint. Previews never write `tasks.json` (`save_selection` uses the checkpoint), and drawing the picker must not change `tab_scroll` or the checkpoint.
-- `tasks.json` stores `{schema_version, tasks, selected, section, section_order}` (current version 5). Unknown or missing `status` values make the file invalid. A `section_order` that does not list each task section exactly once in lowercase makes the file invalid. Duplicate ids make the file invalid. The file must be a JSON object with an integer `schema_version`; `Storage::load_document` removes that field, refuses versions below `OLDEST_SCHEMA_VERSION` (currently 5; older migrations were removed) or above `SCHEMA_VERSION`, and otherwise upgrades the remaining document in memory through `MIGRATIONS` (`MIGRATIONS[n]` upgrades version `OLDEST_SCHEMA_VERSION + n`; currently empty). A format change bumps `SCHEMA_VERSION` and appends one migration step that first parses the previous version strictly into its own typed struct with `deny_unknown_fields`, then builds the next version, never inserting into or overwriting raw fields. An upgraded document sets `needs_migration`, so the current version is written on the next save or clean exit; loading never writes. Reject unsupported, malformed, and failed-migration files with an error, leaving the file untouched. Save resulting selection with mutations and undo/redo; navigation-only focus is saved on clean exit, without persisting temporary search selection.
-- `a` appends, `o` inserts below selection, and `O` inserts above selection.
-- `j`/`k`/`J`/`K` and their aliases, plus `h`/`l` and `H`/`L`, accept a Vim-style count (`5j`, `3l`, `2H`); counted moves clamp at the ends while plain `j`/`k`/`h`/`l` wrap, and a counted reorder is one undo step. `Ctrl+N`/`Ctrl+P` are normalized to `Down`/`Up` in Normal and Help modes and to `Tab`/`Shift+Tab` in input modes, so they share each mode's next/previous behavior. Likewise, Normal mode only, `normalize_key` rewrites the Emacs-style aliases `Ctrl+O` → `o`, `Alt+E` → `e`, `Alt+G` → `` ` ``, `Ctrl+V` → `PageDown`, `Alt+V` → `PageUp`, and the Org-mode reorder keys `Alt+Up` → `K` and `Alt+Down` → `J` (so they take counts and fire once per press) before the repeat check, so they inherit dispatch and repeat policy; in input modes those chords stay ignored. `Shift+Up`/`Shift+Down` no longer reorder; they reach the plain arrow arms. In Normal mode `Ctrl+S` searches like `/` and `Ctrl+F`, and `Ctrl+D`/`Ctrl+U` move half a viewport through `page` (the shared Page Up/Down routine, given `viewport_height / 2` rows, at least one); every text input keeps `Ctrl+D` as delete-character, `Ctrl+U` as delete-to-start, and `Ctrl+K` as delete-to-end, and `Ctrl+K` does nothing in Normal mode (there is no cut; `y`/`d`/`p` cover it). `Alt+Backspace` deletes the previous word in every input, like `Ctrl+W`/`Ctrl+Backspace`. A pending count is transient, never saved or shown, and any other key, mouse event, or paste discards it; it also expires `PREFIX_TIMEOUT` (2 s) after its last digit, so a stray digit cannot affect a much later motion.
-- Undo and redo each hold at most **256 in-memory snapshots** of tasks, section order, selection, and view. A snapshot also records the view its change left behind; undo/redo return to the snapshot's view only while the user is still on that view, so manual tab switches are kept; a kept tab moves the restored selection into it (its first task when the snapshot's selection lies outside it). Mutations pass their target view (e.g. `[*]` when a tab empties) to `replace_with`, which saves it with the tasks and commits it only after the save succeeds. Only successful mutations enter ordinary history and clear redo. Undo/redo transfer snapshots between stacks after saving. Navigation, cancellation, and no-ops leave both histories unchanged.
-- Each undo snapshot carries a short action label (e.g. "delete task") that `replace` stores and undo/redo show as "Undid:/Redid: …"; every new mutation must pass one. Routine status messages go through `App::show_status_message` so `--no-status-messages` (`status_messages = false`) can hide them; errors and validation feedback (a failed copy, `rename_problem`) use `App::show_important_status_message` and are always shown. Both use the configured `status_message_duration`.
-- Undo/redo history is session-only. Never read, write, or delete legacy `history.json` files. Undo/redo still save their resulting task lists to authoritative `tasks.json` before transferring snapshots.
+The project uses Rust 2024 with MSRV **1.89**. Consult `Cargo.toml` for dependencies and enabled features; do not assume a new dependency is needed. Import Crossterm through `ratatui::crossterm`, not a separately versioned direct dependency.
 
-### Storage and failure handling
+- `src/main.rs` — Clap CLI and subcommands, configuration startup order, terminal setup/cleanup, and event loop.
+- `src/app.rs` — task model, modes, application state, input dispatch, task mutations, navigation, and undo/redo.
+- `src/ui.rs` — layout, drawing, wrapped rows, mouse mapping, and the `?` keyboard reference (`HELP_GROUPS`).
+- `src/storage.rs` — platform data paths, instance locking, persistent schema, validation, migration, and atomic saving.
+- `src/input.rs` — grapheme-aware single-line editing.
+- `src/config.rs` — strict TOML configuration and discovery.
+- `src/styles.rs`, `src/themes.rs` — resolved styling and built-in themes.
+- `src/search.rs` — task search and highlight ranges.
+- `src/export.rs` — Markdown output and clipboard content.
+- `src/status_message.rs` — timed, in-terminal feedback.
+- `tests/` — binary-level integration checks; module-local checks live in `#[cfg(test)]` sections.
 
-- Acquire `tasks.lock` before loading and hold the lock for the application's lifetime. Do **not** delete the lock file: all instances must coordinate on the same file.
-- Persist each task mutation **before** committing the new in-memory state or consuming undo history. A failed save must not become an accepted mutation.
-- Save JSON through `atomic-write-file` (`AtomicWriteFile`, then `commit()`), which writes a temporary file beside `tasks.json`, syncs it, renames it into place, and on Unix syncs the directory. Do not hand-roll temporary files, renames, or syncs, and never truncate/delete the live file first or fall back to a non-atomic copy. On Unix the saved file is always `0600` (`preserve_mode(false)` with `mode(0o600)`), even when replacing a file with looser permissions. Failed saves are reported. sati keeps no recovery files and adds no cleanup of its own; the crate removes its temporary file when a save is abandoned, but a `commit()` that fails at the rename can leave it behind.
-- Preserve meaningful errors and leave malformed user data untouched. A failed save must not claim the old list is unchanged: a commit error after the rename (such as a failed directory sync) can leave the replacement already visible.
-- `Storage::discover(data_dir)` uses an explicit `--data-dir` as given (`tasks.json` and `tasks.lock` directly inside it, no `sati` subdirectory, relative paths left relative); otherwise it discovers the platform directory. Each process manages exactly one checklist; separate data directories are independent checklists with independent locks, and there is no in-app switching between them. The interactive checklist creates the directory through `create_data_directory` (private `0700` on Unix, only when sati creates it); `export` never creates it and reports a missing or non-directory `--data-dir`, while a missing default directory still exports nothing. `--data-dir` and `--config` are independent, and there is no TOML `data_dir`.
-- Respect Linux `XDG_DATA_HOME` (or `~/.local/share`), macOS `~/Library/Application Support`, and Windows `%APPDATA%`. Do not assume Unix-only filesystem or terminal behavior.
+Prefer keeping work within an existing module when its responsibility naturally owns the behavior. Create a module only when it represents a substantial, coherent responsibility—not simply because a file is long.
 
-### Configuration
+## Engineering principles
 
-- `run()` reads and validates the configuration once with `Config::load`, before taking the instance lock, loading tasks, or setting up the terminal, then applies `CliOptions::resolve` (CLI > TOML > defaults) to the `App`. Any configuration error is fatal and reported on stderr with a nonzero exit; `--help`, `--version`, and `export` return before configuration is read. Argument errors, help, and version are Clap's own (`Cli::try_parse_arguments` exits before anything else runs; usage errors exit with status 2), and interactive options (`CliOptions`, including `--config`) cannot be combined with a subcommand. Clap's `args_conflicts_with_subcommands` would also reject the global `--data-dir` before a subcommand, so `try_parse_arguments` reports that conflict itself as a Clap `ArgumentConflict` error.
-- sati does not watch or reload its configuration: edits take effect on the next start. Do not add file watching, polling, or an in-app configuration error display.
-- Runtime `t` / `T` theme cycling is session-only and never writes configuration.
+### Make the work visible
 
-### Input, rendering, and terminal lifecycle
+Write straightforward Rust that a reader can follow in execution order. Prefer concrete types, ordinary functions, `if`, `match`, and loops when they communicate the operation more directly than elaborate iterator chains, closures, or generic machinery. Use concise standard-library expressions when those are clearer; procedural code is a preference, not a prohibition against idiomatic Rust.
 
-- Modes are `Normal`, `Adding`, `Editing`, `Searching`, `RenamingSection`, `FuzzySection`, `ConfirmClear`, and `Help`. Keep shortcuts mode-specific; accidental key repeats and key releases must not trigger destructive actions. `repeat_allowed` is an allowlist: navigation (`j`/`k`/`h`/`l`, arrows, Page Up/Down, `Ctrl+D`/`Ctrl+U`, `Tab`, `Alt+B`/`Alt+F`, stepping through matches or suggestions, scrolling the `?` reference) and text editing repeat; anything that mutates tasks or section order, confirms, or cancels fires once per press.
-- Text editing is deliberately **single-line**. Respect Unicode grapheme boundaries when moving, inserting, deleting, pasting, wrapping, and positioning the cursor. Use terminal-cell width, not byte or character count, for layout.
-- Task wrapping affects visual-row scrolling, Page Up/Down and `Ctrl+D`/`Ctrl+U`, mouse hit mapping, and selection visibility. Account for narrow/short windows and tasks taller than the viewport.
-- There is no persistent on-screen shortcut legend. The only standing hint is a muted `? for help` in the bottom-right corner of the border, shown in Normal mode when it fits, no status message is showing, and `display.show_help_hint` is not `false` (hiding it never disables `?`); it never takes a row. Keep contextual hints (such as search's `Tab to cycle` and the section-jump digits) compact, and **do not advertise Page Up/Down (or their `Ctrl+V`/`Alt+V` aliases) on screen**, including in the `?` reference; those are intentionally unlisted convenience shortcuts.
-- `?` (with or without Shift) opens `Mode::Help`, a read-only reference drawn by `draw_help` from the static `HELP_GROUPS` list in `src/ui.rs`. Keep that list in sync with the actual bindings; do not turn it into a registry or filter it by state. Its only state is `scroll`, plus the `max_scroll` and `page` that each draw records after clamping `scroll` to the layout shown, so resizing keeps a valid offset. The layout is chosen per draw: side by side from `HELP_WIDE_MIN_WIDTH` columns, keys under each action below that, and a centered "Enlarge terminal" message below `HELP_MIN_WIDTH`×`HELP_MIN_HEIGHT` (which leaves the offset untouched). `j`/`k`, arrows, `Ctrl+N`/`Ctrl+P` (normalized to `Down`/`Up` there), Page Up/Down, and `Home`/`End` scroll without wrapping; the mouse wheel scrolls, and clicks never reach the checklist. `?`, `Esc`, and `Ctrl+G` close it without touching tasks, selection, view, scroll, history, or the register; no other key, including `q`, acts while it is open.
-- Preserve raw-mode, alternate-screen, keyboard enhancement, paste, and mouse setup/cleanup. Mouse capture is enabled only when the resolved `mouse` option is `true` (`TerminalModes::enable_input`); otherwise `TerminalModes::mouse` stays false, so neither enable nor disable sequences are sent. Every action must stay reachable from the keyboard, since mouse events may never arrive. The terminal should be restored on normal exit, errors, and panic paths; unsupported optional features should degrade gracefully.
-- Respect the existing CLI flags and subdued styling. `config::BorderStyle` (`square`/`rounded`) and `config::MarkerStyle` (`unicode`/`ascii`) are shared by TOML (`border_style`, `marker_style`), Clap (`--border-style`, `--marker-style`), `Options`, and `App`; add values as enum variants, not booleans or handwritten parsers. Every bordered block (the checklist, the clear confirmation, the `?` reference) takes its corners from `ui::border_type`. The `default` theme inherits terminal foreground/background colors; the 15 named themes supply RGB foregrounds and backgrounds. TOML can override foregrounds, backgrounds, and modifiers for `normal`, `muted`, `completed`, `border`, and `accent`; `--accent` overrides only the resolved accent foreground.
-- Apply the resolved normal background through Ratatui cells and, for RGB colors, OSC 11 (including terminal padding). Use OSC 111 to restore the terminal's configured default when Sati changed it. Runtime `t` / `T` theme cycling is session-only, preserves TOML style and CLI accent overrides, and is reset on restart.
+Keep related operations close together. Avoid forcing readers through layers of delegation to discover what a command actually does. A reasonably long function with a coherent sequence of steps is often better than a collection of trivial functions. Conversely, length is not a reason to keep unrelated responsibilities together.
 
-## Code style and readability
+Use early returns and `let ... else` when they clarify preconditions. Name important intermediate values and prefer descriptive identifiers over dense, nested expressions. Match on meaningful enums rather than recreating their state with booleans.
 
-Write code a human can read top to bottom without decoding it. Readability matters more than saving lines. These rules apply to code you write or change; do not reformat or restructure untouched code just to apply them.
+### Make abstractions earn their cost
 
-`rustfmt` keeps your line breaks and indentation consistent, but it never adds blank lines. Spacing between ideas is your job.
+Start with a direct implementation. Extract a function when it removes meaningful duplication, isolates a distinct responsibility or invariant, makes side effects explicit, or materially clarifies its caller. A helper may be worthwhile even with one caller, but not merely to name a trivial step or satisfy a line-count preference.
 
-### Separate ideas with blank lines
+Do not introduce traits, generics, builders, macros, registries, callback systems, or abstraction layers for hypothetical future needs. Use them when a concrete problem justifies them. Some small duplication is preferable to an abstraction that obscures important differences. Judge a refactoring by the **total** reduction in concepts and effort needed to understand the affected code, not by lines removed.
 
-- Put a blank line between conceptually different chunks inside a function. A typical mutation has distinct steps: check preconditions, build the new state, persist it, commit it, update view state (selection, scroll, status messages), then return. Each step is a paragraph.
-- Never leave a long function as one unbroken block. As a rule of thumb, if roughly 10 to 15 consecutive lines have no blank line, look for the seam where one step ends and the next begins.
-- Put a blank line before the final `Ok(...)` or return value, and around multi-line `if`, `match`, `for`, and `while` blocks, unless the block is the only thing in its parent.
-- Keep tightly related lines together. Do not insert a blank line between every statement; that is as unreadable as none.
-- Always separate top-level items (`fn`, `impl`, `struct`, `enum`, `const`) with exactly one blank line.
+Prefer the project's existing direct design over a new framework. Do not reflexively generalize a special case; first establish that there is a stable common operation to express.
 
-Shape to aim for (this is `App::toggle_carryover` with its steps separated):
+### Keep state and effects understandable
 
-```rust
-fn toggle_carryover(&mut self, storage: &Storage) -> Result<()> {
-    let Some(index) = self.list.selected() else {
-        return Ok(());
-    };
+Make authoritative data obvious. Derive temporary values when practical instead of keeping multiple independently mutable representations synchronized. If caching or duplicated state is warranted, make the invariant and update points clear.
 
-    let (status, label) = match self.tasks[index].status {
-        TaskStatus::Pending => (TaskStatus::Carried, "mark carryover"),
-        TaskStatus::Carried => (TaskStatus::Pending, "unmark carryover"),
-        TaskStatus::Completed => return Ok(()),
-    };
+Make writes, mutation, fallible operations, and expensive work apparent at their call sites. Avoid APIs that appear to be simple queries but secretly persist data or mutate unrelated state. Keep the ordering of state transitions explicit, particularly when persistence or undo history is involved.
 
-    let mut tasks = self.tasks.clone();
-    tasks[index].status = status;
+Use Rust's ownership, enums, and `Result` to express actual constraints. Do not add defensive layers for impossible internal states, but keep validation and error handling at real boundaries: user input, JSON/TOML, the filesystem, the terminal, and platform-specific APIs. Simplification must not weaken reliability.
 
-    self.replace(tasks, Some(index), label, storage)
-}
-```
+### Optimize for readers, not a style checklist
 
-### Keep functions and expressions easy to follow
+Use whitespace to mark meaningful phases of an operation—validation, computation, persistence, state commit, and UI feedback, for example. Keep closely related statements together. Do not follow mechanical blank-line counts, split every expression, or force every function into a prescribed shape. Follow `.editorconfig` and `rustfmt.toml` (UTF-8, LF, four-space Rust indentation, 100-column formatting).
 
-- Long functions are fine. Do not split a function to make it shorter, to stay under a line count, or because it has several steps. Keep sequential steps together in one function, separated by blank lines and, where useful, short "why" comments, so the reader can follow the whole flow in one place without jumping around the file.
-- Extract a helper only to remove notable duplication. Weigh the size of the repeated chunk against how many times it repeats. Two copies of a three-line snippet are fine as they are. A ten-line chunk repeated a dozen times should almost certainly be a helper. Use judgment between those extremes, and when unsure, leave the code inline.
-- Do not extract a helper for code that appears only once, to give a step a name, or to reduce nesting or length.
-- When you do extract a helper to remove duplication, name it so the call sites read clearly without opening it, keep its parameters few, and place it near its first caller. Use a plain private function, not new traits, generics, builders, macros, or modules.
-- Existing long functions (for example `handle_normal_key` and `run`) are not a problem. Do not refactor or split them unless asked. Match the surrounding structure when extending them; for example, a new `match` arm should delegate to a named method if its neighbors do.
-- Give intermediate results a name with `let` instead of nesting calls or writing long one-line chains. Break iterator chains one adapter per line.
-- Use early returns, guard clauses, and `let ... else` to keep nesting shallow, ideally no more than three levels. Avoid deeply nested closures and `if`/`else` expressions embedded in arguments.
-- Use descriptive names (`selected_index`, not `si`). Single-letter names are fine only for tiny, obvious scopes such as a closure parameter or `r, g, b`.
-- Replace unexplained numbers and strings with named constants, as `HISTORY_LIMIT` does.
-- Prefer straightforward, idiomatic Rust over clever one-liners. Do not use `#[rustfmt::skip]` or shrink code to fit fewer lines.
+Comments should explain constraints, invariants, surprising behavior, and ordering requirements—especially the reason behind a non-obvious choice. Do not narrate obvious statements or leave commented-out alternatives. Prefer a readable implementation over a long explanatory comment compensating for opaque code.
 
-### Comments
+Do not introduce unexplained magic values when a named constant would clarify a real meaning. Do not create constants for obvious local literals simply to eliminate literals.
 
-- Comment why, not what. Explain invariants, platform quirks, and ordering constraints that the code cannot say itself, in the style of the existing comments in `src/storage.rs` ("Never truncate the live file...").
-- Put a short comment above a non-obvious block rather than at the end of a line. Do not narrate obvious code, and do not leave commented-out code.
+### Improve code without manufacturing churn
 
-### Tests
+Make the smallest **coherent** change, not necessarily the smallest textual diff. A nearby simplification is appropriate when it directly makes the requested change safer or easier to follow. Avoid speculative rewrites, wholesale formatting, or unrelated cleanup. Do not preserve a poor local structure merely because it already exists, but do not turn a focused fix into an architectural project.
 
-- Name tests as full sentences describing the behavior (for example `lock_stays_exclusive_across_saves_and_is_released_without_removing_file`).
-- Separate arrange, act, and assert with blank lines. Reuse the existing test helpers (such as `Fixture` in `src/storage.rs` tests and `press` in `src/app.rs` tests) instead of repeating setup.
-- Keep one behavior per test, and keep test code as readable as production code.
+Before finishing, read the changed path as a maintainer unfamiliar with it: Can they follow the operation? Identify the source of truth? See the side effects and failure paths? Does each helper or state field justify itself? If a simpler representation is genuinely clearer and equally dependable, prefer it.
 
-### Before you finish
+## Behavior and reliability contracts
 
-Reread your diff as a reviewer would. If any hunk looks like a wall of text, add blank lines or a short comment, or rename for clarity. Run `cargo fmt --all` last so the result is rustfmt-clean.
+The following are architectural invariants, not a complete shortcut specification. Check the README, current handlers, and the relevant help text before changing interactive behavior.
 
-## Development conventions
+### Tasks, sections, and selection
 
-- Follow `.editorconfig` and `rustfmt.toml`: UTF-8, LF, four-space Rust indentation, Rust 2024 formatting, 100-column width.
-- Reuse existing helpers and types instead of introducing frameworks or additional dependencies for small changes.
-- Clippy runs with `-D warnings` and `Cargo.toml` warns on `dbg!`, `todo!`, and `unimplemented!`. Do not leave any of them in code.
-- Keep error reporting actionable, especially for failures involving saved user data.
-- When behavior or options change, update the relevant README documentation, on-screen hints, and the `?` reference (`HELP_GROUPS`), subject to the deliberate Page Up/Down omission above.
-- Keep `Cargo.lock` checked in; review dependency changes for MSRV and Linux/macOS/Windows compatibility.
-- Do not automatically commit or push. If asked to commit, use a short Conventional Commit subject (for example, `fix: ...`, `feat: ...`, or `docs: ...`).
-- Never add watermarks, attribution, or trailers such as `Co-Authored-By:` or "Generated with ..." to commit messages, pull requests, or code.
+- `Task` has a stable UUID `id`, whole-second UTC `created_at`, optional authoritative `section`, body `text`, and one `TaskStatus` (`Pending`, `Completed`, `Carried`). List order matters. Edits and moves retain identity; pasted tasks receive new identities and start pending. The single status enum prevents a task from being both completed and carried.
+- Task bodies are nonempty, trimmed, single-line Unicode. Do not silently repair malformed persisted tasks. Use `Task::new` for user-entered text and `display_text()` where the composed `Section: body` representation is needed. A stored task body must not be re-parsed to infer its section.
+- Sections are stored in task fields and compared case-insensitively. Stored section names are single words without spaces, colons, or control characters. `App::section_order` is the authoritative tab ordering; it contains each used named section once. A rename preserves tab position, and reorder operations change tab order without reordering tasks.
+- `App::view` is a filter; selection remains a full-list index pointing to a **visible task**, not a wrapped screen row. Keep selection, scrolling, and the active view valid after mutations, clearing, renaming, undo/redo, and resizing. The all-tasks view must retain the behavior of a checklist without sections.
+- Section-picker previews and search/navigation state are transient. Canceling restores the appropriate checkpoint; previewing must not write `tasks.json` or enter undo history. Section changes that are part of a task mutation are settled **before** saving so the persisted view matches the committed one.
 
-## Verification commands
+### Mutations and history
 
-Run the applicable repository checks after code changes. Use `cargo fmt --all` to apply formatting; CI runs the `--check` form.
+- Build a proposed new state, **persist it first**, then accept it in memory and update undo/redo history. Never present a failed save as a successful mutation. Use the existing `replace` / `replace_with` path unless there is a concrete reason to modify it.
+- Undo/redo use bounded (256-entry), session-only snapshots of tasks, section order, selection, and view. Successful mutations produce coherent undo steps and clear redo; navigation, cancellation, and no-ops do not. Undo/redo also persist their result before committing it. Do not restore legacy `history.json` persistence.
+- Maintain the existing distinction between ordinary status feedback and important errors/validation feedback. A disabled routine-status-message option must not hide meaningful errors.
+
+### Durable storage
+
+- `tasks.json` is the authoritative document; its current `schema_version` is **5**. The schema includes tasks, selection, section, and section order. Reject malformed documents, duplicate IDs, invalid statuses or sections, incorrect section order, unknown schema versions, and unsupported old versions without modifying the file.
+- Loading validates strictly and does not write. For future schema changes, bump the version and provide an explicit, sequential migration from a strictly parsed typed previous schema; do not overwrite or patch unknown raw JSON fields. A migrated document is saved on the next save or clean exit, not during loading.
+- Hold the exclusive `tasks.lock` for the interactive process lifetime. Never delete the lock file: different processes must coordinate on the same pathname. Each selected data directory is an independent checklist.
+- Save using `atomic-write-file`; never hand-roll replacement, truncate the live file first, or fall back to non-atomic copying. Preserve the Unix `0600` save-file policy and private permissions when creating the data directory. Report save errors accurately: failure *after* rename may mean the replacement is already visible, even if `commit()` reported an error.
+- Respect platform-specific data paths and an explicitly supplied `--data-dir`; do not assume Unix-only behavior. `export` is read-only, does not take the interactive instance lock, and does not create a data directory or write files.
+
+### CLI and configuration
+
+- Preserve Clap's existing command/option structure, global `--data-dir`, and command-line error behavior. Keep interactive-only options separate from subcommands. `--help`, `--version`, and `export` return without loading interactive configuration.
+- Load and validate configuration once, before storage or terminal initialization. Configuration errors are fatal and actionable. Effective option precedence is **CLI > TOML > defaults**. Missing default configuration is allowed; an explicitly named config file must exist. Unknown keys are errors. Do not introduce live reload or automatic config writing.
+- Runtime theme changes are session-only. Preserve existing style override precedence and terminal-default theme semantics.
+
+### Input, rendering, and terminal operation
+
+- Keep shortcuts mode-specific and preserve both Vim-like and Emacs-like aliases. `normalize_key` and `repeat_allowed` define shared dispatch and repeat behavior: navigation/text editing may repeat where intended; mutations, confirmations, cancellation, and reordering must not accidentally run on key repeats or releases. Check all aliases and `HELP_GROUPS` when changing a binding.
+- Input is deliberately single-line and grapheme-aware. Cursor movement, editing, wrapping, search highlighting, and mouse hit mapping must handle arbitrary Unicode correctly. Layout uses **terminal-cell width**, not byte count or Unicode scalar count. Handle small viewports and tasks taller than a viewport.
+- `?` opens a read-only keyboard reference. Keep `HELP_GROUPS` aligned with actual shortcuts, but do not turn the help list into a dispatch registry. The normal screen has no persistent shortcut legend beyond its optional compact help hint. Page Up/Down and their aliases are intentionally omitted from on-screen shortcut descriptions.
+- Rendering may update transient viewport and hit-mapping state needed for subsequent input. Keep those relationships explicit; do not require purely functional rendering at the cost of substantially more machinery.
+- All actions must remain keyboard-accessible. Mouse capture follows the resolved option, and no mouse enable/disable sequence should be sent when capture is off. Preserve raw-mode, alternate-screen, keyboard enhancement, bracketed-paste, background-color, and terminal restoration behavior on normal exit, errors, and panic. Optional terminal capabilities should degrade gracefully.
+- Preserve the subdued visual design, resolved theme overrides, and OSC 11/111 background application/restoration behavior when touching terminal colors. Use the existing shared enums and `ui::border_type` for style options instead of creating parallel representations.
+
+## Working process
+
+1. Inspect the affected code and its callers before choosing an approach. Determine which data is authoritative, which invariants constrain the change, and what happens when an operation fails.
+2. Implement the simplest dependable design that meets the actual request. Reuse existing types and helpers where they help; avoid new dependencies and abstractions without demonstrated value.
+3. Review all affected paths, including alternative keybindings, failure handling, persistence, and platform differences where relevant. Update `README.md`, contextual hints, and `HELP_GROUPS` when public behavior changes, respecting deliberate omissions from on-screen help.
+4. Review the diff for accidental behavior changes, unnecessary state, new indirection, confusing naming, and unrelated churn. Report meaningful tradeoffs and any checks that could not be run.
+
+Run applicable existing repository checks after changing code (use `cargo fmt --all` to format):
 
 ```sh
 cargo fmt --all -- --check
@@ -153,22 +131,14 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-Run a subset of tests while iterating:
-
-```sh
-cargo test --locked --bin sati app::tests::name_substring  # unit tests in src/ (no lib target)
-cargo test --locked --test locking                         # one integration test file
-cargo test --locked -- --exact path::to::test_name         # one exact test
-```
-
-When possible, also check the declared MSRV:
+When available, also check the supported Rust baseline:
 
 ```sh
 cargo +1.89.0 check --locked --all-targets
 ```
 
-`.github/workflows/ci.yml` checks Linux, macOS, and Windows; strict Clippy runs on all three, while formatting and Rust 1.89 checks run on Ubuntu. Report commands you could not run, rather than claiming they passed.
+CI covers Linux, macOS, and Windows. Binary-level integration checks can interact with terminal setup: never direct them at the user's actual data directory, and preserve the existing isolation/early-exit conventions.
 
-## Scope discipline
+Keep `Cargo.lock` checked in. Any dependency change must justify its ongoing complexity and consider maintenance quality, MSRV, and cross-platform behavior. Do not leave `dbg!`, `todo!`, or `unimplemented!` in committed code.
 
-For a requested change, inspect the involved code paths, implement the smallest coherent fix, review the diff for unrelated changes, and summarize any tradeoffs or platform limitations. If asked for a read-only audit, do not edit files or commit. Do not turn small correctness fixes into broad rewrites.
+Do not commit or push unless asked. If asked to commit, use a short Conventional Commit subject. Do not add generated-by attribution, watermarks, or `Co-Authored-By` trailers. For a read-only audit, do not modify files.
