@@ -57,15 +57,7 @@ impl Task {
     }
 
     pub(crate) fn validation_error(&self) -> Option<&'static str> {
-        // Stored sections must round-trip through the "Name: " typing syntax.
-        let invalid_section = self.section.as_deref().is_some_and(|section| {
-            section.is_empty()
-                || section
-                    .chars()
-                    .any(|c| c == ':' || c.is_whitespace() || single_line_character(c) != c)
-        });
-
-        if invalid_section {
+        if self.section.as_deref().is_some_and(invalid_section_name) {
             Some("section must be one word without spaces, colons, or control characters")
         } else if self.completed && self.carried {
             Some("cannot be both completed and carried")
@@ -120,6 +112,15 @@ mod utc_seconds {
 
         Ok(time)
     }
+}
+
+// Stored sections must round-trip through the "Name: " typing syntax: one word without
+// spaces, colons, or control characters. Renaming checks typed names with the same rule.
+fn invalid_section_name(section: &str) -> bool {
+    section.is_empty()
+        || section
+            .chars()
+            .any(|c| c == ':' || c.is_whitespace() || single_line_character(c) != c)
 }
 
 fn single_line_character(character: char) -> char {
@@ -213,6 +214,10 @@ pub enum Mode {
     SearchResults {
         input: TextInput,
         original: Option<usize>,
+    },
+    // Typing a new name for the current section tab, inside the tab bar.
+    RenamingSection {
+        input: TextInput,
     },
     ConfirmClear,
 }
@@ -1072,6 +1077,101 @@ impl App {
         format!("{count} {kind}{section}{}", task_noun(count))
     }
 
+    fn start_rename_section(&mut self) {
+        if self.section_tabs().is_empty() {
+            self.notify("No sections yet (start a task with \"Name: \")");
+
+            return;
+        }
+
+        let (SectionView::Named(_), Some(label)) = (&self.view, self.scope_label()) else {
+            self.notify("Switch to a section tab to rename it");
+
+            return;
+        };
+
+        self.mode = Mode::RenamingSection {
+            input: label.into(),
+        };
+    }
+
+    // Why the typed name can't be used, if it can't. The tab's own name in another case is
+    // fine: that only changes the spelling.
+    pub fn rename_problem(&self) -> Option<&'static str> {
+        let (Mode::RenamingSection { input }, SectionView::Named(current)) =
+            (&self.mode, &self.view)
+        else {
+            return None;
+        };
+
+        let name = input.text().trim();
+
+        if name.is_empty() {
+            return Some("Type a section name");
+        }
+
+        if invalid_section_name(name) {
+            return Some("Section names are one word without colons");
+        }
+
+        let key = name.to_lowercase();
+        let taken = key != *current
+            && self
+                .tasks
+                .iter()
+                .any(|task| task.section_key().as_ref() == Some(&key));
+
+        taken.then_some("Section name already taken")
+    }
+
+    // Shown on every key while renaming, even with notifications off, because it explains
+    // why Enter does nothing.
+    fn explain_rename_problem(&mut self) {
+        if let Some(problem) = self.rename_problem() {
+            self.notification = Some(Notification::new(problem));
+        }
+    }
+
+    // Give every task in the current section tab the new name, then follow it to its tab.
+    fn rename_section(&mut self, name: &str, storage: &Storage) -> Result<()> {
+        let SectionView::Named(old_key) = self.view.clone() else {
+            return Ok(());
+        };
+
+        let old_label = self.scope_label().unwrap_or_default();
+        let mut tasks = self.tasks.clone();
+        let mut renamed = 0;
+
+        for task in &mut tasks {
+            if task.section_key().as_ref() == Some(&old_key) {
+                task.section = Some(name.to_owned());
+                renamed += 1;
+            }
+        }
+
+        // The same spelling on every task is not a change.
+        if tasks == self.tasks {
+            return Ok(());
+        }
+
+        // The new tab is saved with the renamed tasks; a failed save keeps the old one.
+        let new_view = SectionView::Named(name.to_lowercase());
+        let old_view = std::mem::replace(&mut self.view, new_view);
+
+        if let Err(error) = self.replace(tasks, self.list.selected(), "rename section", storage) {
+            self.view = old_view;
+
+            return Err(error);
+        }
+
+        self.notify(format!(
+            "Renamed {old_label} to {name} ({renamed} {})",
+            task_noun(renamed)
+        ));
+
+        Ok(())
+    }
+
     fn cycle_theme(&mut self, forward: bool) {
         self.theme = self.theme.cycle(forward);
         self.styles =
@@ -1146,24 +1246,32 @@ impl App {
         }
 
         if self.consume_modified_key(key, storage)? {
+            self.explain_rename_problem();
             return Ok(false);
         }
 
-        match self.mode {
-            Mode::Normal => self.handle_normal_key(key, count, storage),
-            Mode::Adding(_, _) | Mode::Editing { .. } | Mode::Searching { .. } => {
+        let quit = match self.mode {
+            Mode::Normal => self.handle_normal_key(key, count, storage)?,
+            Mode::Adding(_, _)
+            | Mode::Editing { .. }
+            | Mode::Searching { .. }
+            | Mode::RenamingSection { .. } => {
                 self.handle_text_input_key(key, storage)?;
-                Ok(false)
+                false
             }
             Mode::SearchResults { .. } => {
                 self.handle_search_results_key(key);
-                Ok(false)
+                false
             }
             Mode::ConfirmClear => {
                 self.handle_confirm_clear_key(key, storage)?;
-                Ok(false)
+                false
             }
-        }
+        };
+
+        self.explain_rename_problem();
+
+        Ok(quit)
     }
 
     fn normalize_key(&self, key: KeyEvent) -> KeyEvent {
@@ -1216,7 +1324,10 @@ impl App {
                             | KeyCode::PageDown
                     )
             }
-            Mode::Adding(_, _) | Mode::Editing { .. } | Mode::Searching { .. } => {
+            Mode::Adding(_, _)
+            | Mode::Editing { .. }
+            | Mode::Searching { .. }
+            | Mode::RenamingSection { .. } => {
                 matches!(
                     key.code,
                     KeyCode::Char(_)
@@ -1246,7 +1357,8 @@ impl App {
             && let (
                 Mode::Adding(input, _)
                 | Mode::Editing { input, .. }
-                | Mode::Searching { input, .. },
+                | Mode::Searching { input, .. }
+                | Mode::RenamingSection { input },
                 KeyCode::Char(character),
             ) = (&mut self.mode, key.code)
             && !character.is_control()
@@ -1260,7 +1372,8 @@ impl App {
             && matches!(key.code, KeyCode::Char('b' | 'B' | 'f' | 'F' | 'd' | 'D'))
             && let Mode::Adding(input, _)
             | Mode::Editing { input, .. }
-            | Mode::Searching { input, .. } = &mut self.mode
+            | Mode::Searching { input, .. }
+            | Mode::RenamingSection { input } = &mut self.mode
         {
             match key.code {
                 KeyCode::Char('b' | 'B') => input.move_word_left(),
@@ -1307,7 +1420,8 @@ impl App {
 
                 if let Mode::Adding(input, _)
                 | Mode::Editing { input, .. }
-                | Mode::Searching { input, .. } = &mut self.mode
+                | Mode::Searching { input, .. }
+                | Mode::RenamingSection { input } = &mut self.mode
                 {
                     match key.code {
                         KeyCode::Char('a' | 'A') => input.set_cursor(0),
@@ -1399,8 +1513,12 @@ impl App {
             _ => None,
         };
 
-        let (Mode::Adding(input, _) | Mode::Editing { input, .. } | Mode::Searching { input, .. }) =
-            &mut self.mode
+        let renaming = matches!(self.mode, Mode::RenamingSection { .. });
+
+        let (Mode::Adding(input, _)
+        | Mode::Editing { input, .. }
+        | Mode::Searching { input, .. }
+        | Mode::RenamingSection { input }) = &mut self.mode
         else {
             unreachable!("text input mode");
         };
@@ -1418,6 +1536,16 @@ impl App {
             KeyCode::End => input.set_cursor(input.text().len()),
             KeyCode::Char(character) if !character.is_control() => {
                 input.insert(single_line_character(character).encode_utf8(&mut [0; 4]))
+            }
+            // A taken or invalid name keeps the input open; the notice says why.
+            KeyCode::Enter if renaming => {
+                let name = input.text().trim().to_owned();
+
+                if self.rename_problem().is_none() {
+                    self.rename_section(&name, storage)?;
+                    self.mode = Mode::Normal;
+                    self.reveal_selection = true;
+                }
             }
             KeyCode::Enter => {
                 let text = input.text().trim().to_owned();
@@ -1592,6 +1720,7 @@ impl App {
                     };
                 }
             }
+            KeyCode::Char('E') => self.start_rename_section(),
             KeyCode::Char('d') | KeyCode::Delete => {
                 if let Some(index) = self.list.selected() {
                     let visible = self.visible_indices();
@@ -1641,7 +1770,8 @@ impl App {
 
         if let Mode::Adding(input, _)
         | Mode::Editing { input, .. }
-        | Mode::Searching { input, .. } = &mut self.mode
+        | Mode::Searching { input, .. }
+        | Mode::RenamingSection { input } = &mut self.mode
         {
             let normalized: String = text
                 .replace("\r\n", "\n")
@@ -1653,6 +1783,7 @@ impl App {
         }
 
         self.refresh_search();
+        self.explain_rename_problem();
     }
 
     pub fn mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
@@ -2121,6 +2252,7 @@ mod tests {
                 input: "task".into(),
                 original: Some(0),
             },
+            Mode::RenamingSection { input: "".into() },
             Mode::ConfirmClear,
         ] {
             app.mode = mode;
@@ -2129,7 +2261,8 @@ mod tests {
             match &app.mode {
                 Mode::Adding(input, _)
                 | Mode::Editing { input, .. }
-                | Mode::Searching { input, .. } => assert_eq!(input.text(), "c"),
+                | Mode::Searching { input, .. }
+                | Mode::RenamingSection { input } => assert_eq!(input.text(), "c"),
                 Mode::SearchResults { input, .. } => assert_eq!(input.text(), "task"),
                 Mode::ConfirmClear => {}
                 Mode::Normal => panic!("copy changed mode"),
@@ -2708,7 +2841,9 @@ mod tests {
 
     fn input_text(app: &App) -> &str {
         match &app.mode {
-            Mode::Adding(input, _) | Mode::Editing { input, .. } => input.text(),
+            Mode::Adding(input, _)
+            | Mode::Editing { input, .. }
+            | Mode::RenamingSection { input } => input.text(),
             mode => panic!("expected an input mode, got {mode:?}"),
         }
     }
@@ -2862,6 +2997,191 @@ mod tests {
         assert_eq!(texts(&app), ["Home: moved task", "Home: b"]);
         assert_eq!(app.view, SectionView::Named("home".into()));
         assert_eq!(app.list.selected(), Some(0));
+    }
+
+    // Replace the whole rename input with `name`.
+    fn type_rename(app: &mut App, fixture: &Fixture, name: &str) {
+        press(
+            app,
+            fixture,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        app.paste(name);
+    }
+
+    #[test]
+    fn renaming_a_section_updates_every_task_in_it_and_follows_the_new_tab() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "work: c"]);
+        app.show_section(SectionView::Named("work".into()));
+
+        press(&mut app, &fixture, KeyCode::Char('E'));
+        assert_eq!(input_text(&app), "Work");
+
+        type_rename(&mut app, &fixture, "Job");
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(texts(&app), ["Job: a", "Home: b", "Job: c"]);
+        assert_eq!(app.view, SectionView::Named("job".into()));
+        assert_eq!(notice(&app), Some("Renamed Work to Job (2 tasks)"));
+
+        let saved = fixture.storage.load_document().unwrap();
+        assert_eq!(saved.tasks, app.tasks);
+        assert_eq!(saved.section.as_deref(), Some("job"));
+    }
+
+    #[test]
+    fn renaming_to_a_taken_or_invalid_name_is_blocked_and_explained() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.show_section(SectionView::Named("work".into()));
+        let original = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char('E'));
+
+        for (name, problem) in [
+            ("home", "Section name already taken"),
+            ("two words", "Section names are one word without colons"),
+            ("a:b", "Section names are one word without colons"),
+            ("", "Type a section name"),
+        ] {
+            type_rename(&mut app, &fixture, name);
+            assert_eq!(app.rename_problem(), Some(problem));
+            assert_eq!(notice(&app), Some(problem));
+
+            press(&mut app, &fixture, KeyCode::Enter);
+
+            assert_eq!(input_text(&app), name);
+            assert_eq!(notice(&app), Some(problem));
+            assert_eq!(app.tasks, original);
+            assert!(!app.can_undo());
+        }
+    }
+
+    #[test]
+    fn the_rename_problem_is_shown_even_with_notifications_off() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.notifications = false;
+        app.show_section(SectionView::Named("work".into()));
+        press(&mut app, &fixture, KeyCode::Char('E'));
+
+        type_rename(&mut app, &fixture, "Home");
+
+        assert_eq!(notice(&app), Some("Section name already taken"));
+    }
+
+    #[test]
+    fn renaming_only_the_case_is_allowed_and_unifies_spellings() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["work: a", "Work: b"]);
+        app.show_section(SectionView::Named("work".into()));
+        press(&mut app, &fixture, KeyCode::Char('E'));
+
+        type_rename(&mut app, &fixture, "WORK");
+        assert_eq!(app.rename_problem(), None);
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(texts(&app), ["WORK: a", "WORK: b"]);
+        assert_eq!(app.view, SectionView::Named("work".into()));
+    }
+
+    #[test]
+    fn confirming_an_unchanged_name_closes_the_input_without_a_change() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a"]);
+        app.show_section(SectionView::Named("work".into()));
+
+        press(&mut app, &fixture, KeyCode::Char('E'));
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn escape_cancels_a_rename_without_changes() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a"]);
+        app.show_section(SectionView::Named("work".into()));
+        press(&mut app, &fixture, KeyCode::Char('E'));
+        type_rename(&mut app, &fixture, "Job");
+
+        press(&mut app, &fixture, KeyCode::Esc);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(texts(&app), ["Work: a"]);
+        assert!(!app.can_undo());
+    }
+
+    #[test]
+    fn a_rename_is_one_undo_step_and_undo_returns_to_the_old_tab() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c"]);
+        app.show_section(SectionView::Named("work".into()));
+        press(&mut app, &fixture, KeyCode::Char('E'));
+        type_rename(&mut app, &fixture, "Job");
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        press(&mut app, &fixture, KeyCode::Char('u'));
+
+        assert_eq!(texts(&app), ["Work: a", "Home: b", "Work: c"]);
+        assert_eq!(app.view, SectionView::Named("work".into()));
+        assert_eq!(notice(&app), Some("Undid: rename section"));
+    }
+
+    #[test]
+    fn the_rename_key_outside_a_named_tab_only_explains() {
+        let fixture = Fixture::new();
+
+        for (texts, view, message) in [
+            (
+                vec!["a"],
+                SectionView::All,
+                "No sections yet (start a task with \"Name: \")",
+            ),
+            (
+                vec!["Work: a", "b"],
+                SectionView::All,
+                "Switch to a section tab to rename it",
+            ),
+            (
+                vec!["Work: a", "b"],
+                SectionView::Unsectioned,
+                "Switch to a section tab to rename it",
+            ),
+        ] {
+            let mut app = app_with_texts(&texts);
+            app.show_section(view);
+
+            press(&mut app, &fixture, KeyCode::Char('E'));
+
+            assert_eq!(app.mode, Mode::Normal);
+            assert_eq!(notice(&app), Some(message));
+        }
+    }
+
+    #[test]
+    fn a_failed_rename_save_keeps_the_tasks_tab_history_and_input() {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.directory.join("data"), "blocking file").unwrap();
+        let mut app = app_with_texts(&["Work: a"]);
+        app.show_section(SectionView::Named("work".into()));
+        let original = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char('E'));
+        type_rename(&mut app, &fixture, "Job");
+
+        let result = app.key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &fixture.storage,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(app.tasks, original);
+        assert_eq!(app.view, SectionView::Named("work".into()));
+        assert!(!app.can_undo());
+        assert_eq!(input_text(&app), "Job");
     }
 
     #[test]

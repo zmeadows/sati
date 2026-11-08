@@ -141,8 +141,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
 
 const TAB_MARKER: usize = 1;
 
+// The prompt drawn before a section name being renamed, like the inline edit row's.
+const RENAME_LABEL: &str = "rename";
+
 // Draw section tabs on the box's top border (`strip`). Every tab keeps the same width
 // whichever one is active, so labels never move; the active tab only changes color.
+// While renaming, the active tab becomes the name input and grows with it.
 // Returns each drawn tab's clickable area.
 fn draw_section_tabs(
     frame: &mut Frame,
@@ -154,8 +158,22 @@ fn draw_section_tabs(
         .iter()
         .position(|(view, _)| *view == app.view)
         .unwrap_or(0);
-    let widths: Vec<usize> = tabs.iter().map(|(_, label)| label.width() + 2).collect();
+    let mut widths: Vec<usize> = tabs.iter().map(|(_, label)| label.width() + 2).collect();
     let width = usize::from(strip.width);
+
+    let rename_input = match &app.mode {
+        Mode::RenamingSection { input } => Some(input),
+        _ => None,
+    };
+
+    // Room for the prompt, the name, and one cursor cell, but never more than the strip
+    // holds beside its leading cell and trailing border cell.
+    if let Some(input) = rename_input {
+        let prompt_width = Line::raw(format!("{RENAME_LABEL} › ")).width();
+        let input_width = 2 + prompt_width + input.text().width() + 1;
+
+        widths[active] = input_width.min(width.saturating_sub(TAB_MARKER + 1));
+    }
 
     // Scroll only when the active tab would otherwise leave the strip.
     let mut start = app.tab_scroll.min(active);
@@ -168,11 +186,12 @@ fn draw_section_tabs(
     let end = fitting_tabs(&widths, start, width);
 
     let y = strip.y;
-    let buffer = frame.buffer_mut();
     let mut targets = Vec::new();
 
     if start > 0 {
-        buffer.set_string(strip.x, y, "‹", app.styles.muted);
+        frame
+            .buffer_mut()
+            .set_string(strip.x, y, "‹", app.styles.muted);
     }
 
     let mut x = strip.x + TAB_MARKER as u16;
@@ -186,7 +205,39 @@ fn draw_section_tabs(
             app.styles.muted
         };
 
-        buffer.set_string(x, y, format!(" {label} "), style);
+        if index == active
+            && let Some(input) = rename_input
+        {
+            // A name that can't be used is drawn struck through; the notice says why.
+            let mut styles = app.styles;
+
+            if app.rename_problem().is_some() {
+                styles.normal = styles.muted.add_modifier(Modifier::CROSSED_OUT);
+            }
+
+            // Blank the whole tab first so the border doesn't show under the cursor cell.
+            frame.buffer_mut().set_string(
+                x,
+                y,
+                " ".repeat(usize::from(tab_width)),
+                app.styles.normal,
+            );
+
+            draw_input_line(
+                frame,
+                Rect::new(x + 1, y, tab_width.saturating_sub(2), 1),
+                input,
+                RENAME_LABEL,
+                &styles,
+                true,
+                None,
+            );
+        } else {
+            frame
+                .buffer_mut()
+                .set_string(x, y, format!(" {label} "), style);
+        }
+
         targets.push((Rect::new(x, y, tab_width, 1), view.clone()));
 
         // One border cell separates tabs.
@@ -194,7 +245,9 @@ fn draw_section_tabs(
     }
 
     if end < tabs.len() {
-        buffer.set_string(x - 1, y, "›", app.styles.muted);
+        frame
+            .buffer_mut()
+            .set_string(x - 1, y, "›", app.styles.muted);
     }
 
     targets
@@ -673,6 +726,11 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
 
         for (key, label, available) in [
             ("Tab", "Section", !app.section_tabs().is_empty()),
+            (
+                "E",
+                "Rename section",
+                matches!(app.view, SectionView::Named(_)),
+            ),
             ("Ctrl+R", "Redo", app.can_redo()),
             ("m", "Carry", can_carry),
             ("t/T", "Theme", true),
@@ -714,6 +772,7 @@ fn compact_shortcuts(app: &App, width: u16) -> Vec<Line<'static>> {
         Mode::Adding(_, _) | Mode::Editing { .. } => {
             vec![vec![("Enter", "Confirm"), ("Esc", "Cancel")]]
         }
+        Mode::RenamingSection { .. } => vec![vec![("Enter", "Rename"), ("Esc", "Cancel")]],
         _ if app.tasks.is_empty() => vec![vec![("u", "Undo"), ("w", "Wrap"), ("q", "Quit")]],
         _ => vec![
             vec![("j/k", "Navigate"), ("Space", "Toggle"), ("w", "Wrap")],
@@ -1280,6 +1339,84 @@ mod tests {
         );
     }
 
+    fn renaming_app(texts: &[&str], name: &str) -> App {
+        let mut app = app_with_texts(texts);
+        app.keybinds = false;
+        app.show_section(SectionView::Named("work".into()));
+        app.mode = Mode::RenamingSection { input: name.into() };
+
+        app
+    }
+
+    #[test]
+    fn renaming_draws_the_input_in_the_active_tab_with_the_cursor() {
+        let mut app = renaming_app(&["Work: a", "Home: b"], "Jo");
+        let mut terminal = test_terminal(40, 8);
+        render(&mut terminal, &mut app);
+
+        // Tabs after the input shift right while it is wider than the label.
+        assert_eq!(
+            row_text(&terminal, 0),
+            "┌─ [*] ─ Home ─ rename › Jo  ──────────┐"
+        );
+
+        let cursor = terminal.get_cursor_position().unwrap();
+        assert_eq!((cursor.x, cursor.y), (27, 0));
+
+        let text = &terminal.backend().buffer()[(25, 0)];
+        assert!(!text.modifier.contains(Modifier::CROSSED_OUT));
+    }
+
+    #[test]
+    fn a_taken_rename_is_struck_through_and_muted() {
+        let mut app = renaming_app(&["Work: a", "Home: b"], "home");
+        let mut terminal = test_terminal(40, 8);
+        render(&mut terminal, &mut app);
+
+        let text = &terminal.backend().buffer()[(25, 0)];
+
+        assert_eq!(text.symbol(), "h");
+        assert!(
+            text.modifier
+                .contains(Modifier::CROSSED_OUT | Modifier::DIM)
+        );
+    }
+
+    #[test]
+    fn a_long_rename_stays_within_a_narrow_tab_bar() {
+        let mut app = renaming_app(&["Work: a", "Home: b"], "AVeryLongSectionName");
+        let mut terminal = test_terminal(16, 8);
+        render(&mut terminal, &mut app);
+
+        let top = row_text(&terminal, 0);
+        let cursor = terminal.get_cursor_position().unwrap();
+
+        assert_eq!(top.chars().count(), 16, "{top}");
+        assert!(top.ends_with('┐'), "{top}");
+        assert!(top.contains("› "), "{top}");
+        assert_eq!(cursor.y, 0);
+        assert!(cursor.x < 15);
+    }
+
+    #[test]
+    fn the_rename_legend_appears_only_on_a_section_tab() {
+        let mut app = app_with_texts(&["Work: a", "plain"]);
+        let mut terminal = test_terminal(90, 12);
+
+        render(&mut terminal, &mut app);
+        assert!(!screen(&terminal).contains("Rename section"));
+
+        app.show_section(SectionView::Named("work".into()));
+        render(&mut terminal, &mut app);
+        assert!(screen(&terminal).contains("E Rename section"));
+
+        app.mode = Mode::RenamingSection {
+            input: "Work".into(),
+        };
+        render(&mut terminal, &mut app);
+        assert!(screen(&terminal).contains("Enter Rename"));
+    }
+
     fn thumb_rows(terminal: &Terminal<TestBackend>, x: u16) -> Vec<u16> {
         let buffer = terminal.backend().buffer();
 
@@ -1602,7 +1739,7 @@ mod tests {
 
     #[test]
     fn themed_background_fills_every_cell_including_empty_regions_and_dialogs() {
-        for mode in 0..6 {
+        for mode in 0..7 {
             for width in [1, 12, 60] {
                 let mut app = App::new(vec![Task {
                     completed: true,
@@ -1627,7 +1764,13 @@ mod tests {
                         input: "Work".into(),
                         original: Some(0),
                     },
-                    _ => Mode::ConfirmClear,
+                    5 => Mode::ConfirmClear,
+                    _ => {
+                        app.show_section(SectionView::Named("work".into()));
+                        Mode::RenamingSection {
+                            input: "Job".into(),
+                        }
+                    }
                 };
                 let mut terminal = test_terminal(width, 12);
                 render(&mut terminal, &mut app);

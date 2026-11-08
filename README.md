@@ -71,6 +71,7 @@ Then run `sati`.
 | Insert below selection | `o` |
 | Insert above selection | `O` |
 | Edit task | `e` |
+| Rename current section | `E` |
 | Check / uncheck | `Space`, `Enter` |
 | Delete task | `d`, `Delete` |
 | Toggle carryover | `m` |
@@ -114,6 +115,13 @@ If a change moves the selected task out of the tab (for example editing its pref
 undo), sati follows the task to its section. Deleting a section's last task returns to
 `[*]`. The current tab is remembered between sessions. `Work:Fix`, URLs such as
 `https://…`, and times such as `10:30` don't create sections.
+
+Press `E` on a section tab to rename it. The tab turns into an input with the current
+name; `Enter` renames the section on every task in it and `Esc` cancels. While the name
+is already used by another section, or isn't one word without colons, it is shown
+struck through, a notice explains why, and `Enter` does nothing. Changing only the case
+(`work` to `Work`) is allowed and gives every task the same spelling. `u` undoes the
+whole rename at once.
 
 ### While typing
 
