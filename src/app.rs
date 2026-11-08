@@ -1781,7 +1781,14 @@ mod tests {
 
         let tasks = app_with_tasks(3).tasks;
         fixture.storage.save(&tasks).unwrap();
-        let legacy = serde_json::to_vec(&tasks).unwrap();
+        // A real legacy file: a bare array of tasks without ids or creation times.
+        let legacy = serde_json::to_vec(
+            &tasks
+                .iter()
+                .map(|task| serde_json::json!({"text": task.text, "completed": task.completed}))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
         std::fs::write(fixture.task_path(), &legacy).unwrap();
         let mut app = App::from_document(fixture.storage.load_document().unwrap());
 
@@ -4759,6 +4766,20 @@ mod tests {
         }
 
         assert!(serde_json::from_str::<Task>(&task_json("2024-02-29T00:00:00Z")).is_ok());
+    }
+
+    #[test]
+    fn a_current_file_is_not_rewritten_without_changes() {
+        let fixture = Fixture::new();
+        let app = app_with_tasks(3);
+        fixture.storage.save(&app.tasks).unwrap();
+        let saved = std::fs::read(fixture.task_path()).unwrap();
+
+        let mut loaded = App::from_document(fixture.storage.load_document().unwrap());
+        loaded.save_selection(&fixture.storage).unwrap();
+
+        assert_eq!(loaded.tasks, app.tasks);
+        assert_eq!(std::fs::read(fixture.task_path()).unwrap(), saved);
     }
 
     #[test]
