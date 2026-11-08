@@ -166,14 +166,19 @@ struct CliOptions {
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// Use a built-in color theme
+    /// Use a built-in color theme; see --list-themes
     #[arg(
         long,
         value_name = "NAME",
         value_parser = theme_parser(),
+        hide_possible_values = true,
         help_heading = DISPLAY_HEADING
     )]
     theme: Option<themes::BuiltinTheme>,
+
+    /// List the built-in color themes and exit
+    #[arg(long, help_heading = DISPLAY_HEADING)]
+    list_themes: bool,
 
     /// Override the accent color: an ANSI name, #RRGGBB, or index 0-255
     #[arg(
@@ -266,7 +271,7 @@ fn chosen_flag(on: bool, off: bool) -> Option<bool> {
     }
 }
 
-// Listing the names lets clap show them in help and suggest close matches for typos.
+// Listing the names lets clap suggest close matches for typos; help omits them for brevity.
 fn theme_parser() -> impl TypedValueParser<Value = themes::BuiltinTheme> {
     let names = themes::BuiltinTheme::ALL.iter().map(|(_, name, _)| *name);
 
@@ -298,7 +303,7 @@ fn main() -> ExitCode {
 
 fn run() -> Result<()> {
     // Clap answers --help, --version, and argument errors itself and exits before
-    // configuration, storage, or the terminal are touched.
+    // configuration, storage, or the terminal are touched; --list-themes returns early too.
     let cli = Cli::try_parse_arguments(std::env::args_os()).unwrap_or_else(|error| error.exit());
 
     let data_dir = cli.data_dir.as_deref();
@@ -310,6 +315,10 @@ fn run() -> Result<()> {
                 unsectioned,
             } => export::run(data_dir, section.as_deref(), unsectioned),
         };
+    }
+
+    if cli.options.list_themes {
+        return themes::print_list();
     }
 
     // Configuration is read once, before storage and the terminal are touched, so an
@@ -891,7 +900,7 @@ mod tests {
 
     #[test]
     fn every_theme_is_selectable_from_cli_over_toml() {
-        for name in themes::BuiltinTheme::names().split(", ") {
+        for &(_, name, _) in themes::BuiltinTheme::ALL {
             let config: config::Config = toml::from_str("theme='gruvbox-material'").unwrap();
             let cli = parse_cli(&["--theme", name]).unwrap();
             let selected = name.parse::<themes::BuiltinTheme>().unwrap();
@@ -958,6 +967,7 @@ mod tests {
         }
 
         assert!(parse_cli(&["--theme", "default", "--theme", "default"]).is_err());
+        assert!(parse_cli(&["--list-themes", "export"]).is_err());
     }
 
     #[test]

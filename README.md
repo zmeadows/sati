@@ -208,7 +208,8 @@ adds nothing.
 
 | Flag | Effect |
 | --- | --- |
-| `--theme NAME` | Select a built-in theme (listed below). |
+| `--theme NAME` | Select a built-in theme (see `--list-themes`). |
+| `--list-themes` | Print the built-in theme identifiers, one per line, and exit. |
 | `--config PATH` | Use an explicit configuration file. |
 | `--data-dir PATH` | Keep `tasks.json` and `tasks.lock` in this directory (see [Data](#data)). Also works with `export`. |
 | `--wrap` / `--no-wrap` | Enable / disable task wrapping. |
@@ -288,8 +289,8 @@ must be absolute; `--config` also accepts relative paths without expanding `~`.
 sati reads its configuration once, at startup. After editing the file, restart sati
 for the changes to take effect. A configuration problem (malformed TOML, an unknown
 key, a bad value or color, or a missing `--config` file) stops sati with an error
-before the interface opens. `--help`, `--version`, and `sati export` don't read the
-configuration file.
+before the interface opens. `--help`, `--version`, `--list-themes`, and `sati export` don't
+read the configuration file.
 
 CLI pairs override either TOML value: `--no-wrap` disables wrapping, and `--wrap`
 re-enables it. When both flags of a pair are given, the last one wins.
@@ -299,24 +300,7 @@ built-in themes provide five RGB foregrounds, their original Neovim-inspired dar
 backgrounds, and no base text modifiers. `default` keeps the terminal background
 unless explicitly overridden.
 
-| Theme | Identifier | Variant |
-| --- | --- | --- |
-| Terminal default | `default` | Terminal-native |
-| Catppuccin | `catppuccin-mocha` | Mocha |
-| Tokyo Night | `tokyonight-storm` | Storm |
-| Kanagawa | `kanagawa-wave` | Wave |
-| Rosé Pine | `rose-pine` | Main |
-| Nightfox | `nightfox` | Nightfox |
-| One Dark | `onedark` | Dark |
-| Gruvbox Material | `gruvbox-material` | Dark / Medium |
-| GitHub Dark | `github-dark` | GitHub Dark Default / classic dark palette |
-| Everforest | `everforest-medium` | Dark / Medium |
-| Cyberdream | `cyberdream-muted` | Dark / Muted |
-| Nord | `nord` | Dark |
-| Dracula | `dracula` | Dark |
-| Darcula | `darcula` | JetBrains Darcula (Vim port) |
-| Gruvbox Classic | `gruvbox` | Dark / Medium |
-| Solarized | `solarized-dark` | Dark |
+Run `sati --list-themes` to print the available theme identifiers.
 
 Select a theme with `theme = "catppuccin-mocha"` at the TOML root or
 `sati --theme catppuccin-mocha`; CLI selection takes precedence.

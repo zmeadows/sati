@@ -1,4 +1,7 @@
-use std::str::FromStr;
+use std::{
+    io::{self, Write},
+    str::FromStr,
+};
 
 use ratatui::style::{Color, Modifier, Style};
 use serde::Deserialize;
@@ -37,8 +40,7 @@ impl FromStr for BuiltinTheme {
             .map(|(theme, _, _)| *theme)
             .ok_or_else(|| {
                 format!(
-                    "unknown theme: {name:?}. Available themes: {}",
-                    Self::names()
+                    "unknown theme: {name:?}; run `sati --list-themes` to see the available themes"
                 )
             })
     }
@@ -72,14 +74,6 @@ impl BuiltinTheme {
         (Self::Gruvbox, "gruvbox", "Gruvbox Classic"),
         (Self::SolarizedDark, "solarized-dark", "Solarized Dark"),
     ];
-
-    pub fn names() -> String {
-        Self::ALL
-            .iter()
-            .map(|(_, name, _)| *name)
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
 
     pub fn id(self) -> &'static str {
         Self::ALL
@@ -279,6 +273,26 @@ impl BuiltinTheme {
     }
 }
 
+// Prints one theme ID per line for `sati --list-themes`.
+pub fn print_list() -> crate::storage::Result<()> {
+    let mut contents = String::new();
+    for (_, id, _) in BuiltinTheme::ALL {
+        contents.push_str(id);
+        contents.push('\n');
+    }
+
+    let mut stdout = io::stdout().lock();
+    let written = stdout
+        .write_all(contents.as_bytes())
+        .and_then(|()| stdout.flush());
+
+    // A reader that stops early (`sati --list-themes | head`) is not a failure.
+    match written {
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        result => Ok(result?),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,8 +358,7 @@ mod tests {
 
     #[test]
     fn all_available_themes_parse_and_preserve_overrides_and_modifier_resets() {
-        let available = BuiltinTheme::names();
-        let names: Vec<_> = available.split(", ").collect();
+        let names: Vec<_> = BuiltinTheme::ALL.iter().map(|(_, name, _)| *name).collect();
         assert_eq!(names.len(), 16);
         assert_eq!(
             names.iter().collect::<std::collections::HashSet<_>>().len(),
@@ -451,7 +464,7 @@ mod tests {
 
         for name in ["", "Default", "DEFAULT", "not-a-theme", " default"] {
             let error = name.parse::<BuiltinTheme>().unwrap_err();
-            assert!(error.contains("Available themes: default"));
+            assert!(error.contains("sati --list-themes"), "{error}");
         }
 
         let omitted: crate::config::Config = toml::from_str("").unwrap();

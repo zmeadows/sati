@@ -4,7 +4,7 @@
 # or pass it with `--config PATH`. Every key is optional and everything below is already the
 # default, so keep only the lines you change. Command-line flags override these settings.
 
-# The color theme. For all built-in themes, see the theme table in README.md or `sati --help`.
+# The color theme. Run `sati --list-themes` to see the built-in themes.
 theme = "default"
 
 [display]

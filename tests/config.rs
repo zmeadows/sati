@@ -233,14 +233,14 @@ fn invalid_style_theme_and_toml_files_are_reported_before_storage_and_stay_untou
 }
 
 #[test]
-fn unknown_theme_errors_list_the_available_themes() {
+fn unknown_theme_errors_point_to_list_themes() {
     let fixture = Fixture::new();
     fixture.config("theme='unknown'");
 
     let output = fixture.command().output().unwrap();
     let error = String::from_utf8_lossy(&output.stderr);
 
-    assert!(error.contains("Available themes: default"), "{error}");
+    assert!(error.contains("sati --list-themes"), "{error}");
 }
 
 #[test]
