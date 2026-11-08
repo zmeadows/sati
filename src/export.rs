@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    app::Task,
+    app::{Task, TaskStatus},
     storage::{self, Result, Storage},
 };
 
@@ -16,7 +16,13 @@ pub fn markdown(tasks: &[Task]) -> String {
     let mut output = String::new();
 
     for task in tasks {
-        output.push_str(if task.completed { "- [x] " } else { "- [ ] " });
+        // Markdown has no carryover checkbox, so carried tasks export as unfinished.
+        let checkbox = match task.status {
+            TaskStatus::Completed => "- [x] ",
+            TaskStatus::Pending | TaskStatus::Carried => "- [ ] ",
+        };
+
+        output.push_str(checkbox);
 
         for character in task.display_text().chars() {
             if "\\`*_{}[]<>!&#|~+-.()".contains(character) {
@@ -161,11 +167,11 @@ mod tests {
         let tasks = [
             Task::new("Buy groceries"),
             Task {
-                completed: true,
+                status: TaskStatus::Completed,
                 ..Task::new("Walk the dog")
             },
             Task {
-                carried: true,
+                status: TaskStatus::Carried,
                 ..Task::new("Work: Review *PR* & <notes> [x] \\ `code`")
             },
             Task::new("1. nested 日本語 👩‍💻 e\u{301}"),
@@ -203,7 +209,7 @@ mod tests {
         }
 
         let tasks = [Task {
-            carried: true,
+            status: TaskStatus::Carried,
             ..Task::new("日本語")
         }];
 

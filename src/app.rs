@@ -31,9 +31,17 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
     pub text: String,
-    pub completed: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub carried: bool,
+    pub status: TaskStatus,
+}
+
+// Where a task stands. Carried tasks are unfinished ones that `D` keeps; a completed task
+// can't also be carried, which a single field makes unrepresentable. Stored in lowercase.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatus {
+    Pending,
+    Completed,
+    Carried,
 }
 
 impl Task {
@@ -48,8 +56,7 @@ impl Task {
             created_at: current_time(),
             section,
             text,
-            completed: false,
-            carried: false,
+            status: TaskStatus::Pending,
         }
     }
 
@@ -64,8 +71,6 @@ impl Task {
     pub(crate) fn validation_error(&self) -> Option<&'static str> {
         if self.section.as_deref().is_some_and(invalid_section_name) {
             Some("section must be one word without spaces, colons, or control characters")
-        } else if self.completed && self.carried {
-            Some("cannot be both completed and carried")
         } else if self.text.is_empty() {
             Some("text is empty")
         } else if self.text.trim() != self.text {
@@ -1152,15 +1157,13 @@ impl App {
     }
 
     fn toggle(&mut self, index: usize, storage: &Storage) -> Result<()> {
-        let mut tasks = self.tasks.clone();
-        tasks[index].completed = !tasks[index].completed;
-        tasks[index].carried = false;
-
-        let label = if tasks[index].completed {
-            "complete task"
-        } else {
-            "uncomplete task"
+        let (status, label) = match self.tasks[index].status {
+            TaskStatus::Pending | TaskStatus::Carried => (TaskStatus::Completed, "complete task"),
+            TaskStatus::Completed => (TaskStatus::Pending, "uncomplete task"),
         };
+
+        let mut tasks = self.tasks.clone();
+        tasks[index].status = status;
 
         // The task stays in place, so do not force the viewport to scroll to it.
         self.replace(tasks, Some(index), label, storage)?;
@@ -1174,20 +1177,18 @@ impl App {
             return Ok(());
         };
 
-        if self.tasks[index].completed {
-            self.notify("Completed tasks can't be carried");
+        let (status, label) = match self.tasks[index].status {
+            TaskStatus::Pending => (TaskStatus::Carried, "mark carryover"),
+            TaskStatus::Carried => (TaskStatus::Pending, "unmark carryover"),
+            TaskStatus::Completed => {
+                self.notify("Completed tasks can't be carried");
 
-            return Ok(());
-        }
+                return Ok(());
+            }
+        };
 
         let mut tasks = self.tasks.clone();
-        tasks[index].carried = !tasks[index].carried;
-
-        let label = if tasks[index].carried {
-            "mark carryover"
-        } else {
-            "unmark carryover"
-        };
+        tasks[index].status = status;
 
         self.replace(tasks, Some(index), label, storage)
     }
@@ -1195,7 +1196,9 @@ impl App {
     fn clear_unmarked(&mut self, storage: &Storage) -> Result<()> {
         // Only the current tab's unmarked tasks are cleared; other tabs are untouched.
         let survivors: Vec<usize> = (0..self.tasks.len())
-            .filter(|&index| !self.is_visible(index) || self.tasks[index].carried)
+            .filter(|&index| {
+                !self.is_visible(index) || self.tasks[index].status == TaskStatus::Carried
+            })
             .collect();
         let removed = self.tasks.len() - survivors.len();
 
@@ -1277,7 +1280,9 @@ impl App {
     fn clear_completed(&mut self, storage: &Storage) -> Result<()> {
         // Only the current tab's completed tasks are cleared; other tabs are untouched.
         let survivors: Vec<usize> = (0..self.tasks.len())
-            .filter(|&index| !self.is_visible(index) || !self.tasks[index].completed)
+            .filter(|&index| {
+                !self.is_visible(index) || self.tasks[index].status != TaskStatus::Completed
+            })
             .collect();
         let removed = self.tasks.len() - survivors.len();
 
@@ -2115,8 +2120,9 @@ impl App {
                 }
             }
             KeyCode::Char('D')
-                if (0..self.tasks.len())
-                    .any(|index| self.is_visible(index) && !self.tasks[index].carried) =>
+                if (0..self.tasks.len()).any(|index| {
+                    self.is_visible(index) && self.tasks[index].status != TaskStatus::Carried
+                }) =>
             {
                 self.mode = Mode::ConfirmClear
             }
@@ -2311,7 +2317,10 @@ mod tests {
         let legacy = serde_json::to_vec(
             &tasks
                 .iter()
-                .map(|task| serde_json::json!({"text": task.text, "completed": task.completed}))
+                .map(|task| {
+                    let completed = task.status == TaskStatus::Completed;
+                    serde_json::json!({"text": task.text, "completed": completed})
+                })
                 .collect::<Vec<_>>(),
         )
         .unwrap();
@@ -2331,7 +2340,7 @@ mod tests {
 
         // A clean quit writes the migrated, versioned document.
         let saved = std::fs::read_to_string(fixture.task_path()).unwrap();
-        assert!(saved.contains("\"schema_version\": 4"), "{saved}");
+        assert!(saved.contains("\"schema_version\": 5"), "{saved}");
 
         app.list.select(Some(2));
         assert_eq!(fixture.storage.load_document().unwrap().selected, Some(0));
@@ -2651,7 +2660,11 @@ mod tests {
         let fixture = Fixture::new();
         let text = "Work: *日本語* [literal]";
 
-        for (completed, carried) in [(false, false), (true, false), (false, true)] {
+        for status in [
+            TaskStatus::Pending,
+            TaskStatus::Completed,
+            TaskStatus::Carried,
+        ] {
             for copy in [
                 KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
                 KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT),
@@ -2673,8 +2686,7 @@ mod tests {
                 ] {
                     let mut app = app_with_tasks(3);
                     app.tasks[2] = Task {
-                        completed,
-                        carried,
+                        status,
                         ..Task::new(text)
                     };
                     app.list.select(Some(2));
@@ -3696,7 +3708,7 @@ mod tests {
         let fixture = Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c", "Work: d"]);
         for index in [0, 1, 3] {
-            app.tasks[index].completed = true;
+            app.tasks[index].status = TaskStatus::Completed;
         }
         app.show_section(SectionView::Named("work".into()));
 
@@ -3724,7 +3736,7 @@ mod tests {
     fn clearing_unmarked_in_a_section_keeps_other_sections_and_carried_tasks() {
         let fixture = Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c", "Work: d"]);
-        app.tasks[2].carried = true;
+        app.tasks[2].status = TaskStatus::Carried;
         app.show_section(SectionView::Named("work".into()));
         app.list.select(Some(3));
 
@@ -4179,8 +4191,11 @@ mod tests {
                                 } else {
                                     "hit words ".repeat(8).trim().into()
                                 };
-                                task.completed = i == 1 || i == 3;
-                                task.carried = i == 2;
+                                task.status = match i {
+                                    1 | 3 => TaskStatus::Completed,
+                                    2 => TaskStatus::Carried,
+                                    _ => TaskStatus::Pending,
+                                };
                             }
 
                             app.list.select(selected);
@@ -4537,8 +4552,8 @@ mod tests {
             app.tasks[index].text = format!("HiT {index}");
         }
 
-        app.tasks[2].carried = true;
-        app.tasks[4].completed = true;
+        app.tasks[2].status = TaskStatus::Carried;
+        app.tasks[4].status = TaskStatus::Completed;
         let original = app.tasks.clone();
         press(&mut app, &fixture, KeyCode::Char('/'));
         app.paste("hit");
@@ -4745,15 +4760,16 @@ mod tests {
         assert_eq!(task_state(&app), completed);
 
         let mut mixed = app_with_tasks(2);
-        mixed.tasks[0].carried = true;
-        mixed.tasks[1].completed = true;
+        mixed.tasks[0].status = TaskStatus::Carried;
+        mixed.tasks[1].status = TaskStatus::Completed;
         press(&mut mixed, &fixture, KeyCode::Char('x'));
 
         assert_eq!(mixed.tasks.len(), 1);
-        assert!(mixed.tasks[0].carried);
+        assert_eq!(mixed.tasks[0].status, TaskStatus::Carried);
 
         mixed.undo(&fixture.storage).unwrap();
-        assert!(mixed.tasks[0].carried && mixed.tasks[1].completed);
+        assert_eq!(mixed.tasks[0].status, TaskStatus::Carried);
+        assert_eq!(mixed.tasks[1].status, TaskStatus::Completed);
 
         let mut empty = App::new(Vec::new());
         press(&mut empty, &fixture, KeyCode::Char('m'));
@@ -4767,15 +4783,15 @@ mod tests {
             let mut app = app_with_tasks(2);
             press(&mut app, &fixture, KeyCode::Char('m'));
 
-            assert!(app.tasks[0].carried);
+            assert_eq!(app.tasks[0].status, TaskStatus::Carried);
             assert_eq!(app.history.len(), 1);
 
             press(&mut app, &fixture, KeyCode::Char('m'));
-            assert!(!app.tasks[0].carried);
+            assert_ne!(app.tasks[0].status, TaskStatus::Carried);
 
             app.undo(&fixture.storage).unwrap();
-            assert!(app.tasks[0].carried);
-            assert!(app.tasks[0].carried && app.can_redo());
+            assert_eq!(app.tasks[0].status, TaskStatus::Carried);
+            assert!(app.can_redo());
 
             if action == KeyCode::Null {
                 app.row_tasks = vec![Some(0), Some(1)];
@@ -4795,24 +4811,24 @@ mod tests {
             }
 
             let index = app.list.selected().unwrap();
-            assert!(app.tasks[index].completed && !app.tasks[index].carried);
+            assert_eq!(app.tasks[index].status, TaskStatus::Completed);
 
             let history = app.history.len();
             press(&mut app, &fixture, KeyCode::Char('m'));
             assert_eq!(app.history.len(), history);
 
             app.undo(&fixture.storage).unwrap();
-            assert!(app.tasks[0].carried && !app.tasks[0].completed);
+            assert_eq!(app.tasks[0].status, TaskStatus::Carried);
 
             app.redo(&fixture.storage).unwrap();
             let index = app.list.selected().unwrap();
-            assert!(app.tasks[index].completed && !app.tasks[index].carried);
+            assert_eq!(app.tasks[index].status, TaskStatus::Completed);
 
             press(&mut app, &fixture, KeyCode::Enter);
             assert!(
                 app.tasks
                     .iter()
-                    .all(|task| !task.completed && !task.carried)
+                    .all(|task| task.status == TaskStatus::Pending)
             );
             assert_eq!(fixture.storage.load().unwrap(), app.tasks);
         }
@@ -4823,9 +4839,9 @@ mod tests {
         for selection in [None, Some(0), Some(1), Some(2), Some(3), Some(4)] {
             let fixture = Fixture::new();
             let mut app = app_with_tasks(5);
-            app.tasks[1].carried = true;
-            app.tasks[2].completed = true;
-            app.tasks[3].carried = true;
+            app.tasks[1].status = TaskStatus::Carried;
+            app.tasks[2].status = TaskStatus::Completed;
+            app.tasks[3].status = TaskStatus::Carried;
             app.list.select(selection);
             let original = app.tasks.clone();
             let survivors = vec![original[1].clone(), original[3].clone()];
@@ -4879,19 +4895,19 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Char('m'));
         press(&mut app, &fixture, KeyCode::Char('J'));
 
-        assert!(app.tasks[1].carried);
+        assert_eq!(app.tasks[1].status, TaskStatus::Carried);
 
         press(&mut app, &fixture, KeyCode::Char('e'));
         app.paste(" edited");
         press(&mut app, &fixture, KeyCode::Enter);
 
-        assert!(app.tasks[1].carried);
+        assert_eq!(app.tasks[1].status, TaskStatus::Carried);
 
         press(&mut app, &fixture, KeyCode::Char('a'));
         app.paste("new");
         press(&mut app, &fixture, KeyCode::Enter);
 
-        assert!(!app.tasks[2].carried);
+        assert_ne!(app.tasks[2].status, TaskStatus::Carried);
 
         app.undo(&fixture.storage).unwrap();
         let original = task_state(&app);
@@ -5293,7 +5309,11 @@ mod tests {
                 ("alpha last", true),
             ]
             .map(|(text, completed)| Task {
-                completed,
+                status: if completed {
+                    TaskStatus::Completed
+                } else {
+                    TaskStatus::Pending
+                },
                 ..Task::new(text)
             })
             .into(),
@@ -5517,7 +5537,7 @@ mod tests {
 
             if count == 1 {
                 press(&mut app, &fixture, KeyCode::Char('u'));
-                assert!(!app.tasks[0].completed);
+                assert_ne!(app.tasks[0].status, TaskStatus::Completed);
             }
         }
     }
@@ -5779,7 +5799,7 @@ mod tests {
             if ending == KeyCode::Enter {
                 assert_eq!(app.tasks.len(), 2);
                 assert_eq!(app.tasks[1].text, expected);
-                assert!(!app.tasks[1].completed);
+                assert_ne!(app.tasks[1].status, TaskStatus::Completed);
                 assert_eq!(fixture.storage.load().unwrap(), app.tasks);
             } else {
                 assert_eq!(app.tasks, original);
@@ -5793,7 +5813,7 @@ mod tests {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(3);
         app.list.select(Some(1));
-        app.tasks[1].completed = true;
+        app.tasks[1].status = TaskStatus::Completed;
         let original = app.tasks.clone();
         press(&mut app, &fixture, KeyCode::Char('e'));
         app.paste(" \r\nD\nd q日本語");
@@ -5993,7 +6013,7 @@ mod tests {
 
     fn task_json(created_at: &str) -> String {
         format!(
-            r#"{{"id":"00000000-0000-4000-8000-000000000001","created_at":"{created_at}","text":"t","completed":false}}"#
+            r#"{{"id":"00000000-0000-4000-8000-000000000001","created_at":"{created_at}","text":"t","status":"pending"}}"#
         )
     }
 
@@ -6523,7 +6543,11 @@ mod tests {
 
             assert_eq!(app.tasks, confirmed);
             assert_eq!(fixture.storage.load().unwrap(), confirmed);
-            assert!(app.tasks.iter().all(|task| !task.completed));
+            assert!(
+                app.tasks
+                    .iter()
+                    .all(|task| task.status != TaskStatus::Completed)
+            );
 
             press(&mut app, &fixture, KeyCode::Char('u'));
             assert_eq!(app.tasks, original);
@@ -6562,7 +6586,7 @@ mod tests {
             let mut app = app_with_tasks(5);
 
             for index in completed {
-                app.tasks[index].completed = true;
+                app.tasks[index].status = TaskStatus::Completed;
             }
 
             app.list.select(Some(selected));
@@ -6570,7 +6594,7 @@ mod tests {
 
             let expected: Vec<_> = original
                 .iter()
-                .filter(|task| !task.completed)
+                .filter(|task| task.status != TaskStatus::Completed)
                 .cloned()
                 .collect();
 
@@ -6615,7 +6639,7 @@ mod tests {
     fn clear_completed_does_not_activate_in_input_or_confirmation_modes() {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(1);
-        app.tasks[0].completed = true;
+        app.tasks[0].status = TaskStatus::Completed;
         let original = app.tasks.clone();
 
         for mode in [
@@ -6659,7 +6683,7 @@ mod tests {
             let fixture = Fixture::new();
             let mut app = app_with_tasks(3);
             app.list.select(Some(1));
-            app.tasks[1].completed = true;
+            app.tasks[1].status = TaskStatus::Completed;
             let original = app.tasks.clone();
 
             for key in keys {
@@ -6731,7 +6755,9 @@ mod tests {
         assert!(!fixture.task_path().exists());
 
         let mut done = app_with_tasks(2);
-        done.tasks.iter_mut().for_each(|task| task.completed = true);
+        done.tasks
+            .iter_mut()
+            .for_each(|task| task.status = TaskStatus::Completed);
         let original = done.tasks.clone();
 
         press(&mut done, &fixture, KeyCode::Char('m'));
@@ -6772,18 +6798,18 @@ mod tests {
             let mut app = app_with_tasks(3);
             app.tasks[..completed]
                 .iter_mut()
-                .for_each(|task| task.completed = true);
+                .for_each(|task| task.status = TaskStatus::Completed);
 
             press(&mut app, &fixture, KeyCode::Char('x'));
             assert_eq!(notice(&app), Some(message));
         }
 
-        for (carried, message) in [
-            (false, "Cleared 3 tasks"),
-            (true, "Cleared 2 tasks, kept 1 carried"),
+        for (status, message) in [
+            (TaskStatus::Pending, "Cleared 3 tasks"),
+            (TaskStatus::Carried, "Cleared 2 tasks, kept 1 carried"),
         ] {
             let mut app = app_with_tasks(3);
-            app.tasks[0].carried = carried;
+            app.tasks[0].status = status;
 
             press(&mut app, &fixture, KeyCode::Char('D'));
             press(&mut app, &fixture, KeyCode::Enter);
@@ -6795,7 +6821,7 @@ mod tests {
     fn failed_saves_never_confirm_a_change() {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(3);
-        app.tasks[0].completed = true;
+        app.tasks[0].status = TaskStatus::Completed;
         fixture.storage.save(&app.tasks).unwrap();
         block_saves(&fixture);
 
@@ -6926,7 +6952,7 @@ mod tests {
 
         restore_saves(&fixture);
         app.redo(&fixture.storage).unwrap();
-        assert!(app.tasks[0].completed);
+        assert_eq!(app.tasks[0].status, TaskStatus::Completed);
 
         app.undo(&fixture.storage).unwrap();
         app.mode = Mode::Adding("new branch".into(), AddPlacement::End);
@@ -6998,7 +7024,7 @@ mod tests {
             KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
         );
 
-        assert!(app.tasks[0].completed);
+        assert_eq!(app.tasks[0].status, TaskStatus::Completed);
 
         let restarted = App::new(fixture.storage.load().unwrap());
         assert!(!restarted.can_undo() && !restarted.can_redo());
@@ -7200,7 +7226,7 @@ mod tests {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(3);
         app.list.select(Some(1));
-        app.tasks[1].completed = true;
+        app.tasks[1].status = TaskStatus::Completed;
         press(&mut app, &fixture, KeyCode::Char('e'));
 
         assert_eq!(
@@ -7230,7 +7256,7 @@ mod tests {
         assert_eq!(app.list.selected(), Some(1));
         assert_eq!(app.tasks[0].text, "task 0");
         assert_eq!(app.tasks[1].text, "task 日本語 qjadDeK");
-        assert!(app.tasks[1].completed);
+        assert_eq!(app.tasks[1].status, TaskStatus::Completed);
         assert_eq!(app.tasks[2].text, "task 2");
         assert_eq!(fixture.storage.load().unwrap(), app.tasks);
     }
@@ -7306,7 +7332,7 @@ mod tests {
         ] {
             let fixture = Fixture::new();
             let mut app = app_with_tasks(3);
-            app.tasks[1].completed = true;
+            app.tasks[1].status = TaskStatus::Completed;
             app.list.select(Some(1));
             let original = app.tasks.clone();
             press(&mut app, &fixture, KeyEvent::new(down, modifiers));
@@ -7453,7 +7479,9 @@ mod tests {
                 let mut app = app_with_tasks(count);
 
                 for (index, task) in app.tasks.iter_mut().enumerate() {
-                    task.completed = index == 0;
+                    if index == 0 {
+                        task.status = TaskStatus::Completed;
+                    }
                 }
 
                 app.list.select(selected);
@@ -7599,7 +7627,7 @@ mod tests {
             assert_eq!(app.tasks[1].text, "task 1");
         }
 
-        assert!(!app.tasks[1].completed);
+        assert_ne!(app.tasks[1].status, TaskStatus::Completed);
     }
 
     #[test]
@@ -7631,7 +7659,7 @@ mod tests {
     fn only_enter_confirms_clear() {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(2);
-        app.tasks[1].completed = true;
+        app.tasks[1].status = TaskStatus::Completed;
         press(&mut app, &fixture, KeyCode::Char('D'));
 
         for code in [
@@ -7675,7 +7703,7 @@ mod tests {
         app.mouse(click, Rect::new(1, 1, 30, 3), &fixture.storage)
             .unwrap();
         assert_eq!(app.list.selected(), Some(2));
-        assert!(app.tasks[2].completed);
+        assert_eq!(app.tasks[2].status, TaskStatus::Completed);
         assert_eq!(fixture.storage.load().unwrap(), app.tasks);
 
         press(&mut app, &fixture, KeyCode::Char('u'));
@@ -7757,7 +7785,7 @@ mod tests {
 
         app.mouse(click(1, 2), rows, &fixture.storage).unwrap();
         assert_eq!(app.list.selected(), Some(6));
-        assert!(app.tasks[6].completed);
+        assert_eq!(app.tasks[6].status, TaskStatus::Completed);
         assert_eq!(fixture.storage.load().unwrap(), app.tasks);
 
         for (column, row) in [(0, 1), (31, 1), (1, 0), (1, 4)] {
@@ -7768,7 +7796,7 @@ mod tests {
 
         app.mode = Mode::Adding(TextInput::default(), AddPlacement::End);
         app.mouse(click(1, 2), rows, &fixture.storage).unwrap();
-        assert!(app.tasks[6].completed);
+        assert_eq!(app.tasks[6].status, TaskStatus::Completed);
 
         app.mode = Mode::Normal;
         app.list.select(Some(9));

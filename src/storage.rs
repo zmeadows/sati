@@ -19,13 +19,13 @@ use crate::app::{Task, current_time, settled_section_order, split_section};
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 // The `tasks.json` format written by this build. Files without `schema_version` are version 0.
-const SCHEMA_VERSION: u64 = 4;
+const SCHEMA_VERSION: u64 = 5;
 
 // `MIGRATIONS[n]` upgrades a version `n` document to version `n + 1`. To change the format,
 // bump `SCHEMA_VERSION` and append one migration; the array length enforces the pairing.
 // Migrations run in memory on load; the upgraded document is written by the next save.
 const MIGRATIONS: [fn(Value) -> std::result::Result<Value, String>; SCHEMA_VERSION as usize] =
-    [v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4];
+    [v0_to_v1, v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5];
 
 // Versions 0 and 1 share one document shape; version 0 also allows a bare task array.
 // Parsing into these strict types validates legacy data before it is migrated, so
@@ -242,6 +242,80 @@ fn v3_to_v4(value: Value) -> std::result::Result<Value, String> {
     };
 
     versioned(4, document)
+}
+
+// Version 4 documents, the input of `v4_to_v5`. Their tasks have the `V3Task` shape, and
+// `section_order` may be absent when no task has a section.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V4Document {
+    tasks: Vec<V3Task>,
+    #[serde(default)]
+    selected: Option<usize>,
+    #[serde(default)]
+    section: Option<String>,
+    #[serde(default)]
+    section_order: Vec<String>,
+}
+
+// Version 5 replaces the `completed` and `carried` flags with one `status`, so a task can no
+// longer be both. A version 4 task marked both is invalid data and is refused, not guessed at.
+fn v4_to_v5(value: Value) -> std::result::Result<Value, String> {
+    #[derive(Serialize)]
+    struct Document {
+        tasks: Vec<V5Task>,
+        selected: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        section: Option<String>,
+        section_order: Vec<String>,
+    }
+
+    // The status is spelled out here so this step never depends on today's `TaskStatus`.
+    #[derive(Serialize)]
+    struct V5Task {
+        id: String,
+        created_at: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        section: Option<String>,
+        text: String,
+        status: &'static str,
+    }
+
+    let document: V4Document =
+        serde_json::from_value(parse_version(value)?).map_err(|error| error.to_string())?;
+
+    let mut tasks = Vec::with_capacity(document.tasks.len());
+
+    for (index, task) in document.tasks.into_iter().enumerate() {
+        let status = match (task.completed, task.carried) {
+            (false, false) => "pending",
+            (true, false) => "completed",
+            (false, true) => "carried",
+            (true, true) => {
+                return Err(format!(
+                    "task {} cannot be both completed and carried",
+                    index + 1
+                ));
+            }
+        };
+
+        tasks.push(V5Task {
+            id: task.id,
+            created_at: task.created_at,
+            section: task.section,
+            text: task.text,
+            status,
+        });
+    }
+
+    let document = Document {
+        tasks,
+        selected: document.selected,
+        section: document.section,
+        section_order: document.section_order,
+    };
+
+    versioned(5, document)
 }
 
 #[derive(Default, Deserialize)]
@@ -622,6 +696,7 @@ pub(crate) fn create_temporary(directory: &Path, name: &str) -> Result<(PathBuf,
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::app::TaskStatus;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -717,6 +792,14 @@ pub mod tests {
                     r#"{{"schema_version":4,"tasks":{IDENTIFIED_TASKS},"selected":1,"section_order":[]}}"#
                 ),
                 Some(1),
+                true,
+            ),
+            (
+                format!(
+                    r#"{{"schema_version":5,"tasks":{},"selected":1,"section_order":[]}}"#,
+                    IDENTIFIED_TASKS.replace(r#""completed":false"#, r#""status":"pending""#)
+                ),
+                Some(1),
                 false,
             ),
         ] {
@@ -749,7 +832,11 @@ pub mod tests {
             ("active 2", false),
         ]
         .map(|(text, completed)| Task {
-            completed,
+            status: if completed {
+                TaskStatus::Completed
+            } else {
+                TaskStatus::Pending
+            },
             ..Task::new(text)
         })
         .into();
@@ -766,12 +853,12 @@ pub mod tests {
 
         assert_eq!(
             json,
-            serde_json::json!({"schema_version": 4, "tasks":[], "selected":null, "section_order":[]})
+            serde_json::json!({"schema_version": 5, "tasks":[], "selected":null, "section_order":[]})
         );
 
         // The version comes first so it is the first thing a reader sees.
         let saved = fs::read_to_string(fixture.task_path()).unwrap();
-        assert!(saved.starts_with("{\n  \"schema_version\": 4,"), "{saved}");
+        assert!(saved.starts_with("{\n  \"schema_version\": 5,"), "{saved}");
         assert!(!fixture.storage.load_document().unwrap().needs_migration);
     }
 
@@ -806,13 +893,13 @@ pub mod tests {
             let content: Vec<_> = document
                 .tasks
                 .iter()
-                .map(|task| (task.display_text(), task.completed, task.carried))
+                .map(|task| (task.display_text(), task.status))
                 .collect();
             assert_eq!(
                 content,
                 [
-                    ("Work: keep".into(), false, true),
-                    ("other".into(), true, false)
+                    ("Work: keep".into(), TaskStatus::Carried),
+                    ("other".into(), TaskStatus::Completed)
                 ]
             );
             assert_eq!(document.tasks[0].section.as_deref(), Some("Work"));
@@ -899,7 +986,13 @@ pub mod tests {
 
         for (index, task) in document.tasks.iter().enumerate() {
             assert_eq!(task.text, format!("task {index}"));
-            assert_eq!(task.completed, index % 2 == 0);
+            let expected = if index % 2 == 0 {
+                TaskStatus::Completed
+            } else {
+                TaskStatus::Pending
+            };
+
+            assert_eq!(task.status, expected);
         }
     }
 
@@ -951,8 +1044,13 @@ pub mod tests {
                 format!("00000000-0000-4000-8000-00000000000{index}")
             );
             assert_eq!(task.created_at.second(), index as u8);
-            assert_eq!(task.completed, index == 1);
-            assert_eq!(task.carried, index == 0);
+            let expected = match index {
+                0 => TaskStatus::Carried,
+                1 => TaskStatus::Completed,
+                _ => TaskStatus::Pending,
+            };
+
+            assert_eq!(task.status, expected);
         }
 
         assert_eq!(document.selected, Some(2));
@@ -961,13 +1059,168 @@ pub mod tests {
         assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
     }
 
+    // A version 4 file with every flag combination sati wrote, two sections, and a view.
+    const VERSION_4_TASKS: &str = r#"{"schema_version":4,"tasks":[
+        {"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:01Z","section":"Work","text":"open","completed":false},
+        {"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:02Z","text":"unsectioned","completed":false,"carried":false},
+        {"id":"00000000-0000-4000-8000-000000000003","created_at":"2026-11-07T19:24:03Z","section":"Home","text":"done","completed":true},
+        {"id":"00000000-0000-4000-8000-000000000004","created_at":"2026-11-07T19:24:04Z","section":"Work","text":"kept","completed":false,"carried":true}
+    ],"selected":3,"section":"work","section_order":["work","home"]}"#;
+
+    #[test]
+    fn version_4_flags_become_one_status_and_everything_else_is_kept() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+        fs::write(fixture.task_path(), VERSION_4_TASKS).unwrap();
+
+        let document = fixture.storage.load_document().unwrap();
+        let id = |number: u8| format!("00000000-0000-4000-8000-00000000000{number}");
+
+        let tasks: Vec<_> = document
+            .tasks
+            .iter()
+            .map(|task| {
+                let created = task.created_at.second();
+                (
+                    task.id.to_string(),
+                    created,
+                    task.display_text(),
+                    task.status,
+                )
+            })
+            .collect();
+        assert_eq!(
+            tasks,
+            [
+                (id(1), 1, "Work: open".to_owned(), TaskStatus::Pending),
+                (id(2), 2, "unsectioned".to_owned(), TaskStatus::Pending),
+                (id(3), 3, "Home: done".to_owned(), TaskStatus::Completed),
+                (id(4), 4, "Work: kept".to_owned(), TaskStatus::Carried),
+            ]
+        );
+        assert_eq!(document.selected, Some(3));
+        assert_eq!(document.section.as_deref(), Some("work"));
+        assert_eq!(document.section_order, ["work", "home"]);
+
+        // Loading never writes; the next save writes version 5 with `status` only.
+        assert!(document.needs_migration);
+        assert_eq!(
+            fs::read_to_string(fixture.task_path()).unwrap(),
+            VERSION_4_TASKS
+        );
+
+        fixture
+            .storage
+            .save_view(
+                &document.tasks,
+                &document.section_order,
+                document.selected,
+                document.section.as_deref(),
+            )
+            .unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixture.task_path()).unwrap()).unwrap();
+
+        assert_eq!(saved["schema_version"], 5);
+
+        let statuses: Vec<_> = saved["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|task| {
+                assert!(task.get("completed").is_none() && task.get("carried").is_none());
+                task["status"].as_str().unwrap().to_owned()
+            })
+            .collect();
+        assert_eq!(statuses, ["pending", "pending", "completed", "carried"]);
+        assert_eq!(
+            fixture.storage.load_document().unwrap().tasks,
+            document.tasks
+        );
+    }
+
+    #[test]
+    fn a_version_4_task_both_completed_and_carried_is_refused_untouched() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+        let both = VERSION_4_TASKS.replace(
+            r#""completed":false,"carried":true"#,
+            r#""completed":true,"carried":true"#,
+        );
+        fs::write(fixture.task_path(), &both).unwrap();
+
+        let error = fixture
+            .storage
+            .load_document()
+            .err()
+            .expect("rejected")
+            .to_string();
+
+        assert!(error.contains("migrating from version 4"), "{error}");
+        assert!(
+            error.contains("task 4 cannot be both completed and carried"),
+            "{error}"
+        );
+        assert!(error.contains("left untouched"), "{error}");
+        assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), both);
+    }
+
+    #[test]
+    fn version_5_files_need_one_known_status_per_task() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+        let file = |task_fields: &str| {
+            format!(
+                r#"{{"schema_version":5,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"t"{task_fields}}}],"section_order":[]}}"#
+            )
+        };
+
+        for (fields, problem) in [
+            (r#","status":"done""#, "unknown variant `done`"),
+            (r#","status":"Completed""#, "unknown variant `Completed`"),
+            ("", "missing field `status`"),
+            (
+                r#","status":"pending","completed":false"#,
+                "unknown field `completed`",
+            ),
+            (r#","completed":true"#, "unknown field `completed`"),
+        ] {
+            let json = file(fields);
+            fs::write(fixture.task_path(), &json).unwrap();
+
+            let error = fixture
+                .storage
+                .load_document()
+                .err()
+                .expect("rejected")
+                .to_string();
+
+            assert!(error.contains("invalid task file"), "{fields}: {error}");
+            assert!(error.contains(problem), "{fields}: {error}");
+            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
+        }
+
+        for status in ["pending", "completed", "carried"] {
+            let json = file(&format!(r#","status":"{status}""#));
+            fs::write(fixture.task_path(), &json).unwrap();
+
+            let document = fixture.storage.load_document().unwrap();
+            assert!(!document.needs_migration);
+
+            fixture.storage.save(&document.tasks).unwrap();
+            let saved: serde_json::Value =
+                serde_json::from_slice(&fs::read(fixture.task_path()).unwrap()).unwrap();
+            assert_eq!(saved["tasks"][0]["status"], status);
+        }
+    }
+
     #[test]
     fn stored_sections_are_validated_and_bodies_are_never_reparsed() {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
         let task = |section: &str, text: &str| {
             format!(
-                r#"{{"schema_version":4,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":{section},"text":"{text}","completed":false}}],"section_order":["work"]}}"#
+                r#"{{"schema_version":5,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":{section},"text":"{text}","status":"pending"}}],"section_order":["work"]}}"#
             )
         };
 
@@ -1108,7 +1361,7 @@ pub mod tests {
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
         let document = |order: &str| {
             format!(
-                r#"{{"schema_version":4,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Work","text":"a","completed":false}},{{"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:05Z","section":"Home","text":"b","completed":false}}],"section_order":{order}}}"#
+                r#"{{"schema_version":5,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Work","text":"a","status":"pending"}},{{"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:05Z","section":"Home","text":"b","status":"pending"}}],"section_order":{order}}}"#
             )
         };
 
@@ -1146,7 +1399,7 @@ pub mod tests {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
 
-        let future = r#"{"schema_version":5,"tasks":[],"future":"field"}"#;
+        let future = r#"{"schema_version":6,"tasks":[],"future":"field"}"#;
         fs::write(fixture.task_path(), future).unwrap();
         let error = fixture
             .storage
@@ -1155,8 +1408,8 @@ pub mod tests {
             .expect("rejected")
             .to_string();
 
-        assert!(error.contains("schema version 5"), "{error}");
-        assert!(error.contains("supports version 4"), "{error}");
+        assert!(error.contains("schema version 6"), "{error}");
+        assert!(error.contains("supports version 5"), "{error}");
         assert!(error.contains("left untouched"), "{error}");
         assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), future);
 
@@ -1189,24 +1442,21 @@ pub mod tests {
         fs::write(fixture.task_path(), legacy).unwrap();
         let mut tasks = fixture.storage.load().unwrap();
 
-        assert!(tasks.iter().all(|task| !task.carried));
+        let statuses: Vec<_> = tasks.iter().map(|task| task.status).collect();
+        assert_eq!(statuses, [TaskStatus::Pending, TaskStatus::Completed]);
 
-        let ordinary = serde_json::to_value(&tasks).unwrap();
-        assert!(
-            ordinary
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|task| task.get("carried").is_none())
-        );
-
-        tasks[0].carried = true;
+        tasks[0].status = TaskStatus::Carried;
         fixture.storage.save(&tasks).unwrap();
         assert_eq!(fixture.storage.load().unwrap(), tasks);
 
+        // Each task stores exactly one `status`, and no longer the old flags.
         let json = serde_json::to_value(&tasks).unwrap();
-        assert_eq!(json[0]["carried"], true);
-        assert!(json[1].get("carried").is_none());
+        assert_eq!(json[0]["status"], "carried");
+        assert_eq!(json[1]["status"], "completed");
+
+        for task in json.as_array().unwrap() {
+            assert!(task.get("completed").is_none() && task.get("carried").is_none());
+        }
 
         for invalid in [
             r#"[{"text":"bad","completed":true,"carried":true}]"#,
@@ -1435,7 +1685,7 @@ pub mod tests {
         let tasks = vec![
             Task::new("Read 日本語 🪷"),
             Task {
-                completed: true,
+                status: TaskStatus::Completed,
                 ..Task::new("Keep this position")
             },
         ];
@@ -1449,7 +1699,7 @@ pub mod tests {
 
         let mut replacement = tasks.clone();
         replacement.reverse();
-        replacement[0].completed = false;
+        replacement[0].status = TaskStatus::Pending;
         replacement[1].text.push_str(" updated");
 
         for list in [&replacement, &tasks, &replacement] {
@@ -1472,7 +1722,7 @@ pub mod tests {
         let fixture = Fixture::new();
 
         let tasks = vec![Task {
-            completed: true,
+            status: TaskStatus::Completed,
             ..Task::new("Keep the original")
         }];
 
@@ -1551,7 +1801,7 @@ pub mod tests {
             let tasks = vec![
                 Task::new("valid"),
                 Task {
-                    completed: true,
+                    status: TaskStatus::Completed,
                     ..Task::new(text)
                 },
             ];
@@ -1587,7 +1837,7 @@ pub mod tests {
 
         let tasks = vec![
             Task {
-                completed: true,
+                status: TaskStatus::Completed,
                 ..Task::new(
                     "日本語 e\u{301} 👩‍💻 👍🏽 — [punctuation!]  spaces\u{a0}inside\u{2003}text\u{2009}and\u{202f}text",
                 )
@@ -1635,7 +1885,7 @@ pub mod tests {
         fixture
             .storage
             .save(&[Task {
-                completed: true,
+                status: TaskStatus::Completed,
                 ..Task::new("Original tasks")
             }])
             .unwrap();
@@ -1685,7 +1935,7 @@ pub mod tests {
         }
 
         let replacement = vec![Task {
-            completed: true,
+            status: TaskStatus::Completed,
             ..Task::new("New list")
         }];
 

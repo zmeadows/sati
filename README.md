@@ -355,22 +355,26 @@ Navigation is saved on normal quit; a crash may lose selection changes since the
 task save.
 
 Each task has a unique `id` (a UUID) that stays the same as the task is edited, completed,
-or moved, and a `created_at` time in UTC (RFC 3339, such as `2026-11-07T19:24:05Z`).
+or moved, a `created_at` time in UTC (RFC 3339, such as `2026-11-07T19:24:05Z`), and a
+`status`: `"pending"`, `"completed"`, or `"carried"` (unfinished and kept by `D`). A task
+can't be both completed and carried; completing a carried task clears its carryover.
 Pasting a copied task creates a new task with its own `id`. A task's section is stored in
 its own `section` field, separate from its `text`; typing `Work: fix bug` sets the section
 to `Work` and the text to `fix bug`, and the task is still shown, edited, and exported as
 `Work: fix bug`.
 
-The file starts with a `schema_version` (currently `4`). Older files, including the
+The file starts with a `schema_version` (currently `5`). Older files, including the
 original bare task lists, are upgraded in memory when sati starts and written in the
 current format on the next save or normal quit; starting sati never rewrites the file by
 itself. Upgraded tasks receive new ids and share the upgrade time as their `created_at`,
 since their real creation times are unknown, and `Name: ` prefixes in older files move into
 the `section` field once. Upgraded files order their section tabs alphabetically, as
-earlier versions showed them. A file written by a newer version of sati is
-refused and left untouched, as is any file that cannot be read or upgraded, that gives
-two tasks the same `id`, or whose `section_order` doesn't list each section exactly once.
-Older versions of sati cannot open version 4 files.
+earlier versions showed them, and the older `completed` / `carried` flags become one
+`status`. A file written by a newer version of sati is refused and left untouched, as is
+any file that cannot be read or upgraded (including an older file that marks a task both
+completed and carried, or a task with a missing or unknown `status`), that gives two tasks
+the same `id`, or whose `section_order` doesn't list each section exactly once. Older
+versions of sati cannot open version 5 files.
 
 ## Credits
 

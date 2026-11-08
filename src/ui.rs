@@ -10,7 +10,7 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Mode, SectionView, Task};
+use crate::app::{App, Mode, SectionView, Task, TaskStatus};
 use crate::input::TextInput;
 use crate::styles::Styles;
 
@@ -54,7 +54,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         })
         .border_style(app.styles.border);
 
-    let completed = app.tasks.iter().filter(|task| task.completed).count();
+    let completed = app
+        .tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::Completed)
+        .count();
     let counter = format!("[{completed}/{}]", app.tasks.len());
 
     if list_area.height >= 2 && counter.width() + 2 <= usize::from(list_area.width) {
@@ -514,7 +518,9 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
             vec![(0..text.len(), text.as_str())]
         };
 
-        let text_style = if task.completed {
+        let completed = task.status == TaskStatus::Completed;
+
+        let text_style = if completed {
             app.styles.completed.add_modifier(Modifier::CROSSED_OUT)
         } else {
             app.styles.normal
@@ -543,7 +549,7 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
                 }
             } else if selected == Some(index) {
                 app.styles.accent
-            } else if task.completed {
+            } else if completed {
                 app.styles.muted
             } else {
                 app.styles.normal
@@ -670,12 +676,12 @@ fn focus_marker(unicode: bool) -> &'static str {
 }
 
 fn task_checkbox(task: &Task, unicode: bool) -> &'static str {
-    if task.completed {
-        if unicode { " [✓] " } else { " [x] " }
-    } else if task.carried {
-        if unicode { " [↪] " } else { " [>] " }
-    } else {
-        " [ ] "
+    match task.status {
+        TaskStatus::Completed if unicode => " [✓] ",
+        TaskStatus::Completed => " [x] ",
+        TaskStatus::Carried if unicode => " [↪] ",
+        TaskStatus::Carried => " [>] ",
+        TaskStatus::Pending => " [ ] ",
     }
 }
 
@@ -815,7 +821,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         let can_carry = app
             .list
             .selected()
-            .is_some_and(|index| !app.tasks[index].completed);
+            .is_some_and(|index| app.tasks[index].status != TaskStatus::Completed);
 
         for (key, label, available) in [
             ("h/l", "Section", !app.section_tabs().is_empty()),
@@ -850,11 +856,11 @@ fn shortcut_available(app: &App, key: &str) -> bool {
     match key {
         "D" => (0..app.tasks.len())
             .filter(visible)
-            .any(|index| !app.tasks[index].carried),
+            .any(|index| app.tasks[index].status != TaskStatus::Carried),
         "u" => app.can_undo(),
         "x" => (0..app.tasks.len())
             .filter(visible)
-            .any(|index| app.tasks[index].completed),
+            .any(|index| app.tasks[index].status == TaskStatus::Completed),
         _ => true,
     }
 }
@@ -1233,6 +1239,15 @@ mod tests {
         App::new(texts.iter().map(|text| Task::new(*text)).collect())
     }
 
+    // For building lists that mix completed and pending tasks.
+    fn completed_if(completed: bool) -> TaskStatus {
+        if completed {
+            TaskStatus::Completed
+        } else {
+            TaskStatus::Pending
+        }
+    }
+
     #[test]
     fn section_tabs_sit_on_the_top_border_in_fixed_positions() {
         let mut plain = app_with_texts(&["plain", "https://example.com"]);
@@ -1438,7 +1453,7 @@ mod tests {
     fn clearing_hints_and_the_confirmation_follow_the_current_tab() {
         let fixture = crate::storage::tests::Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b"]);
-        app.tasks[1].completed = true;
+        app.tasks[1].status = TaskStatus::Completed;
         let mut terminal = test_terminal(80, 14);
 
         render(&mut terminal, &mut app);
@@ -1887,7 +1902,11 @@ mod tests {
 
         assert_eq!(app.view, view);
         assert_eq!(app.list.selected(), Some(1));
-        assert!(app.tasks.iter().all(|task| !task.completed));
+        assert!(
+            app.tasks
+                .iter()
+                .all(|task| task.status != TaskStatus::Completed)
+        );
         assert!(!fixture.task_path().exists());
 
         let mut plain = app_with_texts(&["plain"]);
@@ -1917,7 +1936,7 @@ mod tests {
             );
 
             let mut app = App::new(vec![Task {
-                completed: true,
+                status: TaskStatus::Completed,
                 ..Task::new("Work: text")
             }]);
             app.styles.accent = app.styles.accent.fg(accent);
@@ -1998,7 +2017,7 @@ mod tests {
         let mut app = App::new(vec![
             Task::new("ordinary"),
             Task {
-                completed: true,
+                status: TaskStatus::Completed,
                 ..Task::new("completed")
             },
         ]);
@@ -2045,7 +2064,7 @@ mod tests {
             let config: crate::config::Config = toml::from_str(&format!("[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nmodifiers=['italic']\n[styles.completed]\nfg='red'\nmodifiers={modifiers}\n[styles.accent]\nfg='blue'\nmodifiers=['italic','underlined']")).unwrap();
 
             let mut app = App::new(vec![Task {
-                completed: true,
+                status: TaskStatus::Completed,
                 ..Task::new("Work: task")
             }]);
             app.styles = Styles::resolve(config.theme, &config.styles, None);
@@ -2094,7 +2113,7 @@ mod tests {
         for mode in 0..7 {
             for width in [1, 12, 60] {
                 let mut app = App::new(vec![Task {
-                    completed: true,
+                    status: TaskStatus::Completed,
                     ..Task::new("Work: long wrapped task words")
                 }]);
 
@@ -2252,8 +2271,13 @@ mod tests {
                             let mut app = App::new(
                                 (0..total)
                                     .map(|index| Task {
-                                        completed: index < completed,
-                                        carried: carried && index == total - 1,
+                                        status: if index < completed {
+                                            TaskStatus::Completed
+                                        } else if carried && index == total - 1 {
+                                            TaskStatus::Carried
+                                        } else {
+                                            TaskStatus::Pending
+                                        },
                                         ..Task::new(format!("task {index}"))
                                     })
                                     .collect(),
@@ -2335,11 +2359,11 @@ mod tests {
         let mut app = App::new(vec![
             Task::new("ordinary"),
             Task {
-                completed: true,
+                status: TaskStatus::Completed,
                 ..Task::new("done")
             },
             Task {
-                carried: true,
+                status: TaskStatus::Carried,
                 ..Task::new("carried")
             },
         ]);
@@ -2409,7 +2433,7 @@ mod tests {
             let mut app = App::new(
                 (0..20)
                     .map(|index| Task {
-                        completed: index >= 10,
+                        status: completed_if(index >= 10),
                         ..Task::new(if index == 19 || (!single && index == 0) {
                             "needle words ".repeat(10).trim().into()
                         } else {
@@ -2507,7 +2531,7 @@ mod tests {
             let mut app = App::new(
                 (0..20)
                     .map(|index| Task {
-                        completed: index >= 10,
+                        status: completed_if(index >= 10),
                         ..Task::new(format!("{}end", format!("task {index} ").repeat(12)))
                     })
                     .collect(),
@@ -2604,11 +2628,11 @@ mod tests {
         let tasks = vec![
             Task::new("ordinary task wraps here"),
             Task {
-                completed: true,
+                status: TaskStatus::Completed,
                 ..Task::new("done task wraps here")
             },
             Task {
-                carried: true,
+                status: TaskStatus::Carried,
                 ..Task::new("carried task wraps here")
             },
         ];
@@ -2690,7 +2714,7 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
 
         let mut app = App::new(vec![Task {
-            carried: true,
+            status: TaskStatus::Carried,
             ..Task::new("carry words across wrapped lines")
         }]);
         app.keybinds = false;
@@ -2728,7 +2752,7 @@ mod tests {
 
         assert_eq!(app.row_tasks, mapping);
         assert!(screen(&terminal).contains("[↪]"));
-        assert!(app.tasks[0].carried);
+        assert_eq!(app.tasks[0].status, TaskStatus::Carried);
 
         app.keybinds = true;
 
@@ -2762,7 +2786,7 @@ mod tests {
                     let mut app = App::new(
                         (0..count)
                             .map(|index| Task {
-                                completed: index % 2 == 0,
+                                status: completed_if(index % 2 == 0),
                                 ..Task::new(format!("task {index}"))
                             })
                             .collect(),
@@ -2823,7 +2847,7 @@ mod tests {
                     .unwrap();
 
                     assert_eq!(app.tasks[index].text, "New task");
-                    assert!(!app.tasks[index].completed);
+                    assert_ne!(app.tasks[index].status, TaskStatus::Completed);
                     assert_eq!(app.list.selected(), Some(index));
                     assert_eq!(fixture.storage.load().unwrap(), app.tasks);
 
@@ -2864,11 +2888,11 @@ mod tests {
             let mut app = App::new(vec![
                 Task::new("before"),
                 Task {
-                    completed: true,
+                    status: TaskStatus::Completed,
                     ..Task::new(format!("{} end", "original e\u{301}界👩‍💻 ".repeat(30)))
                 },
                 Task {
-                    completed: true,
+                    status: TaskStatus::Completed,
                     ..Task::new("after")
                 },
             ]);
@@ -2939,7 +2963,7 @@ mod tests {
                 assert!(!app.can_undo());
             } else {
                 assert_eq!(app.tasks[1].text, format!("New {}", original[1].text));
-                assert!(app.tasks[1].completed);
+                assert_eq!(app.tasks[1].status, TaskStatus::Completed);
 
                 let edited = app.tasks.clone();
                 app.key(
@@ -2975,7 +2999,7 @@ mod tests {
             let mut app = App::new(
                 (0..20)
                     .map(|index| Task {
-                        completed: index >= 10,
+                        status: completed_if(index >= 10),
                         ..Task::new(format!("task {index} {}end", "e\u{301}界👩‍💻 ".repeat(12)))
                     })
                     .collect(),
@@ -3079,11 +3103,11 @@ mod tests {
 
         let mut app = App::new(vec![
             Task {
-                completed: true,
+                status: TaskStatus::Completed,
                 ..Task::new("needle")
             },
             Task {
-                completed: true,
+                status: TaskStatus::Completed,
                 ..Task::new("another needle")
             },
         ]);
@@ -3124,7 +3148,7 @@ mod tests {
         render(&mut terminal, &mut app);
         assert!(screen(&terminal).contains("[✓] needle"));
         assert!(!screen(&terminal).contains("search ›"));
-        assert!(app.tasks[0].completed);
+        assert_eq!(app.tasks[0].status, TaskStatus::Completed);
         assert!(!fixture.task_path().exists());
     }
 
@@ -3140,7 +3164,7 @@ mod tests {
                 ("unrelated", false),
             ]
             .map(|(text, completed)| Task {
-                completed,
+                status: completed_if(completed),
                 ..Task::new(text)
             })
             .into(),
@@ -3223,7 +3247,7 @@ mod tests {
             Task::new("tag: abCDef abcdef"),
             Task::new("nonmatching"),
             Task {
-                completed: true,
+                status: TaskStatus::Completed,
                 ..Task::new(format!("{}tag: abcdef", "long ".repeat(50)))
             },
         ]);
@@ -3307,7 +3331,7 @@ mod tests {
         let fixture = crate::storage::tests::Fixture::new();
 
         let mut app = App::new(vec![Task {
-            completed: true,
+            status: TaskStatus::Completed,
             ..Task::new("ordinary")
         }]);
         app.mode = Mode::Searching {
@@ -3369,7 +3393,7 @@ mod tests {
             Task::new("wrapped task ".repeat(40).trim_end()),
             Task::new("other active task"),
             Task {
-                completed: true,
+                status: TaskStatus::Completed,
                 ..Task::new("done")
             },
         ]);
@@ -3613,7 +3637,7 @@ mod tests {
 
             if app.mode == Mode::Normal {
                 let index = app.row_tasks[app.scroll].unwrap();
-                let was_completed = app.tasks[index].completed;
+                let before = app.tasks[index].status;
                 app.mouse(
                     MouseEvent {
                         kind: MouseEventKind::Down(MouseButton::Left),
@@ -3626,7 +3650,7 @@ mod tests {
                 )
                 .unwrap();
 
-                assert_eq!(app.tasks[index].completed, !was_completed);
+                assert_ne!(app.tasks[index].status, before);
 
                 app.list.select(Some(11));
                 app.reveal_selection = true;
@@ -3904,7 +3928,7 @@ mod tests {
             for completed in [false, true] {
                 for (width, wrap) in [(12, true), (40, true), (40, false)] {
                     let mut app = App::new(vec![Task {
-                        completed,
+                        status: completed_if(completed),
                         ..Task::new(text)
                     }]);
 
@@ -3952,7 +3976,7 @@ mod tests {
         let mut terminal = test_terminal(40, 10);
 
         let mut app = App::new(vec![Task {
-            completed: true,
+            status: TaskStatus::Completed,
             ..Task::new("Completed")
         }]);
         app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
@@ -4289,8 +4313,8 @@ mod tests {
         )
         .unwrap();
 
-        assert!(app.tasks[0].completed);
-        assert!(!app.tasks[1].completed);
+        assert_eq!(app.tasks[0].status, TaskStatus::Completed);
+        assert_ne!(app.tasks[1].status, TaskStatus::Completed);
         assert_eq!(fixture.storage.load().unwrap(), app.tasks);
         assert_eq!(app.tasks[0].text, "abcd \u{301}X");
 
@@ -4335,14 +4359,18 @@ mod tests {
         };
 
         app.mouse(click(2), rows, &fixture.storage).unwrap();
-        assert!(app.tasks[0].completed);
-        assert!(!app.tasks[1].completed);
+        assert_eq!(app.tasks[0].status, TaskStatus::Completed);
+        assert_ne!(app.tasks[1].status, TaskStatus::Completed);
 
         app.mouse(click(4), rows, &fixture.storage).unwrap();
-        assert!(app.tasks[1].completed);
+        assert_eq!(app.tasks[1].status, TaskStatus::Completed);
 
         app.mouse(click(5), rows, &fixture.storage).unwrap();
-        assert!(app.tasks.iter().all(|task| task.completed));
+        assert!(
+            app.tasks
+                .iter()
+                .all(|task| task.status == TaskStatus::Completed)
+        );
         assert_eq!(fixture.storage.load().unwrap(), app.tasks);
     }
 
