@@ -67,10 +67,10 @@ Then run `sati`.
 | Move current section right / left | `L` / `H`, `Alt+N` / `Alt+P` |
 | First / last task | `g` / `G`, `Home` / `End` |
 | Move one page | `PageDown` / `PageUp`, `Ctrl+V` / `Alt+V` |
-| Reorder task | `J` / `K`, `Shift+↓` / `Shift+↑` |
+| Move half a screen | `Ctrl+D` / `Ctrl+U` |
+| Reorder task | `J` / `K`, `Alt+↓` / `Alt+↑` |
 | Copy checklist as Markdown | `c` |
 | Copy selected task internally | `y`, `Alt+W` |
-| Cut selected task internally | `Ctrl+K` |
 | Paste task below / above | `p` / `P` (`Ctrl+Y` also pastes below) |
 | Append task | `a` |
 | Insert below selection | `o`, `Ctrl+O` |
@@ -80,11 +80,11 @@ Then run `sati`.
 | Check / uncheck | `Space`, `Enter` |
 | Delete task | `d`, `Delete` |
 | Toggle carryover | `m` |
-| Clear completed | `x` |
+| Clear completed | `X` |
 | Clear unmarked tasks (preserve carried) | `D` |
 | Undo | `u`, `Ctrl+Z` |
 | Redo | `Ctrl+R` |
-| Search | `/`, `Ctrl+F` |
+| Search | `/`, `Ctrl+F`, `Ctrl+S` |
 | Toggle wrapping | `w` |
 | Next / previous color theme | `t` / `T` |
 | Keyboard reference | `?` |
@@ -100,20 +100,27 @@ terminal it lists each action's keys under it, and on a very small one it asks f
 As in Vim, type a count before navigating or reordering to repeat it: `5j` moves
 down five tasks, `3K` moves the selected task up three, `3l` switches three section tabs
 right, and `2H` moves the current section two places left. Counts also work with the
-arrow and `Ctrl+N` / `Ctrl+P` aliases of `j` / `k`, and counted moves stop at the first
-or last task or tab instead of wrapping. A counted reorder is a single change for `u`.
+arrow and `Ctrl+N` / `Ctrl+P` aliases of `j` / `k` and the `Alt+↓` / `Alt+↑` aliases of
+`J` / `K`, and counted moves stop at the first or last task or tab instead of wrapping.
+A counted reorder is a single change for `u`.
 `Esc` cancels a count, and sati forgets one after two seconds without another key.
 
 Holding a key repeats navigation (`j` / `k`, `h` / `l`, arrows, `Tab`, `Alt+B` / `Alt+F`,
-Page Up/Down, `Ctrl+V` / `Alt+V`), but commands that change tasks or section order, such
-as `d`, `Ctrl+K`, `J` / `K`, or `H` / `L`, run once per key press.
+Page Up/Down, `Ctrl+V` / `Alt+V`, `Ctrl+D` / `Ctrl+U`), but commands that change tasks or
+section order, such as `d`, `X`, `J` / `K`, `Alt+↓` / `Alt+↑`, or `H` / `L`, run once per
+key press.
 
-Task copies use one in-memory register, separate from the system clipboard. `Ctrl+K`
-cuts: it deletes the selected task like `d` and puts its text in the register, so `p`,
-`P`, or `Ctrl+Y` can put it back elsewhere; `u` restores it in place. Pasted
-tasks start incomplete and unmarked; the register remains available for repeated
-pastes until exit. `c` still copies the entire checklist as Markdown to the system
-clipboard.
+`Ctrl+D` / `Ctrl+U` move the selection and the view half a screen, counting wrapped lines,
+and stop at the first or last task. While typing they keep their editing meanings (see
+below), as does `Ctrl+K`, which does nothing in the checklist itself.
+sati turns off XON/XOFF flow control while it runs, so `Ctrl+S` reaches it; if your
+terminal or multiplexer binds `Ctrl+S` itself, use `/` or `Ctrl+F`.
+
+Task copies use one in-memory register, separate from the system clipboard. `y` (or
+`Alt+W`) puts the selected task's text in the register, and `p`, `P`, or `Ctrl+Y` paste
+it as a new task. Pasted tasks start incomplete and unmarked; the register remains
+available for repeated pastes until exit. `c` still copies the entire checklist as
+Markdown to the system clipboard.
 
 ### Sections
 
@@ -154,7 +161,7 @@ Meta (Esc+).
 
  A section tab hides the shared prefix
 and keeps navigation, counts, reordering (`J` / `K`), and search within its own tasks.
-`x`, `D`, and `c` clear or copy only the current tab's tasks; `sati export` always
+`X`, `D`, and `c` clear or copy only the current tab's tasks; `sati export` always
 exports the whole list.
 If a change moves the selected task out of the tab (for example editing its prefix, or
 undo), sati follows the task to its section. Deleting a section's last task returns to
@@ -178,7 +185,7 @@ The add, edit, search, rename, and section-picker prompts share these shortcuts:
 | Start / end of text | `Home` / `End`, `Ctrl+A` / `Ctrl+E` |
 | Previous / next word | `Ctrl+←` / `Ctrl+→`, `Alt+B` / `Alt+F` |
 | Delete next word | `Alt+D` |
-| Delete previous word | `Ctrl+Backspace`, `Ctrl+W` |
+| Delete previous word | `Ctrl+Backspace`, `Alt+Backspace`, `Ctrl+W` |
 | Delete character at cursor | `Delete`, `Ctrl+D` |
 | Delete to end / start of input | `Ctrl+K` / `Ctrl+U` |
 | Cancel current operation | `Esc`, `Ctrl+G` |

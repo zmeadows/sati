@@ -1019,6 +1019,7 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
         &[
             ("Next / previous task", "j / k, ↓ / ↑", "Ctrl+N / Ctrl+P"),
             ("First / last task", "g / G, Home / End", ""),
+            ("Half screen down / up", "", "Ctrl+D / Ctrl+U"),
             ("Repeat a move", "count first, e.g. 5j", ""),
         ],
     ),
@@ -1044,10 +1045,10 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
             ("Add task below", "o", "Ctrl+O"),
             ("Add task above", "O", ""),
             ("Edit task", "e", "Alt+E"),
-            ("Move task down / up", "J / K, Shift+↓ / ↑", ""),
+            ("Move task down / up", "J / K", "Alt+↓ / Alt+↑"),
             ("Toggle carryover", "m", ""),
             ("Delete task", "d, Delete", ""),
-            ("Clear completed", "x", ""),
+            ("Clear completed", "X", ""),
             ("Clear unmarked", "D", ""),
         ],
     ),
@@ -1055,7 +1056,6 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
         "Copy and undo",
         &[
             ("Copy task", "y", "Alt+W"),
-            ("Cut task", "", "Ctrl+K"),
             ("Paste below / above", "p / P", "Ctrl+Y (below)"),
             ("Undo", "u", "Ctrl+Z"),
             ("Redo", "", "Ctrl+R"),
@@ -1065,7 +1065,7 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
     (
         "Other",
         &[
-            ("Search", "/", "Ctrl+F"),
+            ("Search", "/", "Ctrl+F, Ctrl+S"),
             ("Toggle wrapping", "w", ""),
             ("Next / previous theme", "t / T", ""),
             ("Keyboard shortcuts", "?", ""),
@@ -1078,7 +1078,7 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
             ("Move cursor", "← / →", "Ctrl+B / Ctrl+F"),
             ("Start / end of text", "Home / End", "Ctrl+A / Ctrl+E"),
             ("Previous / next word", "Ctrl+← / Ctrl+→", "Alt+B / Alt+F"),
-            ("Delete previous word", "Ctrl+Backspace", "Ctrl+W"),
+            ("Delete previous word", "Ctrl/Alt+Backspace", "Ctrl+W"),
             ("Delete next word", "", "Alt+D"),
             ("Delete character", "Delete", "Ctrl+D"),
             ("Delete to end / start", "", "Ctrl+K / Ctrl+U"),
@@ -3417,6 +3417,52 @@ mod tests {
             app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
                 .unwrap();
             assert_eq!(app.list.selected(), Some(selected));
+
+            rows = render(&mut terminal, &mut app);
+            let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
+            assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
+        }
+
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn half_page_navigation_targets_visual_rows_in_mixed_task_heights() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut terminal = test_terminal(18, 7);
+
+        let mut app = App::new(
+            [
+                "short",
+                "abcd abcd abcd",
+                "short",
+                "abcd abcd abcd abcd abcd",
+                "short",
+            ]
+            .map(Task::new)
+            .into(),
+        );
+        let mut rows = render(&mut terminal, &mut app);
+        assert_eq!(rows.height, 5);
+        assert_eq!(app.row_tasks, [0, 1, 1, 2, 3, 3, 3, 4].map(Some));
+
+        // Each step covers two of the five rows, so the selection crosses tall tasks a row
+        // at a time but still advances at least one task, and stops at either end.
+        for (character, selected) in [
+            ('d', 1),
+            ('d', 2),
+            ('d', 3),
+            ('d', 4),
+            ('d', 4),
+            ('u', 3),
+            ('u', 1),
+            ('u', 0),
+            ('u', 0),
+        ] {
+            let key = KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL);
+            app.key(key, &fixture.storage).unwrap();
+            assert_eq!(app.list.selected(), Some(selected), "Ctrl+{character}");
 
             rows = render(&mut terminal, &mut app);
             let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());

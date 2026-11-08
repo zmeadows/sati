@@ -920,7 +920,9 @@ impl App {
         self.replace(tasks, Some(index), label, storage)
     }
 
-    fn page(&mut self, forward: bool) {
+    // Moves the selection and the view by `rows` visual rows: a full viewport for Page Up/Down,
+    // half of one for Ctrl+U/D.
+    fn page(&mut self, forward: bool, rows: usize) {
         let visible = self.visible_indices();
 
         if visible.is_empty() {
@@ -945,12 +947,13 @@ impl App {
             start
         };
 
-        let height = usize::from(self.viewport_height.max(1));
+        // A very short (or not yet drawn) viewport still moves by at least one row.
+        let rows = rows.max(1);
 
         let target = if forward {
-            anchor.saturating_add(height)
+            anchor.saturating_add(rows)
         } else {
-            anchor.saturating_sub(height)
+            anchor.saturating_sub(rows)
         };
 
         let candidate = self
@@ -972,9 +975,9 @@ impl App {
         if next != current_position {
             self.list.select(Some(visible[next]));
             self.scroll = if forward {
-                self.scroll.saturating_add(height)
+                self.scroll.saturating_add(rows)
             } else {
-                self.scroll.saturating_sub(height)
+                self.scroll.saturating_sub(rows)
             };
             self.reveal_selection = true;
         }
@@ -1561,22 +1564,6 @@ impl App {
         }
     }
 
-    // Cut is one ordinary deletion. The register changes only after the save succeeds, so a
-    // failed cut leaves the previous copy in place.
-    fn cut_task(&mut self, storage: &Storage) -> Result<()> {
-        let Some(index) = self.list.selected() else {
-            return Ok(());
-        };
-
-        let text = self.tasks[index].display_text();
-        self.delete_task(index, "cut task", storage)?;
-
-        self.task_register = Some(text);
-        self.notify("Cut task");
-
-        Ok(())
-    }
-
     fn delete_task(&mut self, index: usize, label: &str, storage: &Storage) -> Result<()> {
         let visible = self.visible_indices();
         let position = visible.iter().position(|&visible| visible == index);
@@ -1729,6 +1716,9 @@ impl App {
                 (KeyModifiers::ALT, KeyCode::Char('g' | 'G')) => Some(KeyCode::Char('`')),
                 (KeyModifiers::CONTROL, KeyCode::Char('v' | 'V')) => Some(KeyCode::PageDown),
                 (KeyModifiers::ALT, KeyCode::Char('v' | 'V')) => Some(KeyCode::PageUp),
+                // Org-mode's Alt+Up/Down move the task like K/J, counts included.
+                (KeyModifiers::ALT, KeyCode::Up) => Some(KeyCode::Char('K')),
+                (KeyModifiers::ALT, KeyCode::Down) => Some(KeyCode::Char('J')),
                 _ => None,
             };
 
@@ -1785,6 +1775,10 @@ impl App {
             // Alt+B/F switch tabs like h/l; Alt+P/N reorder sections and fire once per press.
             Mode::Normal if key.modifiers == KeyModifiers::ALT => {
                 matches!(key.code, KeyCode::Char('b' | 'B' | 'f' | 'F'))
+            }
+            // Ctrl+D/U move half a page like Page Down/Up.
+            Mode::Normal if key.modifiers == KeyModifiers::CONTROL => {
+                matches!(key.code, KeyCode::Char('d' | 'D' | 'u' | 'U'))
             }
             Mode::Normal => {
                 key.modifiers.is_empty()
@@ -1861,7 +1855,10 @@ impl App {
         }
 
         if key.modifiers == KeyModifiers::ALT
-            && matches!(key.code, KeyCode::Char('b' | 'B' | 'f' | 'F' | 'd' | 'D'))
+            && matches!(
+                key.code,
+                KeyCode::Char('b' | 'B' | 'f' | 'F' | 'd' | 'D') | KeyCode::Backspace
+            )
             && let Mode::Adding(input, _)
             | Mode::Editing { input, .. }
             | Mode::Searching { input, .. }
@@ -1872,6 +1869,7 @@ impl App {
                 KeyCode::Char('b' | 'B') => input.move_word_left(),
                 KeyCode::Char('f' | 'F') => input.move_word_right(),
                 KeyCode::Char('d' | 'D') => input.delete_word_after(),
+                KeyCode::Backspace => input.delete_word_before(),
                 _ => unreachable!(),
             }
 
@@ -1910,9 +1908,14 @@ impl App {
                         KeyCode::Char('y' | 'Y') => {
                             self.paste_task(AddPlacement::Below, storage)?
                         }
-                        KeyCode::Char('f' | 'F') => self.start_search(),
-                        // In text inputs, Ctrl+K deletes to the end of the line instead.
-                        KeyCode::Char('k' | 'K') => self.cut_task(storage)?,
+                        KeyCode::Char('f' | 'F' | 's' | 'S') => self.start_search(),
+                        // In text inputs, Ctrl+D/U delete text instead.
+                        KeyCode::Char('d' | 'D') => {
+                            self.page(true, usize::from(self.viewport_height / 2))
+                        }
+                        KeyCode::Char('u' | 'U') => {
+                            self.page(false, usize::from(self.viewport_height / 2))
+                        }
                         _ => {}
                     }
 
@@ -2204,13 +2207,17 @@ impl App {
                 self.notify(if self.wrap { "Wrap on" } else { "Wrap off" });
             }
             KeyCode::Char('m') => self.toggle_carryover(storage)?,
-            KeyCode::Char('x') => self.clear_completed(storage)?,
+            // Clearing several tasks takes Shift, so a stray `x` does nothing.
+            KeyCode::Char('X') => self.clear_completed(storage)?,
+            KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.clear_completed(storage)?;
+            }
             KeyCode::Char('J') => self.move_selected(true, count.unwrap_or(1), storage)?,
             KeyCode::Char('K') => self.move_selected(false, count.unwrap_or(1), storage)?,
-            KeyCode::Char('j') | KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.move_selected(true, count.unwrap_or(1), storage)?;
             }
-            KeyCode::Char('k') | KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.move_selected(false, count.unwrap_or(1), storage)?;
             }
             KeyCode::Char('j') | KeyCode::Down => self.navigate(true, count),
@@ -2234,8 +2241,8 @@ impl App {
                     None,
                 );
             }
-            KeyCode::PageUp => self.page(false),
-            KeyCode::PageDown => self.page(true),
+            KeyCode::PageUp => self.page(false, usize::from(self.viewport_height)),
+            KeyCode::PageDown => self.page(true, usize::from(self.viewport_height)),
             KeyCode::Char('g' | 'G') | KeyCode::Home | KeyCode::End if !self.tasks.is_empty() => {
                 let first = key.code == KeyCode::Home
                     || (key.code == KeyCode::Char('g')
@@ -2683,7 +2690,7 @@ mod tests {
         assert_eq!(output, expected);
         assert!(app.notification.is_none());
 
-        for key in ['u', 'w', 'd', 'x', 'p'] {
+        for key in ['u', 'w', 'd', 'X', 'p'] {
             press(&mut app, &fixture, KeyCode::Char(key));
             assert!(app.notification.is_none(), "{key}");
         }
@@ -3994,14 +4001,14 @@ mod tests {
         }
         app.show_section(SectionView::Named("work".into()));
 
-        press(&mut app, &fixture, KeyCode::Char('x'));
+        press(&mut app, &fixture, KeyCode::Char('X'));
 
         assert_eq!(texts(&app), ["Home: b", "Work: c"]);
         assert_eq!(app.list.selected(), Some(1));
         assert_eq!(app.view, SectionView::Named("work".into()));
         assert_eq!(notice(&app), Some("Cleared 2 completed Work tasks"));
 
-        press(&mut app, &fixture, KeyCode::Char('x'));
+        press(&mut app, &fixture, KeyCode::Char('X'));
         assert_eq!(notice(&app), Some("No completed Work tasks"));
 
         press(&mut app, &fixture, KeyCode::Char('u'));
@@ -4009,7 +4016,7 @@ mod tests {
         assert_eq!(app.tasks.len(), 4);
 
         app.show_section(SectionView::All);
-        press(&mut app, &fixture, KeyCode::Char('x'));
+        press(&mut app, &fixture, KeyCode::Char('X'));
         assert_eq!(texts(&app), ["Work: c"]);
         assert_eq!(notice(&app), Some("Cleared 3 completed tasks"));
     }
@@ -4985,7 +4992,7 @@ mod tests {
     // Each way to remove the last tasks of a tab, as keys pressed in Normal mode.
     const TAB_EMPTYING_KEYS: [&[KeyCode]; 3] = [
         &[KeyCode::Char('d')],
-        &[KeyCode::Char('x')],
+        &[KeyCode::Char('X')],
         &[KeyCode::Char('D'), KeyCode::Enter],
     ];
 
@@ -5262,7 +5269,7 @@ mod tests {
         let carried = task_state(&app);
         let bytes = std::fs::read(fixture.task_path()).unwrap();
 
-        for code in [KeyCode::Char('D'), KeyCode::Char('x')] {
+        for code in [KeyCode::Char('D'), KeyCode::Char('X')] {
             press(&mut app, &fixture, code);
             assert_eq!(app.mode, Mode::Normal);
             assert_eq!(task_state(&app), carried);
@@ -5284,7 +5291,7 @@ mod tests {
         let mut mixed = app_with_tasks(2);
         mixed.tasks[0].status = TaskStatus::Carried;
         mixed.tasks[1].status = TaskStatus::Completed;
-        press(&mut mixed, &fixture, KeyCode::Char('x'));
+        press(&mut mixed, &fixture, KeyCode::Char('X'));
 
         assert_eq!(mixed.tasks.len(), 1);
         assert_eq!(mixed.tasks[0].status, TaskStatus::Carried);
@@ -5399,7 +5406,7 @@ mod tests {
             assert_eq!(app.tasks, survivors);
             assert_eq!(app.tasks, survivors);
 
-            press(&mut app, &fixture, KeyCode::Char('x'));
+            press(&mut app, &fixture, KeyCode::Char('X'));
             assert_eq!(app.tasks, survivors);
 
             for key in [KeyCode::Char('d'), KeyCode::Delete] {
@@ -5701,6 +5708,13 @@ mod tests {
                     (
                         KeyCode::Backspace,
                         KeyModifiers::CONTROL,
+                        text.len(),
+                        end_word,
+                        &text[..end_word],
+                    ),
+                    (
+                        KeyCode::Backspace,
+                        KeyModifiers::ALT,
                         text.len(),
                         end_word,
                         &text[..end_word],
@@ -6865,7 +6879,7 @@ mod tests {
         press(
             &mut app,
             &fixture,
-            KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Up, KeyModifiers::ALT),
         );
         assert_eq!(app.tasks[3], original[1]);
         assert_eq!(app.list.selected(), Some(3));
@@ -6987,7 +7001,7 @@ mod tests {
             KeyCode::Enter,
             KeyCode::Char('d'),
             KeyCode::Char('D'),
-            KeyCode::Char('x'),
+            KeyCode::Char('X'),
             KeyCode::Char('u'),
             KeyCode::Char('J'),
             KeyCode::Char('K'),
@@ -6998,13 +7012,12 @@ mod tests {
             repeat(&mut app, &fixture, code, KeyModifiers::NONE);
         }
 
-        for code in [
-            KeyCode::Char('j'),
-            KeyCode::Char('k'),
-            KeyCode::Up,
-            KeyCode::Down,
-        ] {
+        for code in [KeyCode::Char('j'), KeyCode::Char('k')] {
             repeat(&mut app, &fixture, code, KeyModifiers::SHIFT);
+        }
+
+        for code in [KeyCode::Up, KeyCode::Down] {
+            repeat(&mut app, &fixture, code, KeyModifiers::ALT);
         }
 
         let release = KeyEvent {
@@ -7114,7 +7127,7 @@ mod tests {
                 .cloned()
                 .collect();
 
-            press(&mut app, &fixture, KeyCode::Char('x'));
+            press(&mut app, &fixture, KeyCode::Char('X'));
             assert_eq!(app.mode, Mode::Normal);
             assert_eq!(app.tasks, expected);
             assert_eq!(app.list.selected(), expected_selection);
@@ -7131,7 +7144,7 @@ mod tests {
     fn clearing_without_completed_tasks_is_a_no_op_and_preserves_undo() {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(0);
-        press(&mut app, &fixture, KeyCode::Char('x'));
+        press(&mut app, &fixture, KeyCode::Char('X'));
 
         assert!(!fixture.task_path().exists());
         assert!(app.history.is_empty());
@@ -7139,7 +7152,7 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Char('a'));
         press(&mut app, &fixture, KeyCode::Char('x'));
         press(&mut app, &fixture, KeyCode::Enter);
-        press(&mut app, &fixture, KeyCode::Char('x'));
+        press(&mut app, &fixture, KeyCode::Char('X'));
 
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].text, "x");
@@ -7167,12 +7180,12 @@ mod tests {
             Mode::ConfirmClear,
         ] {
             app.mode = mode;
-            press(&mut app, &fixture, KeyCode::Char('x'));
+            press(&mut app, &fixture, KeyCode::Char('X'));
             assert_eq!(app.tasks, original);
 
             match &app.mode {
                 Mode::Adding(input, _) | Mode::Editing { input, .. } => {
-                    assert!(input.text().ends_with('x'))
+                    assert!(input.text().ends_with('X'))
                 }
                 mode => assert_eq!(*mode, Mode::ConfirmClear),
             }
@@ -7187,7 +7200,7 @@ mod tests {
 
         for (keys, label) in [
             (vec![Char('d')], "delete task"),
-            (vec![Char('x')], "clear 1 completed task"),
+            (vec![Char('X')], "clear 1 completed task"),
             (vec![Char(' ')], "uncomplete task"),
             (vec![Char('J')], "move task"),
             (vec![Char('K')], "move task"),
@@ -7255,7 +7268,7 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Char('p'));
         assert_eq!(notice(&app), Some("Nothing to paste"));
 
-        press(&mut app, &fixture, KeyCode::Char('x'));
+        press(&mut app, &fixture, KeyCode::Char('X'));
         assert_eq!(notice(&app), Some("No completed tasks"));
 
         assert_eq!(app.tasks, original);
@@ -7308,7 +7321,7 @@ mod tests {
                 .iter_mut()
                 .for_each(|task| task.status = TaskStatus::Completed);
 
-            press(&mut app, &fixture, KeyCode::Char('x'));
+            press(&mut app, &fixture, KeyCode::Char('X'));
             assert_eq!(notice(&app), Some(message));
         }
 
@@ -7333,7 +7346,7 @@ mod tests {
         fixture.storage.save(&app.tasks).unwrap();
         block_saves(&fixture);
 
-        for key in [KeyCode::Char('d'), KeyCode::Char('x')] {
+        for key in [KeyCode::Char('d'), KeyCode::Char('X')] {
             let result = app.key(KeyEvent::new(key, KeyModifiers::NONE), &fixture.storage);
 
             assert!(result.is_err());
@@ -7422,7 +7435,7 @@ mod tests {
             KeyCode::Char('k'),
             KeyCode::Char('J'),
             KeyCode::Char('K'),
-            KeyCode::Char('x'),
+            KeyCode::Char('X'),
             KeyCode::Char('a'),
             KeyCode::Enter,
             KeyCode::Char('e'),
@@ -7580,7 +7593,7 @@ mod tests {
             vec![Char('e'), Char('!'), Enter],
             vec![Char(' ')],
             vec![Char('K')],
-            vec![Char('x')],
+            vec![Char('X')],
             vec![Char('d')],
             vec![Char('D'), Enter],
         ] {
@@ -7704,7 +7717,7 @@ mod tests {
         let history = app.history.clone();
         block_saves(&fixture);
 
-        for code in [KeyCode::Char('d'), KeyCode::Char('x'), KeyCode::Char('u')] {
+        for code in [KeyCode::Char('d'), KeyCode::Char('X'), KeyCode::Char('u')] {
             assert!(
                 app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
                     .is_err()
@@ -7832,7 +7845,7 @@ mod tests {
             (KeyCode::Char('J'), KeyCode::Char('K'), KeyModifiers::NONE),
             (KeyCode::Char('J'), KeyCode::Char('K'), KeyModifiers::SHIFT),
             (KeyCode::Char('j'), KeyCode::Char('k'), KeyModifiers::SHIFT),
-            (KeyCode::Down, KeyCode::Up, KeyModifiers::SHIFT),
+            (KeyCode::Down, KeyCode::Up, KeyModifiers::ALT),
         ] {
             let fixture = Fixture::new();
             let mut app = app_with_tasks(3);
@@ -7856,6 +7869,10 @@ mod tests {
             assert_eq!(app.list.selected(), Some(1));
             assert_eq!(app.tasks, original);
             assert_eq!(fixture.storage.load().unwrap(), original);
+
+            press(&mut app, &fixture, KeyCode::Char('u'));
+            assert_eq!(notice(&app), Some("Undid: move task"));
+            assert_eq!(app.list.selected(), Some(2));
         }
     }
 
@@ -7894,13 +7911,12 @@ mod tests {
         ] {
             app.mode = mode;
 
-            for code in [
-                KeyCode::Char('J'),
-                KeyCode::Char('K'),
-                KeyCode::Down,
-                KeyCode::Up,
-            ] {
+            for code in [KeyCode::Char('J'), KeyCode::Char('K')] {
                 press(&mut app, &fixture, KeyEvent::new(code, KeyModifiers::SHIFT));
+            }
+
+            for code in [KeyCode::Down, KeyCode::Up] {
+                press(&mut app, &fixture, KeyEvent::new(code, KeyModifiers::ALT));
             }
 
             assert_eq!(app.tasks, original);
@@ -8469,72 +8485,11 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_k_cuts_the_last_task_of_a_tab_into_the_register_as_one_undoable_deletion() {
-        let fixture = Fixture::new();
-        let mut app = app_with_texts(&["one", "Work: fix bug", "three"]);
-        app.show_section(SectionView::Named("work".into()));
-        let original_id = app.tasks[1].id;
-
-        press(
-            &mut app,
-            &fixture,
-            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
-        );
-
-        assert_eq!(texts(&app), ["one", "three"]);
-        assert_eq!(app.task_register.as_deref(), Some("Work: fix bug"));
-        assert_eq!(app.view, SectionView::All);
-        assert_eq!(app.list.selected(), Some(1));
-        assert_eq!(notice(&app), Some("Cut task"));
-        assert_eq!(fixture.storage.load().unwrap(), app.tasks);
-
-        press(&mut app, &fixture, KeyCode::Char('u'));
-
-        assert_eq!(texts(&app), ["one", "Work: fix bug", "three"]);
-        assert_eq!(app.tasks[1].id, original_id);
-        assert!(!app.can_undo());
-
-        press(&mut app, &fixture, KeyCode::Char('p'));
-
-        assert_eq!(
-            texts(&app),
-            ["one", "Work: fix bug", "Work: fix bug", "three"]
-        );
-        assert_ne!(app.tasks[2].id, original_id);
-        assert_eq!(app.tasks[2].status, TaskStatus::Pending);
-    }
-
-    #[test]
-    fn ctrl_k_selects_a_neighbor_in_the_tab_like_delete() {
-        let fixture = Fixture::new();
-        let texts_before = ["Work: a", "b", "Work: c", "Work: d"];
-        let mut cut = app_with_texts(&texts_before);
-        let mut deleted = app_with_texts(&texts_before);
-
-        for app in [&mut cut, &mut deleted] {
-            app.show_section(SectionView::Named("work".into()));
-            app.list.select(Some(2));
-        }
-
-        press(
-            &mut cut,
-            &fixture,
-            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
-        );
-        press(&mut deleted, &fixture, KeyCode::Char('d'));
-
-        assert_eq!(texts(&cut), texts(&deleted));
-        assert_eq!(cut.list.selected(), deleted.list.selected());
-        assert_eq!(cut.view, deleted.view);
-        assert_eq!(cut.history.back().unwrap().label, "cut task");
-    }
-
-    #[test]
-    fn ctrl_k_without_a_selection_changes_nothing() {
+    fn ctrl_k_does_nothing_in_normal_mode() {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(2);
         press(&mut app, &fixture, KeyCode::Char('y'));
-        app.list.select(None);
+        let before = task_state(&app);
 
         press(
             &mut app,
@@ -8542,31 +8497,165 @@ mod tests {
             KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
         );
 
-        assert_eq!(app.tasks.len(), 2);
+        assert_eq!(task_state(&app), before);
         assert_eq!(app.task_register.as_deref(), Some("task 0"));
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn ctrl_s_starts_a_search_like_slash_and_ctrl_f() {
+        let fixture = Fixture::new();
+        let mut expected = app_with_texts(&["one", "two"]);
+        expected.list.select(Some(1));
+        press(&mut expected, &fixture, KeyCode::Char('/'));
+
+        for character in ['f', 's'] {
+            let mut app = app_with_texts(&["one", "two"]);
+            app.list.select(Some(1));
+            let search = KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL);
+
+            press(&mut app, &fixture, search);
+            assert_eq!(app.mode, expected.mode);
+
+            // Inside the search input, the chord is ignored rather than restarting the search.
+            app.paste("tw");
+            press(&mut app, &fixture, search);
+            assert_eq!(app.search_query(), Some("tw"));
+        }
+    }
+
+    #[test]
+    fn ctrl_d_and_ctrl_u_move_half_a_page_and_stop_at_the_ends() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(10);
+        app.row_tasks = (0..10).map(Some).collect();
+        app.viewport_height = 4;
+        app.list.select(Some(0));
+        let original = app.tasks.clone();
+
+        for (character, selected) in [
+            ('d', 2),
+            ('d', 4),
+            ('d', 6),
+            ('d', 8),
+            ('d', 9),
+            ('d', 9),
+            ('u', 7),
+            ('u', 5),
+        ] {
+            press(
+                &mut app,
+                &fixture,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL),
+            );
+
+            assert_eq!(app.list.selected(), Some(selected), "Ctrl+{character}");
+            assert!(app.reveal_selection);
+        }
+
+        assert_eq!(app.tasks, original);
         assert!(!app.can_undo());
         assert!(!fixture.task_path().exists());
     }
 
     #[test]
-    fn failed_cut_keeps_tasks_history_view_and_register() {
+    fn half_pages_move_at_least_one_row_in_tiny_or_undrawn_viewports() {
         let fixture = Fixture::new();
-        let mut app = app_with_texts(&["one", "Work: two"]);
-        press(&mut app, &fixture, KeyCode::Char('y'));
-        app.show_section(SectionView::Named("work".into()));
-        fixture.storage.save(&app.tasks).unwrap();
-        let before = task_state(&app);
-        block_saves(&fixture);
 
-        let result = app.key(
-            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
-            &fixture.storage,
+        for height in [0, 1] {
+            let mut app = app_with_tasks(3);
+            app.row_tasks = (0..3).map(Some).collect();
+            app.viewport_height = height;
+            app.list.select(Some(0));
+
+            press(
+                &mut app,
+                &fixture,
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            );
+            assert_eq!(app.list.selected(), Some(1));
+
+            press(
+                &mut app,
+                &fixture,
+                KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            );
+            assert_eq!(app.list.selected(), Some(0));
+        }
+
+        let mut empty = app_with_tasks(0);
+        press(
+            &mut empty,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(empty.list.selected(), None);
+    }
+
+    #[test]
+    fn held_ctrl_d_and_ctrl_u_keep_moving() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(6);
+        app.row_tasks = (0..6).map(Some).collect();
+        app.viewport_height = 4;
+        app.list.select(Some(0));
+
+        repeat(
+            &mut app,
+            &fixture,
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        );
+        assert_eq!(app.list.selected(), Some(2));
+
+        repeat(
+            &mut app,
+            &fixture,
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        );
+        assert_eq!(app.list.selected(), Some(0));
+    }
+
+    #[test]
+    fn only_shifted_x_clears_completed_tasks() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(2);
+        app.tasks[0].status = TaskStatus::Completed;
+        let before = task_state(&app);
+
+        press(&mut app, &fixture, KeyCode::Char('x'));
+
+        assert_eq!(task_state(&app), before);
+        assert!(!fixture.task_path().exists());
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::SHIFT),
         );
 
-        assert!(result.is_err());
-        assert_eq!(task_state(&app), before);
-        assert_eq!(app.view, SectionView::Named("work".into()));
-        assert_eq!(app.task_register.as_deref(), Some("one"));
+        assert_eq!(texts(&app), ["task 1"]);
+        assert_eq!(notice(&app), Some("Cleared 1 completed task"));
+    }
+
+    #[test]
+    fn shift_arrows_navigate_without_reordering_tasks() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        app.list.select(Some(0));
+        let original = app.tasks.clone();
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT),
+        );
+
+        assert_eq!(app.list.selected(), Some(1));
+        assert_eq!(app.tasks, original);
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
     }
 
     #[test]
@@ -8700,7 +8789,7 @@ mod tests {
         for key in [
             KeyEvent::from(KeyCode::Char('d')),
             KeyEvent::from(KeyCode::Delete),
-            KeyEvent::from(KeyCode::Char('x')),
+            KeyEvent::from(KeyCode::Char('X')),
             KeyEvent::from(KeyCode::Char('D')),
             KeyEvent::from(KeyCode::Char(' ')),
             KeyEvent::from(KeyCode::Enter),
