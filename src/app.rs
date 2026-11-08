@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 
+use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Config, Matcher, Utf32Str};
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -13,6 +15,9 @@ use crate::notification::Notification;
 use crate::storage::{Result, Storage};
 
 const HISTORY_LIMIT: usize = 256;
+
+// The name the section picker matches [-] by.
+const UNSECTIONED_NAME: &str = "unsectioned";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -235,7 +240,28 @@ pub enum Mode {
     RenamingSection {
         input: TextInput,
     },
+    // Picking a section tab by fuzzy name, typed into the tab bar in place of [*]. The view
+    // previews the focused match; `original` is where Esc returns to.
+    FuzzySection {
+        input: TextInput,
+        // Matching tabs, best first: [-] and named sections, never [*].
+        matches: Vec<SectionView>,
+        // The query `matches` were found for, which tells edits apart from cursor moves.
+        matched_query: String,
+        original: NavigationCheckpoint,
+    },
     ConfirmClear,
+}
+
+// Where navigation stood when the section picker opened. Previews change the view,
+// selection, and scrolling freely; cancelling puts all of them back.
+#[derive(Debug, PartialEq)]
+pub struct NavigationCheckpoint {
+    view: SectionView,
+    selected: Option<usize>,
+    scroll: usize,
+    tab_scroll: usize,
+    reveal_selection: bool,
 }
 
 // A pending section suggestion while adding or editing, shown as dim text after the
@@ -356,25 +382,24 @@ impl App {
     }
 
     pub fn save_selection(&mut self, storage: &Storage) -> Result<()> {
-        let selected = match self.mode {
-            Mode::Searching { original, .. } | Mode::SearchResults { original, .. } => original,
-            _ => self.list.selected(),
+        // Temporary search and section-picker focus is never saved.
+        let (selected, view) = match &self.mode {
+            Mode::Searching { original, .. } | Mode::SearchResults { original, .. } => {
+                (*original, self.view.clone())
+            }
+            Mode::FuzzySection { original, .. } => (original.selected, original.view.clone()),
+            _ => (self.list.selected(), self.view.clone()),
         };
 
         let selected = crate::storage::valid_selection(&self.tasks, selected);
 
         if self.needs_migration
             || selected != self.persisted_selection
-            || self.view != self.persisted_view
+            || view != self.persisted_view
         {
-            storage.save_view(
-                &self.tasks,
-                &self.section_order,
-                selected,
-                self.view.saved_key(),
-            )?;
+            storage.save_view(&self.tasks, &self.section_order, selected, view.saved_key())?;
             self.persisted_selection = selected;
-            self.persisted_view = self.view.clone();
+            self.persisted_view = view;
             self.needs_migration = false;
         }
 
@@ -516,6 +541,152 @@ impl App {
         if let Some((view, _)) = self.section_tabs().get(position) {
             self.show_section(view.clone());
         }
+    }
+
+    // Section tabs whose names fuzzy-match `query`, best first. Equal scores, and an empty
+    // query, keep the tab order. [-] is found as "unsectioned", and [*] is never a match.
+    fn section_matches(&self, query: &str) -> Vec<SectionView> {
+        let candidates: Vec<(SectionView, String)> = self
+            .section_tabs()
+            .into_iter()
+            .filter_map(|(view, label)| match view {
+                SectionView::All => None,
+                SectionView::Unsectioned => Some((view, UNSECTIONED_NAME.to_owned())),
+                SectionView::Named(_) => Some((view, label)),
+            })
+            .collect();
+
+        if query.is_empty() {
+            return candidates.into_iter().map(|(view, _)| view).collect();
+        }
+
+        // `Pattern::new` takes the query literally: no `^`, `$`, `!`, or `'` syntax.
+        let pattern = Pattern::new(
+            query,
+            CaseMatching::Ignore,
+            Normalization::Smart,
+            AtomKind::Fuzzy,
+        );
+        let mut matcher = Matcher::new(Config::DEFAULT);
+        let mut buffer = Vec::new();
+
+        let mut scored: Vec<(SectionView, u32)> = candidates
+            .into_iter()
+            .filter_map(|(view, name)| {
+                let score = pattern.score(Utf32Str::new(&name, &mut buffer), &mut matcher)?;
+                Some((view, score))
+            })
+            .collect();
+
+        // A stable sort, so equal scores stay in tab order.
+        scored.sort_by_key(|&(_, score)| std::cmp::Reverse(score));
+
+        scored.into_iter().map(|(view, _)| view).collect()
+    }
+
+    // Open the section picker without moving: the current tab and selection stay as they are
+    // until the query or Tab picks another tab.
+    fn start_section_picker(&mut self) {
+        if self.section_tabs().is_empty() {
+            self.notify("No sections yet (start a task with \"Name: \")");
+
+            return;
+        }
+
+        let original = NavigationCheckpoint {
+            view: self.view.clone(),
+            selected: self.list.selected(),
+            scroll: self.scroll,
+            tab_scroll: self.tab_scroll,
+            reveal_selection: self.reveal_selection,
+        };
+
+        self.mode = Mode::FuzzySection {
+            input: TextInput::default(),
+            matches: self.section_matches(""),
+            matched_query: String::new(),
+            original,
+        };
+    }
+
+    // After the picker's query changes, rank the sections again and preview the best match.
+    // Cursor moves leave the query, and so the focused match, alone. With no matches, the
+    // last preview stays on screen.
+    fn refresh_section_picker(&mut self) {
+        let Mode::FuzzySection {
+            input,
+            matched_query,
+            ..
+        } = &self.mode
+        else {
+            return;
+        };
+
+        if input.text() == matched_query {
+            return;
+        }
+
+        let query = input.text().to_owned();
+        let found = self.section_matches(&query);
+        let best = found.first().cloned();
+
+        if let Mode::FuzzySection {
+            matches,
+            matched_query,
+            ..
+        } = &mut self.mode
+        {
+            *matches = found;
+            *matched_query = query;
+        }
+
+        if let Some(best) = best {
+            self.show_section(best);
+        }
+    }
+
+    // The focused match is the previewed tab. When that isn't a match (the picker opened on
+    // [*]), stepping starts from the first or last match.
+    fn cycle_section_match(&mut self, forward: bool) {
+        let Mode::FuzzySection { matches, .. } = &self.mode else {
+            return;
+        };
+
+        if matches.is_empty() {
+            return;
+        }
+
+        let count = matches.len();
+        let current = matches.iter().position(|view| *view == self.view);
+
+        let next = match (current, forward) {
+            (Some(current), true) => (current + 1) % count,
+            (Some(current), false) => (current + count - 1) % count,
+            (None, true) => 0,
+            (None, false) => count - 1,
+        };
+
+        let view = matches[next].clone();
+        self.show_section(view);
+    }
+
+    // Accepting keeps the previewed tab, saved on a clean exit like any other navigation.
+    // Cancelling restores the view, selection, and scrolling from before the picker opened.
+    fn finish_section_picker(&mut self, accept: bool) {
+        let Mode::FuzzySection { original, .. } = std::mem::replace(&mut self.mode, Mode::Normal)
+        else {
+            return;
+        };
+
+        if accept {
+            return;
+        }
+
+        self.view = original.view;
+        self.list.select(original.selected);
+        self.scroll = original.scroll;
+        self.tab_scroll = original.tab_scroll;
+        self.reveal_selection = original.reveal_selection;
     }
 
     // Swap the current section tab with its neighbor. [*] and [-] stay where they are, and the
@@ -1373,6 +1544,7 @@ impl App {
         }
 
         if self.consume_modified_key(key, storage)? {
+            self.refresh_section_picker();
             self.explain_rename_problem();
             return Ok(false);
         }
@@ -1382,7 +1554,8 @@ impl App {
             Mode::Adding(_, _)
             | Mode::Editing { .. }
             | Mode::Searching { .. }
-            | Mode::RenamingSection { .. } => {
+            | Mode::RenamingSection { .. }
+            | Mode::FuzzySection { .. } => {
                 self.handle_text_input_key(key, storage)?;
                 false
             }
@@ -1396,6 +1569,7 @@ impl App {
             }
         };
 
+        self.refresh_section_picker();
         self.explain_rename_problem();
 
         Ok(quit)
@@ -1451,10 +1625,15 @@ impl App {
                             | KeyCode::PageDown
                     )
             }
+            // Stepping through picker matches repeats like switching tabs in Normal mode.
+            Mode::FuzzySection { .. } if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) => {
+                true
+            }
             Mode::Adding(_, _)
             | Mode::Editing { .. }
             | Mode::Searching { .. }
-            | Mode::RenamingSection { .. } => {
+            | Mode::RenamingSection { .. }
+            | Mode::FuzzySection { .. } => {
                 matches!(
                     key.code,
                     KeyCode::Char(_)
@@ -1485,7 +1664,8 @@ impl App {
                 Mode::Adding(input, _)
                 | Mode::Editing { input, .. }
                 | Mode::Searching { input, .. }
-                | Mode::RenamingSection { input },
+                | Mode::RenamingSection { input }
+                | Mode::FuzzySection { input, .. },
                 KeyCode::Char(character),
             ) = (&mut self.mode, key.code)
             && !character.is_control()
@@ -1500,7 +1680,8 @@ impl App {
             && let Mode::Adding(input, _)
             | Mode::Editing { input, .. }
             | Mode::Searching { input, .. }
-            | Mode::RenamingSection { input } = &mut self.mode
+            | Mode::RenamingSection { input }
+            | Mode::FuzzySection { input, .. } = &mut self.mode
         {
             match key.code {
                 KeyCode::Char('b' | 'B') => input.move_word_left(),
@@ -1552,10 +1733,21 @@ impl App {
                     return Ok(true);
                 }
 
+                // In the section picker, Ctrl+Left/Right step through matches like
+                // Shift+Tab/Tab; every other input keeps them for moving by word.
+                if matches!(self.mode, Mode::FuzzySection { .. })
+                    && matches!(key.code, KeyCode::Left | KeyCode::Right)
+                {
+                    self.cycle_section_match(key.code == KeyCode::Right);
+
+                    return Ok(true);
+                }
+
                 if let Mode::Adding(input, _)
                 | Mode::Editing { input, .. }
                 | Mode::Searching { input, .. }
-                | Mode::RenamingSection { input } = &mut self.mode
+                | Mode::RenamingSection { input }
+                | Mode::FuzzySection { input, .. } = &mut self.mode
                 {
                     match key.code {
                         KeyCode::Char('a' | 'A') => input.set_cursor(0),
@@ -1614,6 +1806,31 @@ impl App {
             }
         }
 
+        if let Mode::FuzzySection { matches, .. } = &self.mode {
+            let forward = key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT);
+
+            // Other keys edit the query below, like any other input.
+            match key.code {
+                KeyCode::Tab | KeyCode::BackTab => {
+                    self.cycle_section_match(forward);
+                    return Ok(());
+                }
+                // With no matches there is nothing to pick; Esc still cancels.
+                KeyCode::Enter => {
+                    if !matches.is_empty() {
+                        self.finish_section_picker(true);
+                    }
+
+                    return Ok(());
+                }
+                KeyCode::Esc => {
+                    self.finish_section_picker(false);
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
         if matches!(self.mode, Mode::Adding(..) | Mode::Editing { .. }) {
             let forward = key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT);
 
@@ -1652,7 +1869,8 @@ impl App {
         let (Mode::Adding(input, _)
         | Mode::Editing { input, .. }
         | Mode::Searching { input, .. }
-        | Mode::RenamingSection { input }) = &mut self.mode
+        | Mode::RenamingSection { input }
+        | Mode::FuzzySection { input, .. }) = &mut self.mode
         else {
             unreachable!("text input mode");
         };
@@ -1752,6 +1970,7 @@ impl App {
                 self.pending_count = Some(count);
             }
             KeyCode::Char('/') => self.start_search(),
+            KeyCode::Char('`') => self.start_section_picker(),
             KeyCode::Char('n' | 'N')
                 if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
             {
@@ -1917,7 +2136,8 @@ impl App {
         if let Mode::Adding(input, _)
         | Mode::Editing { input, .. }
         | Mode::Searching { input, .. }
-        | Mode::RenamingSection { input } = &mut self.mode
+        | Mode::RenamingSection { input }
+        | Mode::FuzzySection { input, .. } = &mut self.mode
         {
             let normalized: String = text
                 .replace("\r\n", "\n")
@@ -1929,6 +2149,7 @@ impl App {
         }
 
         self.refresh_search();
+        self.refresh_section_picker();
         self.explain_rename_problem();
     }
 
@@ -2409,7 +2630,8 @@ mod tests {
                 Mode::Adding(input, _)
                 | Mode::Editing { input, .. }
                 | Mode::Searching { input, .. }
-                | Mode::RenamingSection { input } => assert_eq!(input.text(), "c"),
+                | Mode::RenamingSection { input }
+                | Mode::FuzzySection { input, .. } => assert_eq!(input.text(), "c"),
                 Mode::SearchResults { input, .. } => assert_eq!(input.text(), "task"),
                 Mode::ConfirmClear => {}
                 Mode::Normal => panic!("copy changed mode"),
@@ -2880,6 +3102,321 @@ mod tests {
         // Counts work as before once the jump is cancelled.
         type_keys(&mut app, &fixture, "j");
         assert_eq!(app.list.selected(), Some(2));
+    }
+
+    // Tabs: [*], [-], Home, Wishlist, Work.
+    fn picker_app() -> App {
+        app_with_texts(&["Work: a", "Home: b", "Wishlist: c", "plain"])
+    }
+
+    fn picker_matches(app: &App) -> Vec<SectionView> {
+        let Mode::FuzzySection { matches, .. } = &app.mode else {
+            panic!("expected the section picker");
+        };
+
+        matches.clone()
+    }
+
+    fn named(key: &str) -> SectionView {
+        SectionView::Named(key.into())
+    }
+
+    #[test]
+    fn backtick_opens_a_section_picker_listing_tabs_in_order_without_moving() {
+        let fixture = Fixture::new();
+        let mut app = picker_app();
+        app.list.select(Some(2));
+
+        press(&mut app, &fixture, KeyCode::Char('`'));
+
+        assert_eq!(
+            picker_matches(&app),
+            [
+                SectionView::Unsectioned,
+                named("home"),
+                named("wishlist"),
+                named("work")
+            ]
+        );
+        assert_eq!(app.view, SectionView::All);
+        assert_eq!(app.list.selected(), Some(2));
+    }
+
+    #[test]
+    fn backtick_without_sections_stays_in_normal_mode() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["plain"]);
+
+        press(&mut app, &fixture, KeyCode::Char('`'));
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.view, SectionView::All);
+    }
+
+    #[test]
+    fn picker_queries_match_fuzzily_and_preview_the_best_match_even_when_deleting() {
+        let fixture = Fixture::new();
+        let mut app = picker_app();
+        press(&mut app, &fixture, KeyCode::Char('`'));
+
+        // "wl" is not a substring of "Wishlist", but its letters appear in order.
+        type_keys(&mut app, &fixture, "wl");
+        assert_eq!(picker_matches(&app), [named("wishlist")]);
+        assert_eq!(app.view, named("wishlist"));
+        assert_eq!(app.list.selected(), Some(2));
+
+        press(&mut app, &fixture, KeyCode::Backspace);
+        press(&mut app, &fixture, KeyCode::Char('o'));
+        assert_eq!(picker_matches(&app), [named("work")]);
+        assert_eq!(app.view, named("work"));
+        assert_eq!(app.list.selected(), Some(0));
+
+        press(&mut app, &fixture, KeyCode::Backspace);
+        assert_eq!(app.view, named("wishlist"));
+
+        // An emptied query lists every tab again and previews the first.
+        press(&mut app, &fixture, KeyCode::Backspace);
+        assert_eq!(picker_matches(&app).len(), 4);
+        assert_eq!(app.view, SectionView::Unsectioned);
+        assert_eq!(app.list.selected(), Some(3));
+
+        // [-] is found by name.
+        type_keys(&mut app, &fixture, "uns");
+        assert_eq!(picker_matches(&app), [SectionView::Unsectioned]);
+    }
+
+    #[test]
+    fn equally_good_picker_matches_keep_the_tab_order() {
+        let fixture = Fixture::new();
+        let mut app = picker_app();
+        press(&mut app, &fixture, KeyCode::Char('`'));
+
+        press(&mut app, &fixture, KeyCode::Char('w'));
+
+        assert_eq!(picker_matches(&app), [named("wishlist"), named("work")]);
+    }
+
+    #[test]
+    fn cursor_moves_in_the_picker_keep_the_focused_match() {
+        let fixture = Fixture::new();
+        let mut app = picker_app();
+        press(&mut app, &fixture, KeyCode::Char('`'));
+        press(&mut app, &fixture, KeyCode::Char('w'));
+        press(&mut app, &fixture, KeyCode::Tab);
+
+        press(&mut app, &fixture, KeyCode::Left);
+        press(&mut app, &fixture, KeyCode::Home);
+        press(&mut app, &fixture, KeyCode::End);
+
+        assert_eq!(app.view, named("work"));
+    }
+
+    #[test]
+    fn tab_and_ctrl_arrows_step_through_picker_matches_and_wrap() {
+        let fixture = Fixture::new();
+        let ctrl = |code| KeyEvent::new(code, KeyModifiers::CONTROL);
+
+        // From [*], nothing is focused yet: Tab starts at the first match, Shift+Tab at the
+        // last.
+        let mut app = picker_app();
+        press(&mut app, &fixture, KeyCode::Char('`'));
+
+        for (key, view) in [
+            (KeyEvent::from(KeyCode::Tab), SectionView::Unsectioned),
+            (KeyEvent::from(KeyCode::BackTab), named("work")),
+            (KeyEvent::from(KeyCode::Tab), SectionView::Unsectioned),
+            (ctrl(KeyCode::Right), named("home")),
+            (ctrl(KeyCode::Left), SectionView::Unsectioned),
+            (ctrl(KeyCode::Left), named("work")),
+        ] {
+            press(&mut app, &fixture, key);
+
+            assert_eq!(app.view, view, "{key:?}");
+        }
+
+        let mut app = picker_app();
+        press(&mut app, &fixture, KeyCode::Char('`'));
+        press(&mut app, &fixture, KeyCode::BackTab);
+        assert_eq!(app.view, named("work"));
+
+        // From a section tab, stepping starts at that tab, and a held Tab keeps stepping.
+        let mut app = picker_app();
+        app.show_section(named("home"));
+        press(&mut app, &fixture, KeyCode::Char('`'));
+
+        press(&mut app, &fixture, KeyCode::Tab);
+        assert_eq!(app.view, named("wishlist"));
+
+        repeat(&mut app, &fixture, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(app.view, named("work"));
+
+        assert!(matches!(app.mode, Mode::FuzzySection { .. }));
+        assert!(!app.can_undo());
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn enter_keeps_the_previewed_section_without_history_or_saving() {
+        let fixture = Fixture::new();
+        let mut app = picker_app();
+        press(&mut app, &fixture, KeyCode::Char('`'));
+        type_keys(&mut app, &fixture, "wl");
+
+        // Holding Enter does nothing; only a press confirms.
+        repeat(&mut app, &fixture, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(matches!(app.mode, Mode::FuzzySection { .. }));
+
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.view, named("wishlist"));
+        assert_eq!(app.list.selected(), Some(2));
+        assert!(!app.can_undo() && !app.can_redo());
+        assert!(!fixture.task_path().exists());
+
+        // Like any navigation, the chosen tab is saved on a clean exit.
+        app.save_selection(&fixture.storage).unwrap();
+        assert_eq!(
+            App::from_document(fixture.storage.load_document().unwrap()).view,
+            named("wishlist")
+        );
+    }
+
+    #[test]
+    fn esc_and_ctrl_g_restore_the_view_selection_and_scrolling() {
+        let fixture = Fixture::new();
+
+        for cancel in [
+            KeyEvent::from(KeyCode::Esc),
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+        ] {
+            let mut app = picker_app();
+            app.list.select(Some(3));
+            app.scroll = 2;
+            app.tab_scroll = 1;
+            app.reveal_selection = false;
+
+            press(&mut app, &fixture, KeyCode::Char('`'));
+            type_keys(&mut app, &fixture, "wo");
+            press(&mut app, &fixture, KeyCode::Tab);
+            app.scroll = 0;
+            app.tab_scroll = 0;
+
+            press(&mut app, &fixture, cancel);
+
+            assert_eq!(app.mode, Mode::Normal);
+            assert_eq!(app.view, SectionView::All);
+            assert_eq!(app.list.selected(), Some(3));
+            assert_eq!((app.scroll, app.tab_scroll), (2, 1));
+            assert!(!app.reveal_selection);
+            assert!(!app.can_undo() && !app.can_redo());
+        }
+
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn saving_while_picking_keeps_the_view_from_before_the_picker() {
+        let fixture = Fixture::new();
+        let mut app = picker_app();
+        press(&mut app, &fixture, KeyCode::Char('`'));
+        type_keys(&mut app, &fixture, "wl");
+
+        app.save_selection(&fixture.storage).unwrap();
+
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn without_picker_matches_tab_and_enter_wait_until_the_query_matches_again() {
+        let fixture = Fixture::new();
+        let mut app = picker_app();
+        press(&mut app, &fixture, KeyCode::Char('`'));
+        type_keys(&mut app, &fixture, "wlq");
+
+        // The last preview stays on screen while nothing matches.
+        assert!(picker_matches(&app).is_empty());
+        assert_eq!(app.view, named("wishlist"));
+
+        for key in [
+            KeyEvent::from(KeyCode::Tab),
+            KeyEvent::from(KeyCode::BackTab),
+            KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL),
+            KeyEvent::from(KeyCode::Enter),
+        ] {
+            press(&mut app, &fixture, key);
+
+            assert!(matches!(app.mode, Mode::FuzzySection { .. }), "{key:?}");
+            assert_eq!(app.view, named("wishlist"), "{key:?}");
+        }
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        type_keys(&mut app, &fixture, "hm");
+        assert_eq!(app.view, named("home"));
+
+        press(&mut app, &fixture, KeyCode::Esc);
+        assert_eq!(app.view, SectionView::All);
+    }
+
+    #[test]
+    fn task_shortcuts_and_clicks_only_type_into_the_section_picker() {
+        let fixture = Fixture::new();
+        let mut app = picker_app();
+        let tasks = app.tasks.clone();
+        press(&mut app, &fixture, KeyCode::Char('`'));
+
+        type_keys(&mut app, &fixture, "dx Jq");
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
+        );
+        app.row_tasks = vec![Some(0), Some(1)];
+        app.mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 1,
+                row: 1,
+                modifiers: KeyModifiers::NONE,
+            },
+            Rect::new(1, 1, 20, 2),
+            &fixture.storage,
+        )
+        .unwrap();
+
+        let Mode::FuzzySection { input, .. } = &app.mode else {
+            panic!("expected the section picker");
+        };
+
+        // Typing previews matching tabs, so only the selection may change.
+        assert_eq!(input.text(), "dx Jq");
+        assert_eq!(app.tasks, tasks);
+        assert!(!app.can_undo() && !app.can_redo());
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn the_picker_matches_unicode_names_and_pasted_text() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Café: latte", "日本語: 本", "Work: a"]);
+        press(&mut app, &fixture, KeyCode::Char('`'));
+
+        app.paste("cafe");
+        assert_eq!(picker_matches(&app), [named("café")]);
+        assert_eq!(app.view, named("café"));
+
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        app.paste("日語");
+        assert_eq!(picker_matches(&app), [named("日本語")]);
+        assert_eq!(app.list.selected(), Some(1));
     }
 
     #[test]

@@ -62,6 +62,7 @@ Then run `sati`.
 | Navigate | `j` / `k`, `↓` / `↑`, `Ctrl+N` / `Ctrl+P` |
 | Next / previous section tab (wraps) | `l` / `h`, `Tab` / `Shift+Tab`, `Alt+F` / `Alt+B` |
 | Go to section tab 1–10 | `s1` … `s9`, `s0`; `Alt+S` then a digit |
+| Find section tab by name | `` ` `` |
 | Move current section right / left | `L` / `H`, `Alt+N` / `Alt+P` |
 | First / last task | `g` / `G`, `Home` / `End` |
 | Move one page | `PageDown` / `PageUp` |
@@ -115,6 +116,14 @@ ends wrap around. `s` followed by a digit jumps straight to a tab by position: `
 `[*]`, `s2` the next tab, and `s0` the tenth. `Alt+S` works the same way. A digit past the
 last tab does nothing, and any other key after `s` just cancels the jump.
 
+Press `` ` `` to find a section by name. `[*]` turns into a small input, and the tabs to
+its right narrow to the sections that fuzzy-match what you type (`wl` finds `Wishlist`),
+best match first; `[-]` matches as "unsectioned". Each change to the query shows the best
+match's tasks right away. `Tab` / `Shift+Tab` (or `Ctrl+→` / `Ctrl+←`) step through the
+matches and wrap around. `Enter` stays on the shown section; `Esc` or `Ctrl+G` returns to
+the tab, task, and scroll position you started from. While nothing matches, the last
+shown section stays on screen, and `Tab` and `Enter` wait until the query matches again.
+
 Press `L` / `H` (or `Alt+N` / `Alt+P`) on a section tab to move it one place right or
 left among the named sections. `[*]` and `[-]` stay first, the ends don't wrap, and the
 tasks themselves keep their order; `u` undoes a move. Renaming a section keeps its place.
@@ -140,13 +149,13 @@ whole rename at once.
 
 ### While typing
 
-The add, edit, and search prompts share these shortcuts:
+The add, edit, search, rename, and section-picker prompts share these shortcuts:
 
 | Action | Keys |
 | --- | --- |
 | Move cursor | `←` / `→`, `Ctrl+B` / `Ctrl+F` |
 | Start / end of text | `Home` / `End`, `Ctrl+A` / `Ctrl+E` |
-| Previous / next word | `Ctrl+←` / `Ctrl+→`, `Alt+B` / `Alt+F` |
+| Previous / next word | `Ctrl+←` / `Ctrl+→` (not in the section picker), `Alt+B` / `Alt+F` |
 | Delete next word | `Alt+D` |
 | Delete previous word | `Ctrl+Backspace`, `Ctrl+W` |
 | Delete character at cursor | `Delete`, `Ctrl+D` |

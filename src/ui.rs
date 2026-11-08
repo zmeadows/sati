@@ -144,20 +144,64 @@ const TAB_MARKER: usize = 1;
 // The prompt drawn before a section name being renamed, like the inline edit row's.
 const RENAME_LABEL: &str = "rename";
 
+// The section picker's input grows with its query up to a third of the tab strip (but at
+// least this many cells), leaving the rest for matching tabs.
+const PICKER_INPUT_SHARE: usize = 3;
+const PICKER_INPUT_MIN_WIDTH: usize = 10;
+
 // Draw section tabs on the box's top border (`strip`). Every tab keeps the same width
 // whichever one is active, so labels never move; the active tab only changes color.
-// While renaming, the active tab becomes the name input and grows with it.
+// While renaming, the active tab becomes the name input and grows with it. The section
+// picker replaces [*] with its query and shows only the matching tabs, best first.
 // Returns each drawn tab's clickable area.
 fn draw_section_tabs(
     frame: &mut Frame,
     app: &mut App,
     tabs: &[(SectionView, String)],
-    strip: Rect,
+    mut strip: Rect,
 ) -> Vec<(Rect, SectionView)> {
-    let active = tabs
-        .iter()
-        .position(|(view, _)| *view == app.view)
-        .unwrap_or(0);
+    let mut tabs = tabs.to_vec();
+    let picking = matches!(app.mode, Mode::FuzzySection { .. });
+
+    if let Mode::FuzzySection { input, matches, .. } = &app.mode {
+        let width = usize::from(strip.width);
+        let wanted = 2 + Line::raw("› ").width() + input.text().width() + 1;
+        let limit = (width / PICKER_INPUT_SHARE).max(PICKER_INPUT_MIN_WIDTH);
+        let input_width = wanted.min(limit).min(width.saturating_sub(TAB_MARKER + 1));
+        let x = strip.x + TAB_MARKER as u16;
+
+        if input_width > 0 {
+            // Blank the input first so the border doesn't show under the cursor cell.
+            frame
+                .buffer_mut()
+                .set_string(x, strip.y, " ".repeat(input_width), app.styles.normal);
+
+            draw_input_line(
+                frame,
+                Rect::new(x + 1, strip.y, (input_width as u16).saturating_sub(2), 1),
+                input,
+                "",
+                &app.styles,
+                true,
+                None,
+            );
+        }
+
+        // The border cell after the input leads the matches and holds `‹` when they scroll.
+        let used = (TAB_MARKER + input_width).min(width) as u16;
+        strip = Rect::new(strip.x + used, strip.y, strip.width - used, 1);
+
+        tabs = matches
+            .iter()
+            .filter_map(|view| tabs.iter().find(|(tab, _)| tab == view).cloned())
+            .collect();
+    }
+
+    // Outside the picker the view is always one of the tabs. In the picker it may not be a
+    // match (it opened on [*], or nothing matches), and then no tab is highlighted.
+    let found = tabs.iter().position(|(view, _)| *view == app.view);
+    let active = if picking { found } else { found.or(Some(0)) };
+
     let mut widths: Vec<usize> = tabs.iter().map(|(_, label)| label.width() + 2).collect();
     let width = usize::from(strip.width);
 
@@ -168,21 +212,30 @@ fn draw_section_tabs(
 
     // Room for the prompt, the name, and one cursor cell, but never more than the strip
     // holds beside its leading cell and trailing border cell.
-    if let Some(input) = rename_input {
+    if let Some(input) = rename_input
+        && let Some(active) = active
+    {
         let prompt_width = Line::raw(format!("{RENAME_LABEL} › ")).width();
         let input_width = 2 + prompt_width + input.text().width() + 1;
 
         widths[active] = input_width.min(width.saturating_sub(TAB_MARKER + 1));
     }
 
-    // Scroll only when the active tab would otherwise leave the strip.
-    let mut start = app.tab_scroll.min(active);
+    // Scroll only when the active tab would otherwise leave the strip. The picker's matches
+    // reorder on every edit, so they scroll from the first one and leave the saved scroll
+    // for the ordinary tabs.
+    let target = active.unwrap_or(0);
+    let saved_scroll = if picking { 0 } else { app.tab_scroll };
+    let mut start = saved_scroll.min(target);
 
-    while start < active && fitting_tabs(&widths, start, width) <= active {
+    while start < target && fitting_tabs(&widths, start, width) <= target {
         start += 1;
     }
 
-    app.tab_scroll = start;
+    if !picking {
+        app.tab_scroll = start;
+    }
+
     let end = fitting_tabs(&widths, start, width);
 
     let y = strip.y;
@@ -199,13 +252,13 @@ fn draw_section_tabs(
     for (index, (view, label)) in tabs.iter().enumerate().take(end).skip(start) {
         let tab_width = widths[index] as u16;
 
-        let style = if index == active {
+        let style = if Some(index) == active {
             app.styles.accent
         } else {
             app.styles.muted
         };
 
-        if index == active
+        if Some(index) == active
             && let Some(input) = rename_input
         {
             // A name that can't be used is drawn struck through; the notice says why.
@@ -739,6 +792,7 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             ("Ctrl+R", "Redo", app.can_redo()),
             ("m", "Carry", can_carry),
             ("t/T", "Theme", true),
+            ("`", "Find section", !app.section_tabs().is_empty()),
         ] {
             if available {
                 append_shortcut(&mut lines, (key, label), width, keys);
@@ -778,6 +832,11 @@ fn compact_shortcuts(app: &App, width: u16) -> Vec<Line<'static>> {
             vec![vec![("Enter", "Confirm"), ("Esc", "Cancel")]]
         }
         Mode::RenamingSection { .. } => vec![vec![("Enter", "Rename"), ("Esc", "Cancel")]],
+        Mode::FuzzySection { .. } => vec![vec![
+            ("Tab/Shift+Tab", "Next/prev"),
+            ("Enter", "Select"),
+            ("Esc", "Cancel"),
+        ]],
         _ if app.tasks.is_empty() => vec![vec![("u", "Undo"), ("w", "Wrap"), ("q", "Quit")]],
         _ => vec![
             vec![("j/k", "Navigate"), ("Space", "Toggle"), ("w", "Wrap")],
@@ -959,11 +1018,16 @@ fn draw_input_line(
         return;
     }
 
-    let mut line = Line::from(vec![
-        Span::styled(label, styles.muted),
-        Span::raw(" "),
-        Span::styled("› ", styles.accent),
-    ]);
+    // Without a label the prompt is just the arrow, for inputs whose place says what they are.
+    let mut line = if label.is_empty() {
+        Line::from(Span::styled("› ", styles.accent))
+    } else {
+        Line::from(vec![
+            Span::styled(label, styles.muted),
+            Span::raw(" "),
+            Span::styled("› ", styles.accent),
+        ])
+    };
 
     // Use a compact prompt when the full label would leave no cursor cell.
     if usize::from(area.width) <= line.width() {
@@ -1469,6 +1533,157 @@ mod tests {
         };
         render(&mut terminal, &mut app);
         assert!(screen(&terminal).contains("Enter Rename"));
+    }
+
+    fn press_keys(app: &mut App, fixture: &crate::storage::tests::Fixture, keys: &str) {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
+        for character in keys.chars() {
+            app.key(KeyEvent::from(KeyCode::Char(character)), &fixture.storage)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn the_section_picker_replaces_all_with_its_input_and_follows_it_with_matches() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.keybinds = false;
+        let mut terminal = test_terminal(40, 8);
+
+        press_keys(&mut app, &fixture, "`");
+        render(&mut terminal, &mut app);
+
+        assert_eq!(
+            row_text(&terminal, 0),
+            "┌─ ›   ─ Home ─ Work ──────────────────┐"
+        );
+        let cursor = terminal.get_cursor_position().unwrap();
+        assert_eq!((cursor.x, cursor.y), (5, 0));
+
+        press_keys(&mut app, &fixture, "wo");
+        render(&mut terminal, &mut app);
+
+        assert_eq!(
+            row_text(&terminal, 0),
+            "┌─ › wo  ─ Work ───────────────────────┐"
+        );
+        let cursor = terminal.get_cursor_position().unwrap();
+        assert_eq!((cursor.x, cursor.y), (7, 0));
+
+        // The previewed match is accented and its tasks are shown.
+        assert_eq!(terminal.backend().buffer()[(11, 0)].fg, DEFAULT_ACCENT);
+        assert!(screen(&terminal).contains(" a"));
+        assert!(!screen(&terminal).contains(" b"));
+    }
+
+    #[test]
+    fn overflowing_picker_matches_keep_the_focused_one_visible_without_moving_tab_scroll() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&[
+            "Alpha: a",
+            "Bravo: b",
+            "Charlie: c",
+            "Delta: d",
+            "Echo: e",
+            "Foxtrot: f",
+        ]);
+        app.keybinds = false;
+        let mut terminal = test_terminal(30, 8);
+
+        press_keys(&mut app, &fixture, "`");
+        render(&mut terminal, &mut app);
+
+        let top = row_text(&terminal, 0);
+        assert!(top.contains(" Alpha ") && !top.contains("Foxtrot"), "{top}");
+
+        app.key(KeyEvent::from(KeyCode::BackTab), &fixture.storage)
+            .unwrap();
+        render(&mut terminal, &mut app);
+
+        let top = row_text(&terminal, 0);
+        assert!(top.contains(" Foxtrot ") && top.contains('‹'), "{top}");
+        assert_eq!(app.tab_scroll, 0);
+
+        app.key(KeyEvent::from(KeyCode::Tab), &fixture.storage)
+            .unwrap();
+        render(&mut terminal, &mut app);
+
+        let top = row_text(&terminal, 0);
+        assert!(top.contains(" Alpha ") && !top.contains('‹'), "{top}");
+    }
+
+    #[test]
+    fn a_long_picker_query_stays_within_its_share_of_a_narrow_tab_bar() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&["Alphabetical: a", "Alpaca: b"]);
+        app.keybinds = false;
+        let mut terminal = test_terminal(30, 8);
+
+        press_keys(&mut app, &fixture, "`alphabetical");
+        render(&mut terminal, &mut app);
+
+        let top = row_text(&terminal, 0);
+        let cursor = terminal.get_cursor_position().unwrap();
+
+        assert_eq!(top.chars().count(), 30, "{top}");
+        assert!(top.ends_with('┐'), "{top}");
+        assert!(
+            top.contains("› ") && top.contains(" Alphabetical "),
+            "{top}"
+        );
+        assert_eq!(cursor.y, 0);
+        assert!(cursor.x < 12, "{cursor:?}");
+    }
+
+    #[test]
+    fn tiny_terminals_and_resizing_are_safe_while_picking_a_section() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&["日本語: 🪷 task", "LongSectionName: b", "plain"]);
+        let mut terminal = test_terminal(40, 12);
+
+        press_keys(&mut app, &fixture, "`");
+        app.paste("日本語 🪷 long query 日本語");
+
+        for width in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 40] {
+            for height in [0, 1, 2, 3, 6, 12] {
+                terminal.backend_mut().resize(width, height);
+
+                let rows = render(&mut terminal, &mut app);
+
+                assert!(rows.right() <= width && rows.bottom() <= height);
+
+                if terminal.backend().cursor_visible() {
+                    let buffer = terminal.backend().buffer();
+                    assert!(buffer.area.contains(terminal.backend().cursor_position()));
+                }
+            }
+        }
+
+        assert!(matches!(app.mode, Mode::FuzzySection { .. }));
+    }
+
+    #[test]
+    fn the_picker_legend_and_find_section_hint_follow_the_mode() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut terminal = test_terminal(90, 12);
+
+        let mut plain = app_with_texts(&["plain"]);
+        render(&mut terminal, &mut plain);
+        assert!(!screen(&terminal).contains("Find section"));
+
+        let mut app = app_with_texts(&["Work: a", "plain"]);
+        render(&mut terminal, &mut app);
+        assert!(screen(&terminal).contains("` Find section"));
+
+        press_keys(&mut app, &fixture, "`");
+        render(&mut terminal, &mut app);
+
+        let screen = screen(&terminal);
+        assert!(screen.contains("Tab/Shift+Tab Next/prev"), "{screen}");
+        assert!(screen.contains("Enter Select") && screen.contains("Esc Cancel"));
     }
 
     fn thumb_rows(terminal: &Terminal<TestBackend>, x: u16) -> Vec<u16> {
