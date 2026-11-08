@@ -340,6 +340,14 @@ pub enum Mode {
         original: NavigationCheckpoint,
     },
     ConfirmClear,
+    // The read-only keyboard reference opened with `?`. Drawing keeps `scroll` within
+    // `max_scroll` (the offset that shows the last line) and records `page`, the content rows
+    // that fit, so the scroll keys never depend on the terminal size directly.
+    Help {
+        scroll: usize,
+        max_scroll: usize,
+        page: usize,
+    },
 }
 
 // Where navigation stood when the section picker opened. Previews change the view,
@@ -1698,6 +1706,10 @@ impl App {
                 self.handle_confirm_clear_key(key, storage)?;
                 false
             }
+            Mode::Help { .. } => {
+                self.handle_help_key(key);
+                false
+            }
         };
 
         self.refresh_search(previous_query.as_deref());
@@ -1743,10 +1755,12 @@ impl App {
             && matches!(key.code, KeyCode::Char('p' | 'P' | 'n' | 'N'))
         {
             // Ctrl+N/P step through whatever is selectable: tasks like Down/Up in Normal mode,
-            // and search results, picker matches, or section suggestions like Tab/Shift+Tab.
+            // help lines like Down/Up in the keyboard reference, and search results, picker
+            // matches, or section suggestions like Tab/Shift+Tab.
             let next = matches!(key.code, KeyCode::Char('n' | 'N'));
+            let line_based = matches!(self.mode, Mode::Normal | Mode::Help { .. });
 
-            let code = match (self.mode == Mode::Normal, next) {
+            let code = match (line_based, next) {
                 (true, true) => KeyCode::Down,
                 (true, false) => KeyCode::Up,
                 (false, true) => KeyCode::Tab,
@@ -1810,6 +1824,18 @@ impl App {
                 )
             }
             Mode::ConfirmClear => false,
+            // Holding a scroll key keeps scrolling; `?` and Esc open or close once per press.
+            Mode::Help { .. } => {
+                key.modifiers.is_empty()
+                    && matches!(
+                        key.code,
+                        KeyCode::Char('j' | 'k')
+                            | KeyCode::Up
+                            | KeyCode::Down
+                            | KeyCode::PageUp
+                            | KeyCode::PageDown
+                    )
+            }
         }
     }
 
@@ -2089,6 +2115,43 @@ impl App {
         Ok(())
     }
 
+    fn handle_help_key(&mut self, key: KeyEvent) {
+        let Mode::Help { page, .. } = self.mode else {
+            return;
+        };
+
+        // Paging keeps one line of the previous page in view for context.
+        let page_step = page.saturating_sub(1).max(1);
+
+        match key.code {
+            // Closing leaves the checklist exactly as it was, so the selection is not revealed.
+            KeyCode::Char('?') | KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Char('j') | KeyCode::Down => self.scroll_help(true, 1),
+            KeyCode::Char('k') | KeyCode::Up => self.scroll_help(false, 1),
+            KeyCode::PageDown => self.scroll_help(true, page_step),
+            KeyCode::PageUp => self.scroll_help(false, page_step),
+            KeyCode::Home => self.scroll_help(false, usize::MAX),
+            KeyCode::End => self.scroll_help(true, usize::MAX),
+            _ => {}
+        }
+    }
+
+    // Scrolls the keyboard reference without wrapping, within the bounds of its last draw.
+    fn scroll_help(&mut self, down: bool, rows: usize) {
+        let Mode::Help {
+            scroll, max_scroll, ..
+        } = &mut self.mode
+        else {
+            return;
+        };
+
+        *scroll = if down {
+            scroll.saturating_add(rows).min(*max_scroll)
+        } else {
+            scroll.saturating_sub(rows)
+        };
+    }
+
     fn handle_normal_key(
         &mut self,
         key: KeyEvent,
@@ -2104,6 +2167,14 @@ impl App {
             }
             KeyCode::Char('/') => self.start_search(),
             KeyCode::Char('`') => self.start_section_picker(),
+            // Terminals may report `?` with or without Shift; nothing else reaches here.
+            KeyCode::Char('?') => {
+                self.mode = Mode::Help {
+                    scroll: 0,
+                    max_scroll: 0,
+                    page: 0,
+                };
+            }
             KeyCode::Char('t' | 'T')
                 if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
             {
@@ -2262,6 +2333,18 @@ impl App {
         self.notification = None;
         self.pending_count = None;
         self.pending_section_jump = None;
+
+        // The keyboard reference covers the checklist: the wheel scrolls it, and clicks never
+        // reach the tasks or tabs underneath.
+        if matches!(self.mode, Mode::Help { .. }) {
+            match event.kind {
+                MouseEventKind::ScrollDown => self.scroll_help(true, 1),
+                MouseEventKind::ScrollUp => self.scroll_help(false, 1),
+                _ => {}
+            }
+
+            return Ok(());
+        }
 
         if self.mode == Mode::Normal
             && event.kind == MouseEventKind::Down(MouseButton::Left)
@@ -2701,6 +2784,11 @@ mod tests {
             },
             Mode::RenamingSection { input: "".into() },
             Mode::ConfirmClear,
+            Mode::Help {
+                scroll: 0,
+                max_scroll: 0,
+                page: 0,
+            },
         ] {
             app.mode = mode;
             press(&mut app, &fixture, KeyCode::Char('c'));
@@ -2711,7 +2799,7 @@ mod tests {
                 | Mode::Searching { input, .. }
                 | Mode::RenamingSection { input }
                 | Mode::FuzzySection { input, .. } => assert_eq!(input.text(), "c"),
-                Mode::ConfirmClear => {}
+                Mode::ConfirmClear | Mode::Help { .. } => {}
                 Mode::Normal => panic!("copy changed mode"),
             }
 
@@ -8520,5 +8608,270 @@ mod tests {
             assert_eq!(app.tasks.len(), 2);
             assert!(!app.can_undo());
         }
+    }
+
+    // Opens the keyboard reference with the bounds a draw would record, so scrolling can be
+    // tested without a terminal.
+    fn open_help(app: &mut App, fixture: &Fixture, max_scroll: usize, page: usize) {
+        press(app, fixture, KeyCode::Char('?'));
+
+        let Mode::Help {
+            max_scroll: max,
+            page: rows,
+            ..
+        } = &mut app.mode
+        else {
+            panic!("? did not open the keyboard reference");
+        };
+
+        *max = max_scroll;
+        *rows = page;
+    }
+
+    fn help_scroll(app: &App) -> usize {
+        let Mode::Help { scroll, .. } = &app.mode else {
+            panic!("expected the keyboard reference");
+        };
+
+        *scroll
+    }
+
+    #[test]
+    fn question_mark_opens_the_reference_from_normal_mode_with_or_without_shift() {
+        let fixture = Fixture::new();
+
+        for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+            let mut app = app_with_tasks(3);
+            press(&mut app, &fixture, KeyCode::Char('2'));
+
+            press(
+                &mut app,
+                &fixture,
+                KeyEvent::new(KeyCode::Char('?'), modifiers),
+            );
+
+            assert_eq!(help_scroll(&app), 0, "{modifiers:?}");
+            assert_eq!(app.pending_count, None);
+        }
+    }
+
+    #[test]
+    fn question_mark_esc_and_ctrl_g_each_close_the_reference_without_changing_anything() {
+        let fixture = Fixture::new();
+
+        for close in [
+            KeyEvent::from(KeyCode::Char('?')),
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT),
+            KeyEvent::from(KeyCode::Esc),
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+        ] {
+            let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c"]);
+            app.show_section(SectionView::Named("work".into()));
+            press(&mut app, &fixture, KeyCode::Char('j'));
+            app.scroll = 1;
+            app.reveal_selection = false;
+            app.task_register = Some("kept".into());
+            let before = task_state(&app);
+
+            open_help(&mut app, &fixture, 10, 5);
+            press(&mut app, &fixture, KeyCode::Char('j'));
+            press(&mut app, &fixture, close);
+
+            assert_eq!(app.mode, Mode::Normal, "{close:?}");
+            assert_eq!(task_state(&app), before);
+            assert_eq!(app.view, SectionView::Named("work".into()));
+            assert_eq!((app.scroll, app.reveal_selection), (1, false));
+            assert_eq!(app.task_register.as_deref(), Some("kept"));
+        }
+
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn keys_in_the_reference_never_reach_task_commands() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.tasks[0].status = TaskStatus::Completed;
+        app.yank_task();
+        let before = task_state(&app);
+
+        open_help(&mut app, &fixture, 0, 5);
+
+        for key in [
+            KeyEvent::from(KeyCode::Char('d')),
+            KeyEvent::from(KeyCode::Delete),
+            KeyEvent::from(KeyCode::Char('x')),
+            KeyEvent::from(KeyCode::Char('D')),
+            KeyEvent::from(KeyCode::Char(' ')),
+            KeyEvent::from(KeyCode::Enter),
+            KeyEvent::from(KeyCode::Char('m')),
+            KeyEvent::from(KeyCode::Char('J')),
+            KeyEvent::from(KeyCode::Char('L')),
+            KeyEvent::from(KeyCode::Char('l')),
+            KeyEvent::from(KeyCode::Tab),
+            KeyEvent::from(KeyCode::Char('p')),
+            KeyEvent::from(KeyCode::Char('u')),
+            KeyEvent::from(KeyCode::Char('a')),
+            KeyEvent::from(KeyCode::Char('/')),
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT),
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT),
+            KeyEvent::from(KeyCode::Char('q')),
+        ] {
+            assert!(!press(&mut app, &fixture, key), "{key:?} quit");
+            assert!(matches!(app.mode, Mode::Help { .. }), "{key:?} closed help");
+        }
+
+        assert_eq!(task_state(&app), before);
+        assert_eq!(app.view, SectionView::All);
+        assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn reference_scrolling_stops_at_both_ends() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        open_help(&mut app, &fixture, 20, 8);
+
+        let steps = [
+            (KeyEvent::from(KeyCode::Char('k')), 0),
+            (KeyEvent::from(KeyCode::Up), 0),
+            (KeyEvent::from(KeyCode::Char('j')), 1),
+            (KeyEvent::from(KeyCode::Down), 2),
+            (KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL), 3),
+            (KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL), 2),
+            (KeyEvent::from(KeyCode::PageDown), 9),
+            (KeyEvent::from(KeyCode::PageDown), 16),
+            (KeyEvent::from(KeyCode::PageDown), 20),
+            (KeyEvent::from(KeyCode::Char('j')), 20),
+            (KeyEvent::from(KeyCode::PageUp), 13),
+            (KeyEvent::from(KeyCode::Home), 0),
+            (KeyEvent::from(KeyCode::PageUp), 0),
+            (KeyEvent::from(KeyCode::End), 20),
+        ];
+
+        for (key, expected) in steps {
+            press(&mut app, &fixture, key);
+
+            assert_eq!(help_scroll(&app), expected, "{key:?}");
+        }
+
+        assert_eq!(app.list.selected(), Some(0));
+    }
+
+    #[test]
+    fn held_scroll_keys_repeat_but_a_held_question_mark_does_not_toggle() {
+        let fixture = Fixture::new();
+        let mut app = app_with_tasks(3);
+        open_help(&mut app, &fixture, 20, 8);
+
+        repeat(&mut app, &fixture, KeyCode::Char('j'), KeyModifiers::NONE);
+        repeat(&mut app, &fixture, KeyCode::Down, KeyModifiers::NONE);
+        repeat(&mut app, &fixture, KeyCode::PageDown, KeyModifiers::NONE);
+        repeat(
+            &mut app,
+            &fixture,
+            KeyCode::Char('n'),
+            KeyModifiers::CONTROL,
+        );
+        repeat(&mut app, &fixture, KeyCode::Char('k'), KeyModifiers::NONE);
+
+        assert_eq!(help_scroll(&app), 9);
+
+        repeat(&mut app, &fixture, KeyCode::Char('?'), KeyModifiers::NONE);
+        repeat(&mut app, &fixture, KeyCode::Esc, KeyModifiers::NONE);
+
+        assert_eq!(help_scroll(&app), 9);
+
+        press(&mut app, &fixture, KeyCode::Char('?'));
+        repeat(&mut app, &fixture, KeyCode::Char('?'), KeyModifiers::SHIFT);
+
+        assert_eq!(app.mode, Mode::Normal);
+
+        let release = KeyEvent::new_with_kind(
+            KeyCode::Char('?'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
+        press(&mut app, &fixture, release);
+
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn question_mark_is_text_in_every_input_mode() {
+        let fixture = Fixture::new();
+
+        for start in [
+            KeyEvent::from(KeyCode::Char('a')),
+            KeyEvent::from(KeyCode::Char('e')),
+            KeyEvent::from(KeyCode::Char('/')),
+            KeyEvent::from(KeyCode::Char('E')),
+            KeyEvent::from(KeyCode::Char('`')),
+        ] {
+            let mut app = app_with_texts(&["Work: a"]);
+            app.show_section(SectionView::Named("work".into()));
+            press(&mut app, &fixture, start);
+            press(&mut app, &fixture, KeyCode::Char('?'));
+            press(
+                &mut app,
+                &fixture,
+                KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT),
+            );
+
+            let (Mode::Adding(input, _)
+            | Mode::Editing { input, .. }
+            | Mode::Searching { input, .. }
+            | Mode::RenamingSection { input }
+            | Mode::FuzzySection { input, .. }) = &app.mode
+            else {
+                panic!("{start:?} left text input");
+            };
+
+            assert!(input.text().ends_with("??"), "{start:?}");
+        }
+    }
+
+    #[test]
+    fn mouse_clicks_are_ignored_and_the_wheel_scrolls_while_the_reference_is_open() {
+        let fixture = Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "b"]);
+        app.row_tasks = vec![Some(0), Some(1)];
+        app.tab_targets = vec![(Rect::new(1, 0, 5, 1), SectionView::Named("work".into()))];
+        let before = task_state(&app);
+        let rows = Rect::new(1, 1, 20, 2);
+
+        let mouse = |kind, column, row| MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        open_help(&mut app, &fixture, 3, 8);
+
+        for event in [
+            mouse(MouseEventKind::Down(MouseButton::Left), 1, 1),
+            mouse(MouseEventKind::Down(MouseButton::Left), 2, 0),
+            mouse(MouseEventKind::ScrollDown, 1, 1),
+            mouse(MouseEventKind::ScrollDown, 30, 9),
+        ] {
+            app.mouse(event, rows, &fixture.storage).unwrap();
+        }
+
+        assert_eq!(help_scroll(&app), 2);
+        assert_eq!(task_state(&app), before);
+        assert_eq!(app.view, SectionView::All);
+
+        for _ in 0..3 {
+            let event = mouse(MouseEventKind::ScrollUp, 1, 1);
+            app.mouse(event, rows, &fixture.storage).unwrap();
+        }
+
+        assert_eq!(help_scroll(&app), 0);
+        assert_eq!(app.scroll, 0);
+        assert!(!fixture.task_path().exists());
     }
 }

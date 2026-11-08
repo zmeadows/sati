@@ -42,11 +42,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         .filter(|task| task.status == TaskStatus::Completed)
         .count();
     let counter = format!("[{completed}/{}]", app.tasks.len());
-
-    if list_area.height >= 2 && counter.width() + 2 <= usize::from(list_area.width) {
-        block =
-            block.title_bottom(Line::styled(counter.as_str(), app.styles.muted).right_aligned());
-    }
+    let mut notifying = false;
 
     if let Some(notice) = &app.notification
         && let Some(notification_style) = notice.style(
@@ -66,7 +62,26 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
 
         if list_area.height >= 2 && message.width() <= available {
             block = block.title_bottom(Line::styled(message, notification_style).left_aligned());
+            notifying = true;
         }
+    }
+
+    // The `? help` hint points to the keyboard reference from just left of the counter. It
+    // only shows on the plain checklist, and gives the border to brief notifications.
+    // Right-aligned titles are laid out from the right, so the hint goes in first.
+    let hint_width = HELP_HINT.width() + 1 + counter.width() + 2;
+
+    if app.mode == Mode::Normal
+        && !notifying
+        && list_area.height >= 2
+        && hint_width <= usize::from(list_area.width)
+    {
+        block = block.title_bottom(Line::styled(HELP_HINT, app.styles.muted).right_aligned());
+    }
+
+    if list_area.height >= 2 && counter.width() + 2 <= usize::from(list_area.width) {
+        block =
+            block.title_bottom(Line::styled(counter.as_str(), app.styles.muted).right_aligned());
     }
 
     let mut rows = block.inner(list_area);
@@ -146,8 +161,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         draw_confirmation(frame, area, &app.styles, &question);
     }
 
+    if matches!(app.mode, Mode::Help { .. }) {
+        draw_help(frame, area, app);
+    }
+
     rows
 }
+
+const HELP_HINT: &str = "? help";
 
 const TAB_MARKER: usize = 1;
 
@@ -956,6 +977,294 @@ fn draw_confirmation(frame: &mut Frame, area: Rect, styles: &Styles, question: &
             .style(styles.normal),
         inner,
     );
+}
+
+// An action, its keys, and its Ctrl/Alt alternative ("" where either is missing).
+type HelpRow = (&'static str, &'static str, &'static str);
+
+// The `?` keyboard reference: headed groups of (action, keys, Ctrl/Alt alternative). Keep it
+// in sync with the key dispatch in app.rs. Page Up/Down and Ctrl+V/Alt+V are deliberately
+// left out, like everywhere else on screen.
+const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
+    (
+        "Tasks",
+        &[
+            ("Next / previous task", "j / k, ↓ / ↑", "Ctrl+N / Ctrl+P"),
+            ("First / last task", "g / G, Home / End", ""),
+            ("Repeat a move", "count first, e.g. 5j", ""),
+        ],
+    ),
+    (
+        "Sections",
+        &[
+            (
+                "Next / previous tab",
+                "l / h, Tab / Shift+Tab",
+                "Alt+F / Alt+B",
+            ),
+            ("Go to tab 1–10", "s1 … s9, s0", "Alt+S, digit"),
+            ("Find tab by name", "`", "Alt+G"),
+            ("Move tab right / left", "L / H", "Alt+N / Alt+P"),
+            ("Rename section", "E", ""),
+        ],
+    ),
+    (
+        "Changing tasks",
+        &[
+            ("Check / uncheck", "Space, Enter", ""),
+            ("Append task", "a", ""),
+            ("Add task below", "o", "Ctrl+O"),
+            ("Add task above", "O", ""),
+            ("Edit task", "e", "Alt+E"),
+            ("Move task down / up", "J / K, Shift+↓ / ↑", ""),
+            ("Toggle carryover", "m", ""),
+            ("Delete task", "d, Delete", ""),
+            ("Clear completed", "x", ""),
+            ("Clear unmarked", "D", ""),
+        ],
+    ),
+    (
+        "Copy and undo",
+        &[
+            ("Copy task", "y", "Alt+W"),
+            ("Cut task", "", "Ctrl+K"),
+            ("Paste below / above", "p / P", "Ctrl+Y (below)"),
+            ("Undo", "u", "Ctrl+Z"),
+            ("Redo", "", "Ctrl+R"),
+            ("Copy list as Markdown", "c", ""),
+        ],
+    ),
+    (
+        "Other",
+        &[
+            ("Search", "/", "Ctrl+F"),
+            ("Toggle wrapping", "w", ""),
+            ("Next / previous theme", "t / T", ""),
+            ("Keyboard shortcuts", "?", ""),
+            ("Quit", "q", ""),
+        ],
+    ),
+    (
+        "While typing",
+        &[
+            ("Move cursor", "← / →", "Ctrl+B / Ctrl+F"),
+            ("Start / end of text", "Home / End", "Ctrl+A / Ctrl+E"),
+            ("Previous / next word", "Ctrl+← / Ctrl+→", "Alt+B / Alt+F"),
+            ("Delete previous word", "Ctrl+Backspace", "Ctrl+W"),
+            ("Delete next word", "", "Alt+D"),
+            ("Delete character", "Delete", "Ctrl+D"),
+            ("Delete to end / start", "", "Ctrl+K / Ctrl+U"),
+            (
+                "Next / previous match",
+                "Tab / Shift+Tab",
+                "Ctrl+N / Ctrl+P",
+            ),
+            ("Confirm", "Enter", ""),
+            ("Cancel", "Esc", "Ctrl+G"),
+        ],
+    ),
+];
+
+// The side-by-side reference needs this many columns: its widest row and borders. Below it,
+// each action's keys go on the line under it instead.
+const HELP_WIDE_MIN_WIDTH: u16 = 65;
+
+// Below either minimum there is no usable modal, so the reference asks for more room.
+const HELP_MIN_WIDTH: u16 = 35;
+const HELP_MIN_HEIGHT: u16 = 5;
+
+const HELP_TOO_SMALL: &str = "Enlarge terminal to view shortcuts.";
+const HELP_TITLE: &str = "Keyboard shortcuts";
+const HELP_CLOSE_HINT: &str = "? or Esc to close";
+
+// Cells before each action, between the side-by-side columns, and before the keys that the
+// compact layout puts under an action.
+const HELP_PADDING: usize = 1;
+const HELP_COLUMN_GAP: usize = 2;
+const HELP_KEYS_INDENT: usize = 3;
+
+// Borders on both sides of the modal.
+const HELP_BORDERS: usize = 2;
+
+// Draw the keyboard reference centered over the checklist, scrolled to the offset in
+// `Mode::Help`. The layout is picked from the terminal size on every draw, so resizing
+// simply switches it; the offset is then clamped to the lines of whichever layout is shown.
+fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
+    let styles = app.styles;
+
+    if area.width < HELP_MIN_WIDTH || area.height < HELP_MIN_HEIGHT {
+        frame.render_widget(Clear, area);
+        frame.render_widget(Block::default().style(styles.normal), area);
+
+        if area.is_empty() {
+            return;
+        }
+
+        // Leave the offset alone, so it is clamped once a usable size returns.
+        let message: Vec<Line> = wrap_text(HELP_TOO_SMALL, usize::from(area.width))
+            .into_iter()
+            .map(|(_, line)| Line::styled(line, styles.muted))
+            .collect();
+        let height = (message.len() as u16).min(area.height);
+        let top = area.y + (area.height - height) / 2;
+
+        frame.render_widget(
+            Paragraph::new(message).alignment(Alignment::Center),
+            Rect::new(area.x, top, area.width, height),
+        );
+        return;
+    }
+
+    let bindings = || HELP_GROUPS.iter().flat_map(|(_, rows)| rows.iter());
+    let joined_keys = |keys: &str, alternative: &str| {
+        [keys, alternative]
+            .into_iter()
+            .filter(|keys| !keys.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    let action_width = bindings().map(|(action, ..)| action.width()).max();
+    let keys_width = bindings().map(|(_, keys, _)| keys.width()).max();
+    let alternative_width = bindings()
+        .map(|(.., alternative)| alternative.width())
+        .max();
+    let action_width = action_width.unwrap_or(0);
+    let keys_width = keys_width.unwrap_or(0);
+    let alternative_width = alternative_width.unwrap_or(0);
+
+    // Size the modal to its widest row, with the same padding on the right as on the left
+    // when there is room for it.
+    let wide = area.width >= HELP_WIDE_MIN_WIDTH;
+
+    let row_width = if wide {
+        HELP_PADDING
+            + action_width
+            + HELP_COLUMN_GAP
+            + keys_width
+            + HELP_COLUMN_GAP
+            + alternative_width
+    } else {
+        bindings()
+            .map(|(action, keys, alternative)| {
+                let action_line = HELP_PADDING + action.width();
+                let keys_line = HELP_KEYS_INDENT + joined_keys(keys, alternative).width();
+                action_line.max(keys_line)
+            })
+            .max()
+            .unwrap_or(0)
+    };
+
+    let natural_width = row_width + HELP_PADDING + HELP_BORDERS;
+    let width = area.width.min(natural_width as u16);
+    let inner_width = usize::from(width).saturating_sub(HELP_BORDERS);
+
+    let padding = " ".repeat(HELP_PADDING);
+    let keys_indent = " ".repeat(HELP_KEYS_INDENT);
+    let mut lines = Vec::new();
+
+    for (index, (heading, rows)) in HELP_GROUPS.iter().enumerate() {
+        if index > 0 {
+            lines.push(Line::default());
+        }
+
+        lines.push(Line::styled(format!("{padding}{heading}"), styles.accent));
+
+        for (action, keys, alternative) in rows.iter() {
+            if wide {
+                let action_gap = " ".repeat(action_width - action.width() + HELP_COLUMN_GAP);
+                let keys_gap = " ".repeat(keys_width - keys.width() + HELP_COLUMN_GAP);
+
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{padding}{action}{action_gap}"), styles.normal),
+                    Span::styled(format!("{keys}{keys_gap}{alternative}"), styles.muted),
+                ]));
+                continue;
+            }
+
+            lines.push(Line::styled(format!("{padding}{action}"), styles.normal));
+
+            // Keys that don't fit on one line under the action get a line each; anything
+            // still too long is cut off at the border.
+            let joined = joined_keys(keys, alternative);
+
+            if HELP_KEYS_INDENT + joined.width() <= inner_width {
+                lines.push(Line::styled(format!("{keys_indent}{joined}"), styles.muted));
+            } else {
+                for keys in [keys, alternative]
+                    .into_iter()
+                    .filter(|keys| !keys.is_empty())
+                {
+                    lines.push(Line::styled(format!("{keys_indent}{keys}"), styles.muted));
+                }
+            }
+        }
+    }
+
+    // Keep a row free above and below when there is room, so the reference reads as a modal.
+    let available_height = if area.height >= HELP_MIN_HEIGHT + 2 {
+        area.height - 2
+    } else {
+        area.height
+    };
+    let height = available_height.min((lines.len() + HELP_BORDERS) as u16);
+
+    let dialog = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+
+    frame.render_widget(Clear, dialog);
+    frame.render_widget(Block::default().style(styles.normal), dialog);
+
+    let mut block = Block::bordered()
+        .border_type(if app.rounded {
+            BorderType::Rounded
+        } else {
+            BorderType::Plain
+        })
+        .border_style(styles.border)
+        .title(Line::from(vec![
+            Span::styled("─ ", styles.border),
+            Span::styled(HELP_TITLE, styles.accent),
+            Span::styled(" ", styles.border),
+        ]));
+
+    if HELP_CLOSE_HINT.width() + HELP_BORDERS <= usize::from(width) {
+        block = block.title_bottom(Line::styled(HELP_CLOSE_HINT, styles.muted).right_aligned());
+    }
+
+    let inner = block.inner(dialog);
+    frame.render_widget(block, dialog);
+
+    // Clamp the offset to this layout and size, and record the page for Page Up/Down.
+    let visible_rows = usize::from(inner.height);
+    let total_lines = lines.len();
+
+    let Mode::Help {
+        scroll,
+        max_scroll,
+        page,
+    } = &mut app.mode
+    else {
+        return;
+    };
+
+    *max_scroll = total_lines.saturating_sub(visible_rows);
+    *scroll = (*scroll).min(*max_scroll);
+    *page = visible_rows;
+    let first_line = *scroll;
+
+    let visible: Vec<Line> = lines
+        .into_iter()
+        .skip(first_line)
+        .take(visible_rows)
+        .collect();
+
+    frame.render_widget(Paragraph::new(visible), inner);
+    draw_scrollbar(frame, inner, total_lines, first_line, styles.muted);
 }
 
 #[cfg(test)]
@@ -1871,8 +2180,8 @@ mod tests {
 
     #[test]
     fn themed_background_fills_every_cell_including_empty_regions_and_dialogs() {
-        for mode in 0..7 {
-            for width in [1, 12, 60] {
+        for mode in 0..8 {
+            for width in [1, 12, 40, 60, 80] {
                 let mut app = App::new(vec![Task {
                     status: TaskStatus::Completed,
                     ..Task::new("Work: long wrapped task words")
@@ -1897,6 +2206,11 @@ mod tests {
                         original: Some(0),
                     },
                     5 => Mode::ConfirmClear,
+                    6 => Mode::Help {
+                        scroll: 3,
+                        max_scroll: 0,
+                        page: 0,
+                    },
                     _ => {
                         app.show_section(SectionView::Named("work".into()));
                         Mode::RenamingSection {
@@ -3127,6 +3441,11 @@ mod tests {
                         original: Some(0),
                     },
                     Mode::ConfirmClear,
+                    Mode::Help {
+                        scroll: usize::MAX,
+                        max_scroll: usize::MAX,
+                        page: 0,
+                    },
                 ] {
                     app.mode = mode;
                     let mut rows = Rect::default();
@@ -3840,5 +4159,261 @@ mod tests {
         assert!(app.row_tasks.len() < total);
         assert!(screen(&terminal).contains("[ ] word"));
         assert!(!fixture.task_path().exists());
+    }
+
+    fn help_mode() -> Mode {
+        Mode::Help {
+            scroll: 0,
+            max_scroll: 0,
+            page: 0,
+        }
+    }
+
+    // The scroll offset, its bound, and the page size that the last draw left in the mode.
+    fn help_state(app: &App) -> (usize, usize, usize) {
+        let Mode::Help {
+            scroll,
+            max_scroll,
+            page,
+        } = app.mode
+        else {
+            panic!("expected the keyboard reference");
+        };
+
+        (scroll, max_scroll, page)
+    }
+
+    #[test]
+    fn the_reference_is_a_centered_titled_modal_that_never_mentions_page_keys() {
+        for rounded in [false, true] {
+            let mut app = app_with_texts(&["a", "b"]);
+            app.rounded = rounded;
+            app.mode = help_mode();
+            let mut terminal = test_terminal(100, 200);
+
+            render(&mut terminal, &mut app);
+            let screen = screen(&terminal);
+
+            let top = screen
+                .lines()
+                .position(|line| line.contains("Keyboard shortcuts"))
+                .unwrap();
+            let bottom = screen
+                .lines()
+                .position(|line| line.contains("? or Esc to close"))
+                .unwrap();
+            let top_line: Vec<char> = screen.lines().nth(top).unwrap().chars().collect();
+            let (open, close) = if rounded {
+                ('╭', '╮')
+            } else {
+                ('┌', '┐')
+            };
+            let left = top_line.iter().position(|c| *c == open).unwrap();
+            let right = top_line.iter().rposition(|c| *c == close).unwrap();
+
+            assert!(top.abs_diff(199 - bottom) <= 1, "vertically centered");
+            assert!(
+                left > 0 && left.abs_diff(99 - right) <= 1,
+                "horizontally centered"
+            );
+            assert!(
+                screen.contains("Next / previous tab    l / h, Tab / Shift+Tab  Alt+F / Alt+B")
+            );
+            assert!(screen.contains("Cancel                 Esc                     Ctrl+G"));
+
+            for unlisted in ["Page", "PgUp", "PgDn", "Ctrl+V", "Alt+V"] {
+                assert!(!screen.contains(unlisted), "{unlisted}");
+            }
+
+            assert_eq!(help_state(&app), (0, 0, bottom - top - 1));
+        }
+    }
+
+    #[test]
+    fn the_widest_side_by_side_row_fits_the_wide_minimum_width() {
+        let mut app = app_with_texts(&["a"]);
+        app.mode = help_mode();
+        let mut terminal = test_terminal(HELP_WIDE_MIN_WIDTH, 80);
+
+        render(&mut terminal, &mut app);
+        let screen = screen(&terminal);
+
+        for (_, rows) in HELP_GROUPS {
+            for (action, keys, alternative) in rows.iter() {
+                let row = format!("│ {action}  ");
+                let line = screen.lines().find(|line| line.contains(&row)).unwrap();
+
+                assert!(line.contains(keys) && line.contains(alternative), "{line}");
+            }
+        }
+    }
+
+    #[test]
+    fn between_the_minimums_the_reference_puts_keys_under_their_actions() {
+        let mut app = app_with_texts(&["a"]);
+        app.mode = help_mode();
+        let mut terminal = test_terminal(HELP_WIDE_MIN_WIDTH - 1, 200);
+
+        render(&mut terminal, &mut app);
+        let lines: Vec<String> = screen(&terminal).lines().map(str::to_owned).collect();
+        let action = lines
+            .iter()
+            .position(|line| line.contains("│ Next / previous tab "))
+            .unwrap();
+
+        assert!(lines[action + 1].contains("│   l / h, Tab / Shift+Tab, Alt+F / Alt+B"));
+
+        // Keys that don't fit on one line get a line each instead of being cut off.
+        terminal.backend_mut().resize(HELP_MIN_WIDTH, 200);
+        render(&mut terminal, &mut app);
+        let lines: Vec<String> = screen(&terminal).lines().map(str::to_owned).collect();
+        let action = lines
+            .iter()
+            .position(|line| line.contains("│ Next / previous tab "))
+            .unwrap();
+
+        assert!(lines[action + 1].contains("│   l / h, Tab / Shift+Tab "));
+        assert!(lines[action + 2].contains("│   Alt+F / Alt+B "));
+    }
+
+    #[test]
+    fn below_the_minimum_size_the_reference_asks_for_a_larger_terminal() {
+        for (width, height) in [(HELP_MIN_WIDTH - 1, 30), (80, HELP_MIN_HEIGHT - 1)] {
+            let mut app = app_with_texts(&["a"]);
+            app.mode = Mode::Help {
+                scroll: 7,
+                max_scroll: 9,
+                page: 4,
+            };
+            let mut terminal = test_terminal(width, height);
+
+            render(&mut terminal, &mut app);
+            let screen = screen(&terminal);
+
+            assert!(!screen.contains("Keyboard shortcuts"));
+            assert!(!screen.contains("[ ] a"));
+            assert_eq!(
+                screen.split_whitespace().collect::<Vec<_>>().join(" "),
+                HELP_TOO_SMALL
+            );
+            assert_eq!(help_state(&app), (7, 9, 4), "kept for a later resize");
+        }
+    }
+
+    #[test]
+    fn resizing_keeps_the_reference_scroll_within_the_shown_layout() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&["a"]);
+        let mut terminal = test_terminal(80, 20);
+        let end = ratatui::crossterm::event::KeyCode::End;
+
+        press_keys(&mut app, &fixture, "?");
+        render(&mut terminal, &mut app);
+        app.key(end.into(), &fixture.storage).unwrap();
+        render(&mut terminal, &mut app);
+        let (scroll, max_scroll, page) = help_state(&app);
+
+        assert!(scroll > 0 && scroll == max_scroll);
+        assert!(screen(&terminal).contains("Cancel"));
+
+        // A taller terminal shows more, so the offset shrinks to keep the last line at the
+        // bottom; a narrower one switches layout and gains lines, keeping the offset.
+        terminal.backend_mut().resize(80, 40);
+        render(&mut terminal, &mut app);
+        let (taller_scroll, taller_max, taller_page) = help_state(&app);
+
+        assert!(taller_page > page && taller_max < max_scroll);
+        assert_eq!(taller_scroll, taller_max);
+
+        for (width, height) in [(50, 20), (20, 20), (80, 3), (80, 200), (80, 20)] {
+            terminal.backend_mut().resize(width, height);
+            render(&mut terminal, &mut app);
+            let (scroll, max_scroll, _) = help_state(&app);
+
+            assert!(scroll <= max_scroll, "{width}×{height}");
+        }
+
+        assert!(screen(&terminal).contains("Keyboard shortcuts"));
+    }
+
+    #[test]
+    fn closing_the_reference_redraws_the_checklist_exactly_as_before() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let texts: Vec<String> = (0..30).map(|index| format!("Work: task {index}")).collect();
+        let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let mut app = app_with_texts(&texts);
+        let mut terminal = test_terminal(70, 12);
+
+        for _ in 0..20 {
+            press_keys(&mut app, &fixture, "j");
+            render(&mut terminal, &mut app);
+        }
+
+        let before = screen(&terminal);
+        let rows = render(&mut terminal, &mut app);
+
+        press_keys(&mut app, &fixture, "?");
+        render(&mut terminal, &mut app);
+        press_keys(&mut app, &fixture, "j");
+        let help_rows = render(&mut terminal, &mut app);
+        press_keys(&mut app, &fixture, "?");
+        let after_rows = render(&mut terminal, &mut app);
+
+        assert_eq!(screen(&terminal), before);
+        assert_eq!((help_rows, after_rows), (rows, rows));
+        assert_eq!(app.list.selected(), Some(20));
+    }
+
+    #[test]
+    fn the_help_hint_sits_left_of_the_counter_only_on_the_plain_checklist() {
+        let mut app = app_with_texts(&["a", "b"]);
+        let mut terminal = test_terminal(40, 8);
+
+        let rows = render(&mut terminal, &mut app);
+
+        assert!(row_text(&terminal, 7).ends_with("? help─[0/2]┘"));
+
+        for mode in [
+            help_mode(),
+            Mode::Adding("draft".into(), AddPlacement::End),
+            Mode::Searching {
+                input: "a".into(),
+                original: Some(0),
+            },
+            Mode::ConfirmClear,
+        ] {
+            app.mode = mode;
+            render(&mut terminal, &mut app);
+
+            assert!(!screen(&terminal).contains("? help"), "{:?}", app.mode);
+        }
+
+        app.mode = Mode::Normal;
+
+        assert_eq!(render(&mut terminal, &mut app), rows, "no row is reserved");
+    }
+
+    #[test]
+    fn the_help_hint_is_omitted_when_narrow_or_while_a_notification_shows() {
+        let mut app = app_with_texts(&["a", "b"]);
+        let fits = "? help".width() + 1 + "[0/2]".width() + 2;
+        let mut terminal = test_terminal(fits as u16, 6);
+
+        render(&mut terminal, &mut app);
+
+        assert!(row_text(&terminal, 5).contains("? help─[0/2]"));
+
+        terminal.backend_mut().resize(fits as u16 - 1, 6);
+        render(&mut terminal, &mut app);
+
+        assert!(!screen(&terminal).contains("help"));
+        assert!(row_text(&terminal, 5).contains("[0/2]"));
+
+        terminal.backend_mut().resize(40, 6);
+        app.notification = Some(crate::notification::Notification::new("Wrap off"));
+        render(&mut terminal, &mut app);
+
+        assert!(row_text(&terminal, 5).contains("Wrap off"));
+        assert!(!screen(&terminal).contains("? help"));
     }
 }

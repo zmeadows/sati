@@ -18,7 +18,8 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 
 ## Features
 
-- **One local list.** Changes are saved automatically, without accounts or synchronization. The border shows `[completed/total]`.
+- **One local list.** Changes are saved automatically, without accounts or synchronization. The border shows `[completed/total]`, with a small `? help` beside it.
+- **Shortcuts on demand.** Press `?` for a keyboard reference instead of a permanent shortcut footer.
 - **Keyboard-first, with mouse support.** Navigate, reorder, and complete tasks from the keyboard. Click a task to toggle it, or scroll with the mouse wheel.
 - **Search in place.** Find tasks as you type, see matching text highlighted, and jump to a result without filtering or rearranging the list.
 - **Sections.** Start a task with `Name: ` to group it; a tab bar then lets you focus on one section at a time.
@@ -86,7 +87,15 @@ Then run `sati`.
 | Search | `/`, `Ctrl+F` |
 | Toggle wrapping | `w` |
 | Next / previous color theme | `t` / `T` |
+| Keyboard reference | `?` |
 | Quit | `q` |
+
+`?` opens a keyboard reference over the checklist, in place of a permanent shortcut
+footer; the muted `? help` beside the `[completed/total]` counter is the only reminder of it.
+Scroll it with `j` / `k`, `↓` / `↑`, `Ctrl+N` / `Ctrl+P`, `PageDown` / `PageUp`,
+`Home` / `End`, or the mouse wheel, and close it with `?`, `Esc`, or `Ctrl+G`. It changes
+nothing: the tasks, selection, and section tab are exactly as you left them. On a narrow
+terminal it lists each action's keys under it, and on a very small one it asks for more room.
 
 As in Vim, type a count before navigating or reordering to repeat it: `5j` moves
 down five tasks, `3K` moves the selected task up three, `3l` switches three section tabs
@@ -174,7 +183,8 @@ The add, edit, search, rename, and section-picker prompts share these shortcuts:
 | Delete to end / start of input | `Ctrl+K` / `Ctrl+U` |
 | Cancel current operation | `Esc`, `Ctrl+G` |
 
-`Ctrl+G` also cancels confirmation dialogs; it does nothing in Normal mode.
+`Ctrl+G` also cancels confirmation dialogs and closes the keyboard reference; it does
+nothing in Normal mode.
 
 **Section suggestions:** While adding or editing, if the input is empty or a single
 partial word (such as `wo`), `Tab` / `Shift+Tab` (or `Ctrl+N` / `Ctrl+P`) cycle through
