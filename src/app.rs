@@ -993,6 +993,10 @@ impl App {
         !self.redo_history.is_empty()
     }
 
+    pub fn section_jump_pending(&self) -> bool {
+        self.pending_section_jump
+    }
+
     pub fn search_query(&self) -> Option<&str> {
         match &self.mode {
             Mode::Searching { input, .. } | Mode::SearchResults { input, .. } => Some(input.text()),

@@ -113,8 +113,9 @@ the accent color and a blank row separating them from the tasks:
 
 Press `l` / `h` (or `Tab` / `Shift+Tab`, `Alt+F` / `Alt+B`) or click a tab to switch; the
 ends wrap around. `s` followed by a digit jumps straight to a tab by position: `s1` is
-`[*]`, `s2` the next tab, and `s0` the tenth. `Alt+S` works the same way. A digit past the
-last tab does nothing, and any other key after `s` just cancels the jump.
+`[*]`, `s2` the next tab, and `s0` the tenth. `Alt+S` works the same way. While sati waits
+for the digit, each of the first ten tabs shows its number just below its name. A digit
+past the last tab does nothing, and any other key after `s` just cancels the jump.
 
 Press `` ` `` to find a section by name. `[*]` turns into a small input, and the tabs to
 its right narrow to the sections that fuzzy-match what you type (`wl` finds `Wishlist`),

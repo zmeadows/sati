@@ -100,8 +100,35 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         // Leave a blank row under the tabs so they don't merge with the first task,
         // unless that would leave no room for tasks.
         if rows.height >= 2 {
+            let blank_row = rows.y;
             rows.y += 1;
             rows.height -= 1;
+
+            // While `s` waits for a digit, number the tabs in the blank row, each under the
+            // first character of its name (the `*` or `-` of [*] and [-]). Only the first
+            // ten tabs have a digit, and tabs scrolled off the strip get none.
+            if showing_section_jump(app) {
+                for (target, view) in &app.tab_targets {
+                    let Some(position) = tabs.iter().position(|(tab, _)| tab == view) else {
+                        continue;
+                    };
+
+                    if position >= JUMPABLE_TABS {
+                        continue;
+                    }
+
+                    let bracketed = matches!(view, SectionView::All | SectionView::Unsectioned);
+                    let x = target.x + 1 + u16::from(bracketed);
+                    let digit = (position + 1) % JUMPABLE_TABS;
+
+                    frame.buffer_mut().set_string(
+                        x,
+                        blank_row,
+                        digit.to_string(),
+                        app.styles.accent,
+                    );
+                }
+            }
         }
     }
 
@@ -149,6 +176,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
 }
 
 const TAB_MARKER: usize = 1;
+
+// `s1` … `s9` and `s0` reach the first ten tabs.
+const JUMPABLE_TABS: usize = 10;
+
+// After `s` / Alt+S, Normal mode waits for a digit; the error overlay hides the hints.
+fn showing_section_jump(app: &App) -> bool {
+    app.mode == Mode::Normal && app.section_jump_pending() && app.config_error.is_none()
+}
 
 // The prompt drawn before a section name being renamed, like the inline edit row's.
 const RENAME_LABEL: &str = "rename";
@@ -849,6 +884,19 @@ fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             if available {
                 append_shortcut(&mut lines, (key, label), width, keys);
             }
+        }
+    }
+
+    // While a tab number is pending, only digits act. Pad to the usual height so the task
+    // list doesn't shift for a single keystroke.
+    if showing_section_jump(app) {
+        let usual_height = lines.len();
+        let jump_keys = [vec![("0-9", "Go to section"), ("Esc", "Cancel")]];
+
+        lines = wrap_shortcuts(&jump_keys, width, &app.styles);
+
+        if lines.len() < usual_height {
+            lines.resize(usual_height, Line::raw(""));
         }
     }
 
@@ -1747,6 +1795,97 @@ mod tests {
             app.key(KeyEvent::from(KeyCode::Char(character)), &fixture.storage)
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn a_pending_section_jump_numbers_the_tabs_under_their_names() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b", "plain"]);
+        app.keybinds = false;
+        let mut terminal = test_terminal(40, 8);
+
+        press_keys(&mut app, &fixture, "s");
+        render(&mut terminal, &mut app);
+
+        assert_eq!(
+            row_text(&terminal, 0),
+            "┌─ [*] ─ [-] ─ Home ─ Work ────────────┐"
+        );
+        assert_eq!(
+            row_text(&terminal, 1),
+            "│   1     2    3      4                │"
+        );
+
+        let digit_style = terminal.backend().buffer()[(4, 1)].style();
+        assert_eq!(digit_style.fg, app.styles.accent.fg);
+    }
+
+    #[test]
+    fn section_jump_numbers_disappear_after_the_next_key() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.keybinds = false;
+        let mut terminal = test_terminal(40, 8);
+
+        press_keys(&mut app, &fixture, "sx");
+        render(&mut terminal, &mut app);
+
+        assert_eq!(
+            row_text(&terminal, 1),
+            "│                                      │"
+        );
+    }
+
+    #[test]
+    fn section_jump_numbers_stop_at_the_tenth_tab() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let texts: Vec<String> = ('A'..='J')
+            .map(|letter| format!("{letter}: task"))
+            .collect();
+        let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let mut app = app_with_texts(&texts);
+        app.keybinds = false;
+        let mut terminal = test_terminal(80, 8);
+
+        press_keys(&mut app, &fixture, "s");
+        render(&mut terminal, &mut app);
+
+        assert_eq!(
+            row_text(&terminal, 0),
+            "┌─ [*] ─ A ─ B ─ C ─ D ─ E ─ F ─ G ─ H ─ I ─ J ────────────────────────────────┐"
+        );
+        assert_eq!(
+            row_text(&terminal, 1),
+            "│   1    2   3   4   5   6   7   8   9   0                                     │"
+        );
+    }
+
+    #[test]
+    fn section_jump_numbers_are_hidden_when_there_is_no_blank_row_under_the_tabs() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        app.keybinds = false;
+        let mut terminal = test_terminal(40, 3);
+
+        press_keys(&mut app, &fixture, "s");
+        render(&mut terminal, &mut app);
+
+        assert!(!row_text(&terminal, 1).contains('1'));
+    }
+
+    #[test]
+    fn a_pending_section_jump_replaces_the_legend_without_changing_its_height() {
+        let fixture = crate::storage::tests::Fixture::new();
+        let mut app = app_with_texts(&["Work: a", "Home: b"]);
+        let mut terminal = test_terminal(80, 12);
+
+        let usual_rows = render(&mut terminal, &mut app);
+        press_keys(&mut app, &fixture, "s");
+        let jump_rows = render(&mut terminal, &mut app);
+
+        assert_eq!(jump_rows, usual_rows);
+        assert!(screen(&terminal).contains("0-9 Go to section"));
+        assert!(!screen(&terminal).contains("Navigate"));
     }
 
     #[test]
