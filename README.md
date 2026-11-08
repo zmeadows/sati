@@ -375,9 +375,10 @@ Tasks are saved locally in `tasks.json`:
 | macOS | `~/Library/Application Support/sati/tasks.json` |
 | Windows | `%APPDATA%\sati\tasks.json` |
 
-Tasks are saved automatically to `tasks.json`. Undo/redo history is session-only
-and is not preserved across restarts. Old `history.json` files are ignored and
-can be removed manually if desired.
+Tasks are saved automatically to `tasks.json`. Each save replaces the file atomically, so
+an interrupted save leaves the previous list rather than a partial file. Undo/redo history
+is session-only and is not preserved across restarts. Old `history.json` files are ignored
+and can be removed manually if desired.
 
 The task file stores the checklist, the selected task, the current section tab, and the
 order of the section tabs (`section_order`, the lowercase section names from left to

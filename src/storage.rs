@@ -9,6 +9,10 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
+use atomic_write_file::AtomicWriteFile;
+#[cfg(unix)]
+use atomic_write_file::unix::OpenOptionsExt as _;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -267,61 +271,32 @@ impl Storage {
                 section,
                 section_order,
             },
-            "Original tasks are unchanged",
-            "The new task list is already visible",
         )
     }
 }
 
-fn atomic_save<T: Serialize + ?Sized>(
-    path: &Path,
-    value: &T,
-    unchanged: &str,
-    _visible: &str,
-) -> Result<()> {
+fn atomic_save<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
     let directory = path.parent().expect("task file has a parent directory");
     create_data_directory(directory)
         .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
+
     let mut contents = serde_json::to_vec_pretty(value)?;
     contents.push(b'\n');
 
-    let (temporary, mut file) =
-        create_temporary(directory, path.file_name().unwrap().to_str().unwrap())?;
-    // Never truncate the live file. Failed writes may leave incomplete temporary data.
-    file.write_all(&contents)
-            .and_then(|()| file.sync_all())
-            .map_err(|error| {
-                format!(
-                    "could not write or sync {}: {error}. {unchanged}; temporary file at {} may contain incomplete JSON",
-                    path.display(),
-                    temporary.display()
-                )
-            })?;
-    drop(file);
-    // Same-directory rename replaces an existing file on Unix and Windows;
-    // never delete the destination first or fall back to copying.
-    fs::rename(&temporary, path).map_err(|error| {
-            format!(
-                "could not replace {}: {error}. {unchanged}; fully written temporary file remains at {}",
-                path.display(),
-                temporary.display()
-            )
-        })?;
+    // The live file is never truncated: the crate writes a temporary file beside it, syncs it,
+    // renames it over `path`, and on Unix also syncs the directory. A failure before the rename
+    // leaves the previous file in place.
+    let mut options = AtomicWriteFile::options();
 
-    // Replacement is now visible. A directory-sync failure cannot roll it back.
+    // Publish a private file even when replacing one with looser permissions.
     #[cfg(unix)]
-        File::open(directory)
-            .and_then(|file| file.sync_all())
-            .map_err(|error| {
-                format!(
-                    "replaced {}, but could not sync directory {}: {error}. {_visible}; its durability after a crash or power loss is uncertain",
-                    path.display(),
-                    directory.display()
-                )
-            })?;
-    // On Windows the temporary file was synced, but there is no portable
-    // directory sync. Success means replacement is visible, not that the
-    // directory entry is guaranteed to survive a crash or power loss.
+    options.preserve_mode(false).mode(0o600);
+
+    let save_error = |error: io::Error| format!("could not save {}: {error}", path.display());
+    let mut file = options.open(path).map_err(save_error)?;
+    file.write_all(&contents).map_err(save_error)?;
+    file.commit().map_err(save_error)?;
+
     Ok(())
 }
 
@@ -344,26 +319,6 @@ fn create_data_directory(directory: &Path) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists && directory.is_dir() => Ok(()),
         result => result,
     }
-}
-
-fn create_temporary(directory: &Path, name: &str) -> Result<(PathBuf, File)> {
-    for sequence in 0..1000 {
-        let path = directory.join(format!(".{name}.{}.{sequence}.tmp", std::process::id()));
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-
-        match options.open(&path) {
-            Ok(file) => return Ok((path, file)),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(format!("could not create {}: {error}", path.display()).into());
-            }
-        }
-    }
-
-    Err(format!("too many temporary files in {}", directory.display()).into())
 }
 
 #[cfg(test)]
@@ -486,13 +441,6 @@ pub mod tests {
         let saved = fs::read_to_string(fixture.task_path()).unwrap();
         assert!(saved.starts_with("{\n  \"schema_version\": 5,"), "{saved}");
         assert!(!fixture.storage.load_document().unwrap().needs_migration);
-    }
-
-    fn saved_tasks(path: &Path) -> Vec<Task> {
-        let saved: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-        assert_eq!(saved["schema_version"], SCHEMA_VERSION);
-
-        serde_json::from_value(saved["tasks"].clone()).unwrap()
     }
 
     // Two pending tasks with valid ids and creation times and no section.
@@ -816,12 +764,6 @@ pub mod tests {
                     0o600
                 );
             }
-
-            let (path, file) = create_temporary(directory, "tasks.json").unwrap();
-            assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
-
-            drop(file);
-            fs::remove_file(path).unwrap();
         }
     }
 
@@ -1018,46 +960,6 @@ pub mod tests {
     }
 
     #[test]
-    fn temporary_collisions_preserve_existing_files_and_live_data() {
-        let fixture = Fixture::new();
-
-        let tasks = vec![Task {
-            status: TaskStatus::Completed,
-            ..Task::new("Keep the original")
-        }];
-
-        fixture.storage.save(&tasks).unwrap();
-        let original = fs::read(fixture.task_path()).unwrap();
-        let directory = fixture.task_path().parent().unwrap();
-        let collision = directory.join(format!(".tasks.json.{}.0.tmp", std::process::id()));
-        fs::write(&collision, "old recovery data").unwrap();
-        let (temporary, file) = create_temporary(directory, "tasks.json").unwrap();
-
-        assert_eq!(temporary.parent(), Some(directory));
-        assert_ne!(temporary, collision);
-        assert_eq!(fs::read_to_string(&collision).unwrap(), "old recovery data");
-
-        drop(file);
-        fs::remove_file(temporary).unwrap();
-
-        // Exhaust the bounded namespace: a real creation failure independent
-        // of runner privileges, permissions, or available disk space.
-        for sequence in 1..1000 {
-            fs::write(
-                directory.join(format!(".tasks.json.{}.{sequence}.tmp", std::process::id())),
-                "old recovery data",
-            )
-            .unwrap();
-        }
-
-        let error = fixture.storage.save(&[]).unwrap_err().to_string();
-        assert!(error.contains("too many temporary files"), "{error}");
-        assert_eq!(fs::read(fixture.task_path()).unwrap(), original);
-        assert_eq!(fixture.storage.load().unwrap(), tasks);
-        assert_eq!(fs::read_to_string(collision).unwrap(), "old recovery data");
-    }
-
-    #[test]
     fn corrupt_or_incompatible_data_is_never_replaced_at_startup() {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
@@ -1152,33 +1054,23 @@ pub mod tests {
     }
 
     #[test]
-    fn replacement_failure_keeps_recovery_file() {
+    fn replacement_failure_is_reported_without_changing_the_destination() {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path()).unwrap();
 
-        let tasks = vec![Task::new("Recover me")];
+        let error = fixture
+            .storage
+            .save(&[Task::new("Cannot replace a directory")])
+            .unwrap_err()
+            .to_string();
 
-        let error = fixture.storage.save(&tasks).unwrap_err().to_string();
-        assert!(error.contains("fully written temporary file remains"));
+        assert!(error.contains("could not save"), "{error}");
         assert!(fixture.task_path().is_dir());
-
-        let temporary = fs::read_dir(fixture.task_path().parent().unwrap())
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .find(|path| path.extension().is_some_and(|extension| extension == "tmp"))
-            .unwrap();
-
-        #[cfg(unix)]
-        assert_eq!(
-            fs::metadata(&temporary).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-        assert_eq!(saved_tasks(&temporary), tasks);
     }
 
     #[test]
     #[cfg(windows)]
-    fn replacement_denied_by_open_file_preserves_original_and_recovery_data() {
+    fn replacement_denied_by_open_file_preserves_original_data() {
         use std::os::windows::fs::OpenOptionsExt;
 
         let fixture = Fixture::new();
@@ -1198,34 +1090,23 @@ pub mod tests {
             .open(fixture.task_path())
             .unwrap();
 
-        let replacement = vec![Task::new("Recover me")];
+        let replacement = vec![Task::new("Blocked replacement")];
 
         let error = fixture.storage.save(&replacement).unwrap_err().to_string();
         drop(held);
-        assert!(error.contains("could not replace"), "{error}");
-        assert!(error.contains("Original tasks are unchanged"), "{error}");
-        assert!(
-            error.contains("fully written temporary file remains"),
-            "{error}"
-        );
+        assert!(error.contains("could not save"), "{error}");
         assert_eq!(fs::read(fixture.task_path()).unwrap(), original);
-
-        let temporary = fs::read_dir(fixture.task_path().parent().unwrap())
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .find(|path| path.extension().is_some_and(|extension| extension == "tmp"))
-            .unwrap();
-
-        assert_eq!(saved_tasks(&temporary), replacement);
     }
 
     #[test]
     #[cfg(unix)]
-    fn directory_sync_failure_reports_visible_replacement_and_uncertain_durability() {
+    fn unreadable_data_directory_is_reported_without_changing_tasks() {
         let fixture = Fixture::new();
         fixture.storage.save(&[Task::new("Old list")]).unwrap();
+        let original = fs::read(fixture.task_path()).unwrap();
         let directory = fixture.task_path().parent().unwrap();
-        // Write/search permission permits replacement, but opening the directory for sync fails.
+
+        // Write/search permission alone is not enough: the save needs to open the directory.
         fs::set_permissions(directory, fs::Permissions::from_mode(0o300)).unwrap();
 
         if File::open(directory).is_ok() {
@@ -1234,20 +1115,12 @@ pub mod tests {
             return;
         }
 
-        let replacement = vec![Task {
-            status: TaskStatus::Completed,
-            ..Task::new("New list")
-        }];
-
-        let result = fixture.storage.save(&replacement);
+        let result = fixture.storage.save(&[Task::new("New list")]);
         fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
         let error = result.unwrap_err().to_string();
 
-        assert!(error.contains("replaced "));
-        assert!(error.contains("already visible"));
-        assert!(error.contains("uncertain"));
-        assert!(!error.contains("unchanged"));
-        assert_eq!(fixture.storage.load().unwrap(), replacement);
+        assert!(error.contains("could not save"), "{error}");
+        assert_eq!(fs::read(fixture.task_path()).unwrap(), original);
         assert_eq!(fs::read_dir(directory).unwrap().count(), 1);
     }
 

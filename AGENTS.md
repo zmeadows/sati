@@ -13,7 +13,7 @@
 
 - Rust 2024 edition; minimum supported Rust version (MSRV) **1.89** (`Cargo.toml`).
 - Ratatui **0.30.2** with its Crossterm backend (default features off; see `Cargo.toml` for the enabled set). Import Crossterm via **`ratatui::crossterm`**, not an independently versioned direct dependency.
-- Serde/JSON for persisted tasks; `toml` for optional configuration; the standard library (`File::try_lock`) for advisory file locks; `unicode-segmentation` and `unicode-width` for text handling; `nucleo-matcher` for the section picker's fuzzy matching (kept separate from task search).
+- Serde/JSON for persisted tasks; `toml` for optional configuration; the standard library (`File::try_lock`) for advisory file locks; `atomic-write-file` for atomic task-file saves; `unicode-segmentation` and `unicode-width` for text handling; `nucleo-matcher` for the section picker's fuzzy matching (kept separate from task search).
 - `src/main.rs`: CLI arguments (hand-parsed, no CLI framework), `export` subcommand dispatch, startup, applying the effective configuration, terminal lifecycle, event loop, and platform-specific terminal capabilities.
 - `src/app.rs`: `Task`, application modes, key/mouse dispatch, task mutations, selection, scrolling, and bounded undo history.
 - `src/input.rs`: single-line, grapheme-aware `TextInput`; cursor is a UTF-8 byte offset kept at a grapheme boundary.
@@ -45,8 +45,8 @@
 
 - Acquire `tasks.lock` before loading and hold the lock for the application's lifetime. Do **not** delete the lock file: all instances must coordinate on the same file.
 - Persist each task mutation **before** committing the new in-memory state or consuming undo history. A failed save must not become an accepted mutation.
-- Save JSON via a uniquely created temporary file in the same directory, sync it, then replace `tasks.json` by rename. Never truncate/delete the live file first or silently fall back to a non-atomic copy.
-- Preserve meaningful errors and leave malformed user data untouched. Be precise about post-rename failures: the replacement may already be visible even when durability reporting fails.
+- Save JSON through `atomic-write-file` (`AtomicWriteFile`, then `commit()`), which writes a temporary file beside `tasks.json`, syncs it, renames it into place, and on Unix syncs the directory. Do not hand-roll temporary files, renames, or syncs, and never truncate/delete the live file first or fall back to a non-atomic copy. On Unix the saved file is always `0600` (`preserve_mode(false)` with `mode(0o600)`), even when replacing a file with looser permissions. Failed saves are reported. sati keeps no recovery files and adds no cleanup of its own; the crate removes its temporary file when a save is abandoned, but a `commit()` that fails at the rename can leave it behind.
+- Preserve meaningful errors and leave malformed user data untouched. A failed save must not claim the old list is unchanged: a commit error after the rename (such as a failed directory sync) can leave the replacement already visible.
 - Respect Linux `XDG_DATA_HOME` (or `~/.local/share`), macOS `~/Library/Application Support`, and Windows `%APPDATA%`. Do not assume Unix-only filesystem or terminal behavior.
 
 ### Configuration
