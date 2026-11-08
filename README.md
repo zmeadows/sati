@@ -211,12 +211,12 @@ adds nothing.
 | `--theme NAME` | Select a built-in theme (listed below). |
 | `--config PATH` | Use an explicit configuration file. |
 | `--wrap` / `--no-wrap` | Enable / disable task wrapping. |
-| `--round-corners` / `--square-corners` | Use rounded / sharp borders. |
-| `--ascii-markers` / `--unicode-markers` | Use ASCII / Unicode task markers. |
-| `--notifications` / `--no-notifications` | Show / hide brief confirmation messages. |
+| `--border-style square\|rounded` | Draw square (default) or rounded border corners. |
+| `--marker-style unicode\|ascii` | Use Unicode (default) or ASCII task markers. |
+| `--status-messages` / `--no-status-messages` | Show / hide brief status messages on the border. |
 | `--accent COLOR` | Override the theme/TOML accent foreground: ANSI name, hex RGB, or palette index 0–255. |
 
-Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--ascii-markers` changes only task markers; other UI symbols remain Unicode.
+Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--marker-style ascii` uses `>`, `[ ]`, `[x]`, and `[>]`; it changes only task markers, and other UI symbols remain Unicode.
 
 The `default` theme uses your terminal’s foreground and background, with dimming for muted
 items and ANSI bright yellow (`lightyellow`) for its accent. Named themes supply their own
@@ -249,9 +249,9 @@ theme = "default"
 
 [display]
 wrap = true
-rounded_corners = false
-ascii_markers = false
-notifications = true
+border_style = "square"    # or "rounded"
+marker_style = "unicode"   # or "ascii"
+status_messages = true
 
 [styles.normal]
 fg = "reset"
@@ -362,8 +362,8 @@ Press `c` in the checklist to send the same Markdown, limited to the current sec
 tab, to the terminal clipboard using OSC 52. The brief “Copy sent to terminal” message
 clears on subsequent activity; clipboard acceptance depends on terminal and
 multiplexer support.
-`--no-notifications` (or `notifications = false`) hides this and sati's other brief
-messages (undo/redo descriptions, wrap, delete and clear confirmations, and hints such as
+`--no-status-messages` (or `status_messages = false`) hides this and sati's other brief
+status messages (undo/redo descriptions, wrap, delete and clear confirmations, and hints such as
 “Nothing to undo”), but a failed copy is still reported.
 
 ## Data

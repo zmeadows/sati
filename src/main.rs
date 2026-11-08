@@ -2,8 +2,8 @@ mod app;
 mod config;
 mod export;
 mod input;
-mod notification;
 mod search;
+mod status_message;
 mod storage;
 mod styles;
 mod themes;
@@ -70,9 +70,9 @@ const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
 #[derive(Debug, PartialEq)]
 struct Options {
     wrap: bool,
-    notifications: bool,
-    rounded: bool,
-    ascii_markers: bool,
+    status_messages: bool,
+    border_style: config::BorderStyle,
+    marker_style: config::MarkerStyle,
     styles: styles::Styles,
     theme: themes::BuiltinTheme,
     style_overrides: config::StyleOverrides,
@@ -106,7 +106,7 @@ enum CliCommand {
     Export,
 }
 
-// Each display pair overrides the other, so the last flag given wins.
+// Each on/off display pair overrides the other, so the last flag given wins.
 #[derive(Debug, Args)]
 struct CliOptions {
     /// Read settings from this file instead of the default config.toml
@@ -139,29 +139,21 @@ struct CliOptions {
     #[arg(long, overrides_with = "wrap", help_heading = DISPLAY_HEADING)]
     no_wrap: bool,
 
-    /// Draw rounded borders
-    #[arg(long, overrides_with = "square_corners", help_heading = DISPLAY_HEADING)]
-    round_corners: bool,
+    /// Draw the border with square or rounded corners
+    #[arg(long, value_name = "STYLE", help_heading = DISPLAY_HEADING)]
+    border_style: Option<config::BorderStyle>,
 
-    /// Draw square borders (default)
-    #[arg(long, overrides_with = "round_corners", help_heading = DISPLAY_HEADING)]
-    square_corners: bool,
+    /// Mark tasks with Unicode or ASCII symbols
+    #[arg(long, value_name = "STYLE", help_heading = DISPLAY_HEADING)]
+    marker_style: Option<config::MarkerStyle>,
 
-    /// Mark tasks with ASCII: >, [ ], [x], [>]
-    #[arg(long, overrides_with = "unicode_markers", help_heading = DISPLAY_HEADING)]
-    ascii_markers: bool,
+    /// Show brief status messages on the border (default)
+    #[arg(long, overrides_with = "no_status_messages", help_heading = DISPLAY_HEADING)]
+    status_messages: bool,
 
-    /// Mark tasks with Unicode symbols (default)
-    #[arg(long, overrides_with = "ascii_markers", help_heading = DISPLAY_HEADING)]
-    unicode_markers: bool,
-
-    /// Show brief confirmation messages (default)
-    #[arg(long, overrides_with = "no_notifications", help_heading = DISPLAY_HEADING)]
-    notifications: bool,
-
-    /// Hide brief confirmation messages
-    #[arg(long, overrides_with = "notifications", help_heading = DISPLAY_HEADING)]
-    no_notifications: bool,
+    /// Hide brief status messages; errors are still shown
+    #[arg(long, overrides_with = "status_messages", help_heading = DISPLAY_HEADING)]
+    no_status_messages: bool,
 }
 
 impl CliOptions {
@@ -172,15 +164,17 @@ impl CliOptions {
             wrap: chosen_flag(self.wrap, self.no_wrap)
                 .or(config.display.wrap)
                 .unwrap_or(true),
-            notifications: chosen_flag(self.notifications, self.no_notifications)
-                .or(config.display.notifications)
+            status_messages: chosen_flag(self.status_messages, self.no_status_messages)
+                .or(config.display.status_messages)
                 .unwrap_or(true),
-            rounded: chosen_flag(self.round_corners, self.square_corners)
-                .or(config.display.rounded_corners)
-                .unwrap_or(false),
-            ascii_markers: chosen_flag(self.ascii_markers, self.unicode_markers)
-                .or(config.display.ascii_markers)
-                .unwrap_or(false),
+            border_style: self
+                .border_style
+                .or(config.display.border_style)
+                .unwrap_or_default(),
+            marker_style: self
+                .marker_style
+                .or(config.display.marker_style)
+                .unwrap_or_default(),
             styles: styles::Styles::resolve(theme, &config.styles, self.accent),
             theme,
             style_overrides: config.styles,
@@ -251,9 +245,9 @@ fn run() -> Result<()> {
 
     let mut app = App::from_document(storage.load_document()?);
     app.wrap = options.wrap;
-    app.notifications = options.notifications;
-    app.rounded = options.rounded;
-    app.unicode_markers = !options.ascii_markers;
+    app.status_messages = options.status_messages;
+    app.border_style = options.border_style;
+    app.marker_style = options.marker_style;
     app.styles = options.styles;
     app.theme = options.theme;
     app.style_overrides = options.style_overrides;
@@ -301,24 +295,24 @@ fn run() -> Result<()> {
             let draw_started = Instant::now();
 
             if app
-                .notification
+                .status_message
                 .as_ref()
                 .is_some_and(|notice| notice.next_redraw(draw_started).is_none())
             {
-                app.notification = None;
+                app.status_message = None;
             }
 
             let mut rows = ratatui::layout::Rect::default();
             terminal.draw(|frame| rows = ui::draw(frame, &mut app))?;
 
-            // Wake to animate a notification or to hide an expired `s` hint; otherwise block
+            // Wake to animate a status message or to hide an expired `s` hint; otherwise block
             // until the next input event.
-            let notification_redraw = app
-                .notification
+            let status_redraw = app
+                .status_message
                 .as_ref()
                 .and_then(|notice| notice.next_redraw(draw_started));
             let section_jump_redraw = app.section_jump_expires_in(draw_started);
-            let next_redraw = [notification_redraw, section_jump_redraw]
+            let next_redraw = [status_redraw, section_jump_redraw]
                 .into_iter()
                 .flatten()
                 .min();
@@ -337,7 +331,7 @@ fn run() -> Result<()> {
                 }
                 Event::Mouse(mouse) => app.mouse(mouse, rows, &storage)?,
                 Event::Paste(text) => app.paste(&text),
-                Event::Resize(_, _) => app.notification = None,
+                Event::Resize(_, _) => app.status_message = None,
                 _ => {}
             }
         }
@@ -730,7 +724,7 @@ mod tests {
                         app.key(KeyCode::Char(key).into(), &fixture.storage)
                             .unwrap();
                         assert_eq!(
-                            app.notification.as_ref().unwrap().message(),
+                            app.status_message.as_ref().unwrap().message(),
                             format!("Theme: {} ({})", expected.display_name(), expected.id())
                         );
                     }
@@ -892,23 +886,14 @@ mod tests {
 
     #[test]
     fn display_precedence_and_last_flag_of_a_pair_cover_both_boolean_directions() {
-        let fields = ["wrap", "rounded_corners", "ascii_markers", "notifications"];
+        let fields = ["wrap", "status_messages"];
 
         let flags = [
             ("--wrap", "--no-wrap"),
-            ("--round-corners", "--square-corners"),
-            ("--ascii-markers", "--unicode-markers"),
-            ("--notifications", "--no-notifications"),
+            ("--status-messages", "--no-status-messages"),
         ];
 
-        let values = |options: Options| {
-            [
-                options.wrap,
-                options.rounded,
-                options.ascii_markers,
-                options.notifications,
-            ]
-        };
+        let values = |options: Options| [options.wrap, options.status_messages];
 
         for (index, (yes, no)) in flags.into_iter().enumerate() {
             for configured in [true, false] {
@@ -934,6 +919,61 @@ mod tests {
 
         assert!(parse_cli(&["--config", "one", "--config", "two"]).is_err());
         assert!(parse_cli(&["--config"]).is_err());
+    }
+
+    #[test]
+    fn style_options_take_precedence_over_config_which_takes_precedence_over_defaults() {
+        use config::{BorderStyle, MarkerStyle};
+
+        let config = |text: &str| toml::from_str::<config::Config>(text).unwrap();
+        let styles = |options: Options| (options.border_style, options.marker_style);
+
+        assert_eq!(
+            styles(resolve_defaults(&[])),
+            (BorderStyle::Square, MarkerStyle::Unicode)
+        );
+
+        let configured = "[display]\nborder_style = 'rounded'\nmarker_style = 'ascii'";
+
+        assert_eq!(
+            styles(parse_cli(&[]).unwrap().resolve(config(configured))),
+            (BorderStyle::Rounded, MarkerStyle::Ascii)
+        );
+
+        let overridden = parse_cli(&["--border-style", "square", "--marker-style", "unicode"])
+            .unwrap()
+            .resolve(config(configured));
+
+        assert_eq!(
+            styles(overridden),
+            (BorderStyle::Square, MarkerStyle::Unicode)
+        );
+
+        let from_defaults = resolve_defaults(&["--border-style=rounded", "--marker-style=ascii"]);
+
+        assert_eq!(
+            styles(from_defaults),
+            (BorderStyle::Rounded, MarkerStyle::Ascii)
+        );
+    }
+
+    #[test]
+    fn style_options_reject_unknown_missing_and_removed_values() {
+        for args in [
+            vec!["--border-style", "round"],
+            vec!["--border-style", "Rounded"],
+            vec!["--border-style"],
+            vec!["--marker-style", "emoji"],
+            vec!["--marker-style"],
+            vec!["--round-corners"],
+            vec!["--square-corners"],
+            vec!["--ascii-markers"],
+            vec!["--unicode-markers"],
+            vec!["--notifications"],
+            vec!["--no-notifications"],
+        ] {
+            assert!(parse_cli(&args).is_err(), "accepted {args:?}");
+        }
     }
 
     #[test]
@@ -1259,21 +1299,23 @@ mod tests {
     fn wrapping_is_enabled_by_default_and_can_be_disabled() {
         let defaults = resolve_defaults(&[]);
         assert!(defaults.wrap);
-        assert!(!defaults.rounded);
-        assert!(!defaults.ascii_markers);
-        assert!(defaults.notifications);
+        assert_eq!(defaults.border_style, config::BorderStyle::Square);
+        assert_eq!(defaults.marker_style, config::MarkerStyle::Unicode);
+        assert!(defaults.status_messages);
         assert_eq!(defaults.styles.accent.fg, Some(styles::DEFAULT_ACCENT));
 
-        assert!(resolve_defaults(&["--ascii-markers", "--no-wrap"]).ascii_markers);
-        assert!(!resolve_defaults(&["--no-wrap"]).wrap);
+        let options = resolve_defaults(&["--marker-style", "ascii", "--no-wrap"]);
+
+        assert_eq!(options.marker_style, config::MarkerStyle::Ascii);
+        assert!(!options.wrap);
 
         for removed in ["--keybinds", "--no-keybinds", "--unknown"] {
             assert!(parse_cli(&[removed]).is_err());
         }
 
-        let options = resolve_defaults(&["--round-corners"]);
+        let options = resolve_defaults(&["--border-style", "rounded"]);
 
-        assert!(options.rounded);
+        assert_eq!(options.border_style, config::BorderStyle::Rounded);
         assert!(options.wrap);
     }
 

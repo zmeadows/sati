@@ -23,9 +23,30 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct Display {
     pub wrap: Option<bool>,
-    pub rounded_corners: Option<bool>,
-    pub ascii_markers: Option<bool>,
-    pub notifications: Option<bool>,
+    pub border_style: Option<BorderStyle>,
+    pub marker_style: Option<MarkerStyle>,
+    pub status_messages: Option<bool>,
+}
+
+// Shared by config.toml, the command line, and the app, so each value is spelled one way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum BorderStyle {
+    /// Square corners (default)
+    #[default]
+    Square,
+    /// Rounded corners
+    Rounded,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkerStyle {
+    /// ›, [ ], [✓], [↪] (default)
+    #[default]
+    Unicode,
+    /// >, [ ], [x], [>]
+    Ascii,
 }
 
 #[derive(Debug, Default, PartialEq, Deserialize)]
@@ -243,6 +264,42 @@ mod tests {
         ] {
             assert!(toml::from_str::<Config>(text).is_err(), "accepted {text}");
         }
+    }
+
+    #[test]
+    fn display_styles_parse_lowercase_names_and_reject_anything_else() {
+        let config: Config =
+            toml::from_str("[display]\nborder_style = 'rounded'\nmarker_style = 'ascii'").unwrap();
+
+        assert_eq!(config.display.border_style, Some(BorderStyle::Rounded));
+        assert_eq!(config.display.marker_style, Some(MarkerStyle::Ascii));
+
+        let config: Config =
+            toml::from_str("[display]\nborder_style = 'square'\nmarker_style = 'unicode'").unwrap();
+
+        assert_eq!(config.display.border_style, Some(BorderStyle::Square));
+        assert_eq!(config.display.marker_style, Some(MarkerStyle::Unicode));
+
+        for text in [
+            "[display]\nborder_style = 'round'",
+            "[display]\nborder_style = 'Rounded'",
+            "[display]\nborder_style = true",
+            "[display]\nmarker_style = 'emoji'",
+            "[display]\nrounded_corners = true",
+            "[display]\nascii_markers = true",
+            "[display]\nnotifications = false",
+        ] {
+            assert!(toml::from_str::<Config>(text).is_err(), "accepted {text}");
+        }
+
+        let error = toml::from_str::<Config>("[display]\nborder_style = 'round'").unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown variant `round`, expected `square` or `rounded`"),
+            "{error}"
+        );
     }
 
     #[test]

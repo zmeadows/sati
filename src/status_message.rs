@@ -4,15 +4,15 @@ use ratatui::style::Style;
 
 // Phases run sequentially; their durations determine the total lifetime.
 // Any nonnegative Duration is valid; zero skips a phase (all zero expires immediately).
-const NOTIFICATION_ACCENT_DURATION: Duration = Duration::from_millis(300);
-const NOTIFICATION_NORMAL_DURATION: Duration = Duration::from_millis(3260);
+const ACCENT_DURATION: Duration = Duration::from_millis(300);
+const NORMAL_DURATION: Duration = Duration::from_millis(3260);
 
-pub struct Notification {
+pub struct StatusMessage {
     message: String,
     started: Instant,
 }
 
-impl Notification {
+impl StatusMessage {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -42,7 +42,7 @@ impl Notification {
     fn timing(&self, now: Instant) -> Option<(usize, Duration)> {
         timing(
             now.saturating_duration_since(self.started),
-            [NOTIFICATION_ACCENT_DURATION, NOTIFICATION_NORMAL_DURATION],
+            [ACCENT_DURATION, NORMAL_DURATION],
         )
     }
 
@@ -89,15 +89,15 @@ mod tests {
             ("Cleared 2 tasks, kept 1 carried", "Cleared"),
             ("Nothing to undo", "Nothing to undo"),
         ] {
-            assert_eq!(Notification::new(message).compact_message(), compact);
+            assert_eq!(StatusMessage::new(message).compact_message(), compact);
         }
     }
 
     #[test]
-    fn notifications_use_configured_semantic_styles_without_changing_deadlines() {
+    fn status_messages_use_configured_semantic_styles_without_changing_deadlines() {
         let config: crate::config::Config = toml::from_str("[styles.normal]\nfg='lightblue'\nmodifiers=['bold']\n[styles.muted]\nmodifiers=['italic']\n[styles.accent]\nfg='3'\nmodifiers=[]").unwrap();
         let styles = crate::styles::Styles::resolve(config.theme, &config.styles, None);
-        let notice = Notification::new("Copied task");
+        let notice = StatusMessage::new("Copied task");
 
         for (elapsed, expected) in [
             (0, styles.accent),
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn phases_select_styles_directly_and_replacements_restart() {
-        let first = Notification::new("Copied task");
+        let first = StatusMessage::new("Copied task");
         let start = first.started;
 
         for colors in [
@@ -186,7 +186,7 @@ mod tests {
             );
         }
 
-        let replacement = Notification {
+        let replacement = StatusMessage {
             message: "Copy sent to terminal".into(),
             started: start + Duration::from_secs(4),
         };

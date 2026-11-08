@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::config::{BorderStyle, MarkerStyle};
 use crate::input::TextInput;
-use crate::notification::Notification;
+use crate::status_message::StatusMessage;
 use crate::storage::{Result, Storage};
 
 const HISTORY_LIMIT: usize = 256;
@@ -388,9 +389,9 @@ pub struct App {
     pub list: ListState,
     pub mode: Mode,
     pub wrap: bool,
-    pub notifications: bool,
-    pub rounded: bool,
-    pub unicode_markers: bool,
+    pub status_messages: bool,
+    pub border_style: BorderStyle,
+    pub marker_style: MarkerStyle,
     pub styles: crate::styles::Styles,
     pub theme: crate::themes::BuiltinTheme,
     pub style_overrides: crate::config::StyleOverrides,
@@ -400,7 +401,7 @@ pub struct App {
     pub row_tasks: Vec<Option<usize>>,
     pub viewport_height: u16,
     pub reveal_selection: bool,
-    pub notification: Option<Notification>,
+    pub status_message: Option<StatusMessage>,
     pub view: SectionView,
     // Clickable tab regions from the last draw.
     pub tab_targets: Vec<(Rect, SectionView)>,
@@ -435,9 +436,9 @@ impl App {
             list: ListState::default().with_selected(selected),
             mode: Mode::Normal,
             wrap: true,
-            notifications: true,
-            rounded: false,
-            unicode_markers: true,
+            status_messages: true,
+            border_style: BorderStyle::default(),
+            marker_style: MarkerStyle::default(),
             styles: crate::styles::Styles::default(),
             theme: crate::themes::BuiltinTheme::default(),
             style_overrides: crate::config::StyleOverrides::default(),
@@ -446,7 +447,7 @@ impl App {
             row_tasks: Vec::new(),
             viewport_height: 0,
             reveal_selection: true,
-            notification: None,
+            status_message: None,
             view: SectionView::All,
             tab_targets: Vec::new(),
             tab_scroll: 0,
@@ -556,7 +557,7 @@ impl App {
         let tabs = self.section_tabs();
 
         if tabs.is_empty() {
-            self.notify("No sections yet (start a task with \"Name: \")");
+            self.show_status_message("No sections yet (start a task with \"Name: \")");
 
             return;
         }
@@ -638,7 +639,7 @@ impl App {
     // until the query or Tab picks another tab.
     fn start_section_picker(&mut self) {
         if self.section_tabs().is_empty() {
-            self.notify("No sections yet (start a task with \"Name: \")");
+            self.show_status_message("No sections yet (start a task with \"Name: \")");
 
             return;
         }
@@ -826,9 +827,9 @@ impl App {
 
         if labels.is_empty() {
             if all.is_empty() {
-                self.notify("No sections yet (start a task with \"Name: \")");
+                self.show_status_message("No sections yet (start a task with \"Name: \")");
             } else {
-                self.notify("No matching sections");
+                self.show_status_message("No matching sections");
             }
 
             return;
@@ -1156,7 +1157,7 @@ impl App {
         };
 
         let Some(previous) = source.back() else {
-            self.notify(if redo {
+            self.show_status_message(if redo {
                 "Nothing to redo"
             } else {
                 "Nothing to undo"
@@ -1236,7 +1237,7 @@ impl App {
             left_view: self.view.clone(),
             label: previous.label,
         });
-        self.notify(message);
+        self.show_status_message(message);
 
         Ok(())
     }
@@ -1266,7 +1267,7 @@ impl App {
             TaskStatus::Pending => (TaskStatus::Carried, "mark carryover"),
             TaskStatus::Carried => (TaskStatus::Pending, "unmark carryover"),
             TaskStatus::Completed => {
-                self.notify("Completed tasks can't be carried");
+                self.show_status_message("Completed tasks can't be carried");
 
                 return Ok(());
             }
@@ -1326,9 +1327,9 @@ impl App {
         self.replace_with(tasks, section_order, view, selected, label, storage)?;
 
         if kept == 0 {
-            self.notify(format!("Cleared {cleared}"));
+            self.show_status_message(format!("Cleared {cleared}"));
         } else {
-            self.notify(format!("Cleared {cleared}, kept {kept} carried"));
+            self.show_status_message(format!("Cleared {cleared}, kept {kept} carried"));
         }
 
         Ok(())
@@ -1377,7 +1378,7 @@ impl App {
 
         if removed == 0 {
             let section = self.scope_label().map(|label| format!("{label} "));
-            self.notify(format!("No completed {}tasks", section.unwrap_or_default()));
+            self.show_status_message(format!("No completed {}tasks", section.unwrap_or_default()));
 
             return Ok(());
         }
@@ -1416,7 +1417,7 @@ impl App {
         let section_order = self.section_order.clone();
         let label = format!("clear {cleared}");
         self.replace_with(tasks, section_order, view, selected, label, storage)?;
-        self.notify(format!("Cleared {cleared}"));
+        self.show_status_message(format!("Cleared {cleared}"));
 
         Ok(())
     }
@@ -1447,13 +1448,13 @@ impl App {
 
     fn start_rename_section(&mut self) {
         if self.section_tabs().is_empty() {
-            self.notify("No sections yet (start a task with \"Name: \")");
+            self.show_status_message("No sections yet (start a task with \"Name: \")");
 
             return;
         }
 
         let (SectionView::Named(_), Some(label)) = (&self.view, self.scope_label()) else {
-            self.notify("Switch to a section tab to rename it");
+            self.show_status_message("Switch to a section tab to rename it");
 
             return;
         };
@@ -1489,11 +1490,11 @@ impl App {
         taken.then_some("Section name already taken")
     }
 
-    // Shown on every key while renaming, even with notifications off, because it explains
+    // Shown on every key while renaming, even with status messages off, because it explains
     // why Enter does nothing.
     fn explain_rename_problem(&mut self) {
         if let Some(problem) = self.rename_problem() {
-            self.notification = Some(Notification::new(problem));
+            self.status_message = Some(StatusMessage::new(problem));
         }
     }
 
@@ -1538,7 +1539,7 @@ impl App {
             storage,
         )?;
 
-        self.notify(format!(
+        self.show_status_message(format!(
             "Renamed {old_label} to {name} ({renamed} {})",
             task_noun(renamed)
         ));
@@ -1550,7 +1551,7 @@ impl App {
         self.theme = self.theme.cycle(forward);
         self.styles =
             crate::styles::Styles::resolve(self.theme, &self.style_overrides, self.cli_accent);
-        self.notify(format!(
+        self.show_status_message(format!(
             "Theme: {} ({})",
             self.theme.display_name(),
             self.theme.id()
@@ -1560,7 +1561,7 @@ impl App {
     fn yank_task(&mut self) {
         if let Some(task) = self.list.selected().and_then(|index| self.tasks.get(index)) {
             self.task_register = Some(task.display_text());
-            self.notify("Copied task");
+            self.show_status_message("Copied task");
         }
     }
 
@@ -1595,7 +1596,7 @@ impl App {
 
     fn paste_task(&mut self, placement: AddPlacement, storage: &Storage) -> Result<()> {
         let Some(text) = self.task_register.clone() else {
-            self.notify("Nothing to paste");
+            self.show_status_message("Nothing to paste");
 
             return Ok(());
         };
@@ -1612,17 +1613,17 @@ impl App {
             .collect();
 
         match crate::export::copy(&visible, output) {
-            Ok(()) => self.notify("Copy sent to terminal"),
+            Ok(()) => self.show_status_message("Copy sent to terminal"),
             // Failures are always reported, even when confirmations are disabled.
             Err(error) => {
-                self.notification = Some(Notification::new(format!("Copy failed: {error}")));
+                self.status_message = Some(StatusMessage::new(format!("Copy failed: {error}")));
             }
         }
     }
 
-    fn notify(&mut self, message: impl Into<String>) {
-        if self.notifications {
-            self.notification = Some(Notification::new(message));
+    fn show_status_message(&mut self, message: impl Into<String>) {
+        if self.status_messages {
+            self.status_message = Some(StatusMessage::new(message));
         }
     }
 
@@ -1635,7 +1636,7 @@ impl App {
             return Ok(false);
         }
 
-        self.notification = None;
+        self.status_message = None;
 
         // Every accepted key consumes a pending count, even shortcuts that ignore it. An
         // expired count is simply gone, so the key acts as if none was typed.
@@ -2204,7 +2205,7 @@ impl App {
             KeyCode::Char('w') => {
                 self.wrap = !self.wrap;
                 self.reveal_selection = true;
-                self.notify(if self.wrap { "Wrap on" } else { "Wrap off" });
+                self.show_status_message(if self.wrap { "Wrap on" } else { "Wrap off" });
             }
             KeyCode::Char('m') => self.toggle_carryover(storage)?,
             // Clearing several tasks takes Shift, so a stray `x` does nothing.
@@ -2293,7 +2294,7 @@ impl App {
             KeyCode::Char('d') | KeyCode::Delete => {
                 if let Some(index) = self.list.selected() {
                     self.delete_task(index, "delete task", storage)?;
-                    self.notify("Deleted task");
+                    self.show_status_message("Deleted task");
                 }
             }
             KeyCode::Char('D')
@@ -2310,7 +2311,7 @@ impl App {
     }
 
     pub fn paste(&mut self, text: &str) {
-        self.notification = None;
+        self.status_message = None;
         self.pending_count = None;
         self.pending_section_jump = None;
         self.accept_completion();
@@ -2337,7 +2338,7 @@ impl App {
     }
 
     pub fn mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
-        self.notification = None;
+        self.status_message = None;
         self.pending_count = None;
         self.pending_section_jump = None;
 
@@ -2455,7 +2456,7 @@ mod tests {
     }
 
     fn notice(app: &App) -> Option<&str> {
-        app.notification.as_ref().map(Notification::message)
+        app.status_message.as_ref().map(StatusMessage::message)
     }
 
     fn task_state(app: &App) -> TaskState {
@@ -2567,7 +2568,7 @@ mod tests {
     }
 
     #[test]
-    fn ignored_modifier_keys_keep_the_focused_match_and_dismiss_notifications() {
+    fn ignored_modifier_keys_keep_the_focused_match_and_dismiss_status_messages() {
         let fixture = Fixture::new();
 
         for modifiers in [
@@ -2589,7 +2590,7 @@ mod tests {
                     original: Some(0),
                 };
                 app.list.select(Some(2));
-                app.notification = Some(Notification::new("Copied task"));
+                app.status_message = Some(StatusMessage::new("Copied task"));
                 press(
                     &mut app,
                     &fixture,
@@ -2597,7 +2598,7 @@ mod tests {
                 );
                 let accepted = kind != KeyEventKind::Release;
 
-                assert_eq!(app.notification.is_none(), accepted);
+                assert_eq!(app.status_message.is_none(), accepted);
                 assert_eq!(app.list.selected(), Some(2));
                 assert!(
                     matches!(&app.mode, Mode::Searching { input, .. } if input.text() == "hit")
@@ -2659,7 +2660,7 @@ mod tests {
     }
 
     #[test]
-    fn disabled_notifications_hide_confirmations_but_still_report_copy_failures() {
+    fn disabled_status_messages_hide_confirmations_but_still_report_copy_failures() {
         struct BrokenOutput;
         impl std::io::Write for BrokenOutput {
             fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
@@ -2671,16 +2672,16 @@ mod tests {
         }
         let fixture = Fixture::new();
         let mut app = app_with_tasks(2);
-        app.notifications = false;
+        app.status_messages = false;
         let theme = app.theme;
 
         press(&mut app, &fixture, KeyCode::Char('y'));
         assert_eq!(app.task_register.as_deref(), Some("task 0"));
-        assert!(app.notification.is_none());
+        assert!(app.status_message.is_none());
 
         press(&mut app, &fixture, KeyCode::Char('t'));
         assert_ne!(app.theme, theme);
-        assert!(app.notification.is_none());
+        assert!(app.status_message.is_none());
 
         let mut output = Vec::new();
         app.copy_markdown(&mut output);
@@ -2688,17 +2689,17 @@ mod tests {
         crate::export::copy(&app.tasks, &mut expected).unwrap();
 
         assert_eq!(output, expected);
-        assert!(app.notification.is_none());
+        assert!(app.status_message.is_none());
 
         for key in ['u', 'w', 'd', 'X', 'p'] {
             press(&mut app, &fixture, KeyCode::Char(key));
-            assert!(app.notification.is_none(), "{key}");
+            assert!(app.status_message.is_none(), "{key}");
         }
 
         app.copy_markdown(&mut BrokenOutput);
 
         assert!(
-            app.notification
+            app.status_message
                 .as_ref()
                 .is_some_and(|notice| notice.message().starts_with("Copy failed:"))
         );
@@ -2737,7 +2738,7 @@ mod tests {
 
         assert_eq!(output, expected);
         assert_eq!(
-            app.notification.as_ref().map(Notification::message),
+            app.status_message.as_ref().map(StatusMessage::message),
             Some("Copy sent to terminal")
         );
 
@@ -2752,14 +2753,14 @@ mod tests {
             );
 
             assert_eq!(
-                app.notification.as_ref().map(Notification::message),
+                app.status_message.as_ref().map(StatusMessage::message),
                 Some("Copy sent to terminal")
             );
         }
 
         app.copy_markdown(&mut BrokenOutput);
         assert_eq!(
-            app.notification.as_ref().map(Notification::message),
+            app.status_message.as_ref().map(StatusMessage::message),
             Some("Copy failed: output unavailable")
         );
         assert_eq!(app.tasks, tasks);
@@ -2770,7 +2771,7 @@ mod tests {
         assert_eq!(fixture.storage.load().unwrap(), saved);
 
         press(&mut app, &fixture, KeyCode::Down);
-        assert!(app.notification.is_none());
+        assert!(app.status_message.is_none());
     }
 
     #[test]
@@ -2810,7 +2811,7 @@ mod tests {
                 Mode::Normal => panic!("copy changed mode"),
             }
 
-            assert!(app.notification.is_none());
+            assert!(app.status_message.is_none());
             assert_eq!(app.tasks, tasks);
             assert!(!app.can_undo() && !app.can_redo());
         }
@@ -2858,7 +2859,7 @@ mod tests {
                     press(&mut app, &fixture, copy);
 
                     assert_eq!(
-                        app.notification.as_ref().map(Notification::message),
+                        app.status_message.as_ref().map(StatusMessage::message),
                         Some("Copied task")
                     );
                     assert_eq!(app.tasks, before);
@@ -2867,7 +2868,7 @@ mod tests {
 
                     let index = app.insertion_index(placement);
                     press(&mut app, &fixture, paste);
-                    assert!(app.notification.is_none());
+                    assert!(app.status_message.is_none());
 
                     // A paste creates a new task with its own identity.
                     let pasted = &app.tasks[index];
@@ -2917,7 +2918,7 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Char('d'));
         press(&mut app, &fixture, KeyCode::Char('y'));
 
-        assert!(app.notification.is_none());
+        assert!(app.status_message.is_none());
         assert_eq!(app.task_register.as_deref(), Some("task 0"));
 
         press(&mut app, &fixture, KeyCode::Char('P'));
@@ -3002,7 +3003,7 @@ mod tests {
                     .contains(ratatui::style::Modifier::ITALIC)
             );
             assert_eq!(
-                app.notification.as_ref().unwrap().message(),
+                app.status_message.as_ref().unwrap().message(),
                 format!("Theme: {} ({})", expected.display_name(), expected.id())
             );
         }
@@ -3044,7 +3045,7 @@ mod tests {
 
                 assert_eq!(app.theme, theme);
                 assert_eq!(
-                    app.notification.as_ref().unwrap().message(),
+                    app.status_message.as_ref().unwrap().message(),
                     format!("Theme: {display} ({id})")
                 );
             }
@@ -3073,7 +3074,7 @@ mod tests {
             press(&mut app, &fixture, KeyCode::Char('T'));
 
             assert_eq!(app.theme, crate::themes::BuiltinTheme::Default);
-            assert!(app.notification.is_none());
+            assert!(app.status_message.is_none());
 
             match &app.mode {
                 Mode::Adding(input, _)
@@ -4367,10 +4368,10 @@ mod tests {
     }
 
     #[test]
-    fn the_rename_problem_is_shown_even_with_notifications_off() {
+    fn the_rename_problem_is_shown_even_with_status_messages_off() {
         let fixture = Fixture::new();
         let mut app = app_with_texts(&["Work: a", "Home: b"]);
-        app.notifications = false;
+        app.status_messages = false;
         app.show_section(SectionView::Named("work".into()));
         press(&mut app, &fixture, KeyCode::Char('E'));
 
@@ -4985,7 +4986,7 @@ mod tests {
 
             assert_eq!(app.mode, Mode::Normal);
             assert_eq!(task_state(&app), before);
-            assert!(app.notification.is_none());
+            assert!(app.status_message.is_none());
         }
     }
 
@@ -7260,7 +7261,7 @@ mod tests {
     }
 
     #[test]
-    fn notifications_explain_no_ops_without_changing_tasks() {
+    fn status_messages_explain_no_ops_without_changing_tasks() {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(2);
         let original = app.tasks.clone();
@@ -7295,7 +7296,7 @@ mod tests {
     }
 
     #[test]
-    fn notifications_confirm_easy_to_miss_changes() {
+    fn status_messages_confirm_easy_to_miss_changes() {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(5);
 

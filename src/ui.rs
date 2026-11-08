@@ -11,6 +11,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Mode, SectionView, Task, TaskStatus, task_prefix};
+use crate::config::{BorderStyle, MarkerStyle};
 use crate::input::TextInput;
 use crate::styles::Styles;
 
@@ -29,23 +30,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
 
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .border_type(if app.rounded {
-            BorderType::Rounded
-        } else {
-            BorderType::Plain
-        })
+        .border_type(border_type(app.border_style))
         .border_style(app.styles.border);
 
-    let mut notifying = false;
+    let mut showing_status = false;
 
-    if let Some(notice) = &app.notification
-        && let Some(notification_style) = notice.style(
+    if let Some(notice) = &app.status_message
+        && let Some(status_style) = notice.style(
             std::time::Instant::now(),
             app.styles.accent,
             app.styles.normal,
         )
     {
-        // Notifications may use the whole border between the corners.
+        // Status messages may use the whole border between the corners.
         let available = usize::from(list_area.width).saturating_sub(2);
         let short = notice.compact_message();
 
@@ -56,15 +53,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         };
 
         if list_area.height >= 2 && message.width() <= available {
-            block = block.title_bottom(Line::styled(message, notification_style).left_aligned());
-            notifying = true;
+            block = block.title_bottom(Line::styled(message, status_style).left_aligned());
+            showing_status = true;
         }
     }
 
     // The hint points to the keyboard reference from the bottom-right corner. It only shows
-    // on the plain checklist, and gives the border to brief notifications.
+    // on the plain checklist, and gives the border to brief status messages.
     if app.mode == Mode::Normal
-        && !notifying
+        && !showing_status
         && list_area.height >= 2
         && HELP_HINT.width() + 2 <= usize::from(list_area.width)
     {
@@ -584,7 +581,7 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
                     "  ■  "
                 }
             } else {
-                task_checkbox(task, app.unicode_markers)
+                task_checkbox(task, app.marker_style)
             };
 
             let marker_style = if searching {
@@ -604,7 +601,7 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
             let mut line = Line::from(vec![
                 Span::styled(
                     if row == 0 && selected == Some(index) {
-                        focus_marker(app.unicode_markers)
+                        focus_marker(app.marker_style)
                     } else {
                         " "
                     },
@@ -719,17 +716,27 @@ fn draw_inline_input(
     }
 }
 
-fn focus_marker(unicode: bool) -> &'static str {
-    if unicode { "›" } else { ">" }
+fn border_type(style: BorderStyle) -> BorderType {
+    match style {
+        BorderStyle::Square => BorderType::Plain,
+        BorderStyle::Rounded => BorderType::Rounded,
+    }
 }
 
-fn task_checkbox(task: &Task, unicode: bool) -> &'static str {
-    match task.status {
-        TaskStatus::Completed if unicode => " [✓] ",
-        TaskStatus::Completed => " [x] ",
-        TaskStatus::Carried if unicode => " [↪] ",
-        TaskStatus::Carried => " [>] ",
-        TaskStatus::Pending => " [ ] ",
+fn focus_marker(style: MarkerStyle) -> &'static str {
+    match style {
+        MarkerStyle::Unicode => "›",
+        MarkerStyle::Ascii => ">",
+    }
+}
+
+fn task_checkbox(task: &Task, style: MarkerStyle) -> &'static str {
+    match (task.status, style) {
+        (TaskStatus::Pending, _) => " [ ] ",
+        (TaskStatus::Completed, MarkerStyle::Unicode) => " [✓] ",
+        (TaskStatus::Completed, MarkerStyle::Ascii) => " [x] ",
+        (TaskStatus::Carried, MarkerStyle::Unicode) => " [↪] ",
+        (TaskStatus::Carried, MarkerStyle::Ascii) => " [>] ",
     }
 }
 
@@ -1248,11 +1255,7 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_widget(Block::default().style(styles.normal), dialog);
 
     let mut block = Block::bordered()
-        .border_type(if app.rounded {
-            BorderType::Rounded
-        } else {
-            BorderType::Plain
-        })
+        .border_type(border_type(app.border_style))
         .border_style(styles.border)
         .title(Line::from(vec![
             Span::styled("─ ", styles.border),
@@ -1394,7 +1397,7 @@ mod tests {
             assert_eq!(row_text(&terminal, 0), expected, "{view:?}");
         }
 
-        app.rounded = true;
+        app.border_style = BorderStyle::Rounded;
         render(&mut terminal, &mut app);
         assert!(row_text(&terminal, 0).starts_with("╭─ [*] ─ [-] ─ home ─ Work ─"));
     }
@@ -2091,17 +2094,17 @@ mod tests {
 
     #[test]
     fn focus_is_bold_accented_in_both_marker_modes_without_bolding_task() {
-        for unicode in [false, true] {
+        for marker_style in [MarkerStyle::Ascii, MarkerStyle::Unicode] {
             for accent in [DEFAULT_ACCENT, Color::Indexed(3), Color::Rgb(12, 34, 56)] {
                 let mut app = App::new(vec![Task::new("ordinary text")]);
-                app.unicode_markers = unicode;
+                app.marker_style = marker_style;
                 app.styles.accent = app.styles.accent.fg(accent);
                 let mut terminal = test_terminal(40, 10);
                 render(&mut terminal, &mut app);
                 let buffer = terminal.backend().buffer();
                 let focus = &buffer[(1, 1)];
 
-                assert_eq!(focus.symbol(), focus_marker(unicode));
+                assert_eq!(focus.symbol(), focus_marker(marker_style));
                 assert_eq!(focus.fg, accent);
                 assert!(focus.modifier.contains(Modifier::BOLD));
 
@@ -2288,9 +2291,9 @@ mod tests {
     #[test]
     fn copy_feedback_uses_the_border_without_changing_the_viewport() {
         for width in [0, 1, 2, 8, 15, 17, 24, 32, 80] {
-            for rounded in [false, true] {
+            for border_style in [BorderStyle::Square, BorderStyle::Rounded] {
                 let mut app = App::new(Vec::new());
-                app.rounded = rounded;
+                app.border_style = border_style;
                 let mut terminal = test_terminal(width, 12);
                 let before = render(&mut terminal, &mut app);
                 app.copy_markdown(&mut Vec::new());
@@ -2303,7 +2306,7 @@ mod tests {
                     "Theme: Rosé Pine (rose-pine)",
                     "Theme: Default (default)",
                 ] {
-                    app.notification = Some(crate::notification::Notification::new(notice));
+                    app.status_message = Some(crate::status_message::StatusMessage::new(notice));
                     let after = render(&mut terminal, &mut app);
                     assert_eq!(before, after);
 
@@ -2312,7 +2315,7 @@ mod tests {
                     if width == 80 {
                         assert!(text.contains(notice));
                     } else if width == 24 || width == 32 {
-                        let compact = app.notification.as_ref().unwrap().compact_message();
+                        let compact = app.status_message.as_ref().unwrap().compact_message();
 
                         if notice.starts_with("Theme: ") {
                             assert_eq!(
@@ -2334,16 +2337,24 @@ mod tests {
                         let buffer = terminal.backend().buffer();
                         assert_eq!(
                             buffer[(0, after.bottom())].symbol(),
-                            if rounded { "╰" } else { "└" }
+                            if border_style == BorderStyle::Rounded {
+                                "╰"
+                            } else {
+                                "└"
+                            }
                         );
                         assert_eq!(
                             buffer[(width - 1, after.bottom())].symbol(),
-                            if rounded { "╯" } else { "┘" }
+                            if border_style == BorderStyle::Rounded {
+                                "╯"
+                            } else {
+                                "┘"
+                            }
                         );
                     }
                 }
 
-                app.notification = None;
+                app.status_message = None;
                 render(&mut terminal, &mut app);
                 assert!(!screen(&terminal).contains("Copy"));
             }
@@ -2437,8 +2448,8 @@ mod tests {
             assert_eq!(glyph.width(), 1);
         }
 
-        assert_eq!(focus_marker(false), ">");
-        assert_eq!(focus_marker(true), "\u{203a}");
+        assert_eq!(focus_marker(MarkerStyle::Ascii), ">");
+        assert_eq!(focus_marker(MarkerStyle::Unicode), "\u{203a}");
 
         let tasks = vec![
             Task::new("ordinary task wraps here"),
@@ -2457,8 +2468,8 @@ mod tests {
             (&tasks[1], " [x] ", " [\u{2713}] "),
             (&tasks[2], " [>] ", " [\u{21aa}] "),
         ] {
-            assert_eq!(task_checkbox(task, false), ascii);
-            assert_eq!(task_checkbox(task, true), unicode);
+            assert_eq!(task_checkbox(task, MarkerStyle::Ascii), ascii);
+            assert_eq!(task_checkbox(task, MarkerStyle::Unicode), unicode);
             assert_eq!(ascii.width(), 5);
             assert_eq!(unicode.width(), 5);
         }
@@ -2474,9 +2485,9 @@ mod tests {
                 ] {
                     let searching = mode != Mode::Normal;
                     let mut app = App::new(tasks.clone());
-                    assert!(app.unicode_markers);
+                    assert_eq!(app.marker_style, MarkerStyle::Unicode);
 
-                    app.unicode_markers = false;
+                    app.marker_style = MarkerStyle::Ascii;
                     app.mode = mode;
                     app.list.select(Some(1));
                     app.wrap = wrap;
@@ -2486,7 +2497,7 @@ mod tests {
                     let ascii = terminal.backend().buffer().clone();
                     let mapping = app.row_tasks.clone();
                     let scroll = app.scroll;
-                    app.unicode_markers = true;
+                    app.marker_style = MarkerStyle::Unicode;
                     let unicode_rows = render(&mut terminal, &mut app);
 
                     assert_eq!(rows, unicode_rows);
@@ -4200,9 +4211,9 @@ mod tests {
 
     #[test]
     fn the_reference_is_a_centered_titled_modal_that_never_mentions_page_keys() {
-        for rounded in [false, true] {
+        for border_style in [BorderStyle::Square, BorderStyle::Rounded] {
             let mut app = app_with_texts(&["a", "b"]);
-            app.rounded = rounded;
+            app.border_style = border_style;
             app.mode = help_mode();
             let mut terminal = test_terminal(100, 200);
 
@@ -4218,7 +4229,7 @@ mod tests {
                 .position(|line| line.contains("? or Esc to close"))
                 .unwrap();
             let top_line: Vec<char> = screen.lines().nth(top).unwrap().chars().collect();
-            let (open, close) = if rounded {
+            let (open, close) = if border_style == BorderStyle::Rounded {
                 ('╭', '╮')
             } else {
                 ('┌', '┐')
@@ -4410,7 +4421,7 @@ mod tests {
     }
 
     #[test]
-    fn the_help_hint_is_omitted_when_narrow_or_while_a_notification_shows() {
+    fn the_help_hint_is_omitted_when_narrow_or_while_a_status_message_shows() {
         let mut app = app_with_texts(&["a", "b"]);
         let fits = "? for help".width() + 2;
         let mut terminal = test_terminal(fits as u16, 6);
@@ -4425,7 +4436,7 @@ mod tests {
         assert!(!screen(&terminal).contains("help"));
 
         terminal.backend_mut().resize(40, 6);
-        app.notification = Some(crate::notification::Notification::new("Wrap off"));
+        app.status_message = Some(crate::status_message::StatusMessage::new("Wrap off"));
         render(&mut terminal, &mut app);
 
         assert!(row_text(&terminal, 5).contains("Wrap off"));

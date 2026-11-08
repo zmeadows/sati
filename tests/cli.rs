@@ -35,9 +35,9 @@ fn invalid_arguments_fail_with_usage_before_startup() {
 }
 
 #[test]
-fn ascii_markers_are_documented_and_combine_with_existing_options() {
+fn marker_styles_are_documented_and_combine_with_existing_options() {
     let output = Command::new(env!("CARGO_BIN_EXE_sati"))
-        .args(["--ascii-markers", "--help"])
+        .args(["--marker-style", "ascii", "--help"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -45,10 +45,12 @@ fn ascii_markers_are_documented_and_combine_with_existing_options() {
     assert!(output.status.success());
 
     let help = String::from_utf8(output.stdout).unwrap();
-    assert!(help.contains("--ascii-markers") && help.contains("[x]") && help.contains("[>]"));
+    assert!(help.contains("--marker-style") && help.contains("[x]") && help.contains("[>]"));
+    assert!(help.contains("--border-style") && help.contains("rounded"));
+    assert!(help.contains("--status-messages") && help.contains("--no-status-messages"));
 
     let output = Command::new(env!("CARGO_BIN_EXE_sati"))
-        .args(["--ascii-markers", "--no-wrap", "--version"])
+        .args(["--marker-style", "ascii", "--no-wrap", "--version"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -57,5 +59,23 @@ fn ascii_markers_are_documented_and_combine_with_existing_options() {
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         format!("sati {}\n", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
+fn invalid_style_values_fail_with_the_accepted_values() {
+    let output = Command::new(env!("CARGO_BIN_EXE_sati"))
+        .args(["--border-style", "round"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+
+    let error = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(error.contains("invalid value 'round'"), "{error}");
+    assert!(
+        error.contains("[possible values: square, rounded]"),
+        "{error}"
     );
 }
