@@ -359,16 +359,50 @@ mod tests {
         let fixture = Fixture::new();
         let path = fixture.directory.join("config.toml");
         fs::write(&path, "theme = 'nord'").unwrap();
-        let start = Instant::now();
-        let mut watch = watch(path, start);
+        let mut now = Instant::now();
+        let mut watch = watch(path.clone(), now);
 
-        // Give the backend time to deliver the open and close events of this read.
-        watch.file.read();
-        std::thread::sleep(Duration::from_millis(200));
+        // Native backends differ in which events a read produces and when they arrive
+        // (FSEvents may even deliver the write above late), so stop the real watcher and
+        // feed `check` the events a read can produce. `now` stays before the first poll,
+        // which would otherwise start a new watcher.
+        watch.watcher = None;
+        while watch.events.try_recv().is_ok() {}
 
-        assert_eq!(watch.check(start), None);
+        let sender = watch.sender.clone();
+        let send = |kind| {
+            let event = Event::new(kind).add_path(path.clone());
+            sender.send(Ok(event)).unwrap();
+        };
+
+        send(EventKind::Modify(ModifyKind::Data(DataChange::Content)));
+        assert_eq!(watch.check(now), None);
+        assert_eq!(watch.settle_at, Some(now + SETTLE_DELAY));
+
+        // The settled change is read; the contents match what was already applied.
+        now += SETTLE_DELAY;
+        assert_eq!(watch.check(now), None);
         assert_eq!(watch.settle_at, None);
-        assert!(watch.watcher.is_some());
+
+        // That read's own events must not schedule the next one, or reads would repeat.
+        for kind in [
+            EventKind::Access(AccessKind::Open(AccessMode::Read)),
+            EventKind::Access(AccessKind::Read),
+            EventKind::Access(AccessKind::Close(AccessMode::Read)),
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::AccessTime)),
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
+        ] {
+            send(kind);
+        }
+
+        assert_eq!(watch.check(now), None);
+        assert_eq!(watch.settle_at, None);
+
+        now += SETTLE_DELAY;
+        assert!(now < watch.next_poll);
+        assert_eq!(watch.check(now), None);
+        assert_eq!(watch.settle_at, None);
+        assert!(watch.watcher.is_none());
     }
 
     #[test]
