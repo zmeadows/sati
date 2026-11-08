@@ -159,178 +159,34 @@ fn missing_and_invalid_storage_never_get_created_or_repaired() {
 }
 
 #[test]
-fn export_files_require_force_and_do_not_leave_partial_outputs() {
+fn export_rejects_removed_file_options_and_unknown_arguments() {
     let fixture = Fixture::new();
     fixture.prepare();
-    let path = fixture.root.join("tasks.md");
-
-    let first = fixture
-        .command()
-        .arg("--output")
-        .arg(&path)
-        .output()
-        .unwrap();
-
-    assert!(first.status.success());
-    assert!(first.stdout.is_empty() && first.stderr.is_empty());
-    assert_eq!(fs::read(&path).unwrap(), MARKDOWN.as_bytes());
-
-    fs::write(&path, "original\n").unwrap();
-    let refused = fixture.command().arg("-o").arg(&path).output().unwrap();
-    assert!(!refused.status.success());
-    assert_eq!(fs::read(&path).unwrap(), b"original\n");
-
-    let replaced = fixture
-        .command()
-        .arg("--force")
-        .arg("-o")
-        .arg(&path)
-        .output()
-        .unwrap();
-
-    assert!(replaced.status.success());
-    assert_eq!(fs::read(&path).unwrap(), MARKDOWN.as_bytes());
-
-    let missing = fixture.root.join("missing/tasks.md");
-    assert!(
-        !fixture
-            .command()
-            .arg("-o")
-            .arg(&missing)
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
-    assert!(!missing.exists());
-    assert_eq!(fs::read_dir(&fixture.root).unwrap().count(), 2);
-}
-
-#[test]
-fn concurrent_exports_cannot_overwrite_each_other_without_force() {
-    let fixture = Fixture::new();
-    fixture.prepare();
-    let path = fixture.root.join("tasks.md");
-
-    let mut first = fixture
-        .command()
-        .arg("-o")
-        .arg(&path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-
-    let second = fixture.command().arg("-o").arg(&path).output().unwrap();
-    let status = first.wait().unwrap();
-    assert_ne!(status.success(), second.status.success());
-    assert_eq!(fs::read(&path).unwrap(), MARKDOWN.as_bytes());
-}
-
-#[test]
-fn export_protects_state_files_and_rejects_invalid_arguments() {
-    let fixture = Fixture::new();
-    fixture.prepare();
-
-    for name in [
-        "tasks.json",
-        "history.json",
-        "tasks.lock",
-        ".tasks.json.writer.tmp",
-        ".history.json.writer.tmp",
-    ] {
-        let path = fixture.data.join(name);
-
-        if name != "tasks.json" && name != "history.json" {
-            fs::write(&path, "protected").unwrap();
-        }
-
-        let bytes = fs::read(&path).unwrap();
-
-        for force in [false, true] {
-            let mut command = fixture.command();
-            command.arg("-o").arg(&path);
-
-            if force {
-                command.arg("--force");
-            }
-
-            let output = command.output().unwrap();
-            assert!(!output.status.success(), "accepted {name}");
-            assert!(output.stdout.is_empty());
-            assert!(
-                String::from_utf8_lossy(&output.stderr).contains("cannot overwrite sati state")
-            );
-            assert_eq!(fs::read(&path).unwrap(), bytes);
-        }
-    }
 
     for args in [
         vec!["--force"],
-        vec!["--output"],
-        vec!["--output", "--force"],
+        vec!["--output", "tasks.md"],
+        vec!["-o", "tasks.md"],
         vec!["--format", "json"],
         vec!["unexpected"],
-        vec!["-o", "one", "-o", "two"],
     ] {
-        let output = fixture.run(&args);
-        assert!(!output.status.success());
+        let output = fixture
+            .command()
+            .args(&args)
+            .current_dir(&fixture.root)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "accepted {args:?}");
         assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unknown export argument"));
+        assert!(!fixture.root.join("tasks.md").exists());
     }
 
     let help = fixture.run(&["--help"]);
     assert!(help.status.success());
 
     let help = String::from_utf8(help.stdout).unwrap();
-    assert!(help.contains("--output") && help.contains("--force") && help.contains("-o"));
-}
-
-#[cfg(unix)]
-#[test]
-fn export_refuses_symlink_aliases_of_state_files() {
-    let fixture = Fixture::new();
-    fixture.prepare();
-
-    for name in ["tasks.json", "history.json"] {
-        let alias = fixture.root.join(format!("{name}.md"));
-        std::os::unix::fs::symlink(fixture.data.join(name), &alias).unwrap();
-        let bytes = fs::read(&alias).unwrap();
-
-        assert!(
-            !fixture
-                .command()
-                .arg("-o")
-                .arg(&alias)
-                .arg("--force")
-                .output()
-                .unwrap()
-                .status
-                .success()
-        );
-        assert_eq!(fs::read(alias).unwrap(), bytes);
-    }
-}
-
-#[cfg(windows)]
-#[test]
-fn windows_export_refuses_normalized_state_names_even_when_missing() {
-    let fixture = Fixture::new();
-    fixture.prepare();
-    fs::remove_file(fixture.data.join("history.json")).unwrap();
-
-    for name in ["history.json.", "HISTORY.JSON ", "history.json:stream"] {
-        assert!(
-            !fixture
-                .command()
-                .arg("-o")
-                .arg(fixture.data.join(name))
-                .arg("--force")
-                .output()
-                .unwrap()
-                .status
-                .success()
-        );
-    }
-
-    assert!(!fixture.data.join("history.json").exists());
+    assert!(help.contains("stdout"));
+    assert!(!help.contains("--output") && !help.contains("--force"));
 }

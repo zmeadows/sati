@@ -22,7 +22,7 @@
 - `src/config.rs`: TOML config discovery (`$XDG_CONFIG_HOME`/`~/.config`, macOS Application Support, `%APPDATA%`), reading, and parsing through `Config::load`. A missing default file means defaults; an explicit `--config` file must exist. Unknown keys and invalid files are errors; sati never writes config files. Precedence is CLI > TOML > defaults; contradictory CLI flag pairs are rejected.
 - `src/themes.rs` / `src/styles.rs`: built-in theme palettes and the resolved `Styles` (theme + TOML overrides + `--accent`).
 - `src/search.rs`: search matching and highlight ranges for `Searching`.
-- `src/export.rs`: Markdown rendering shared by `sati export [-o PATH] [--force]` and the `c` OSC 52 clipboard copy. Export runs without taking the instance lock (it works while the TUI is open) and refuses to overwrite sati's own state files or existing files without `--force`.
+- `src/export.rs`: Markdown rendering shared by `sati export` (stdout only) and the `c` OSC 52 clipboard copy. Export runs without taking the instance lock (it works while the TUI is open) and never writes files.
 - `src/notification.rs`: timed footer notifications (e.g. theme name after `t` / `T`).
 - Unit tests live in `#[cfg(test)] mod tests` inside each module; `tests/` holds integration tests that run the binary (`cli`, `config`, `directories`, `export`, `locking`). Integration tests isolate data/config by overriding `HOME`, `XDG_DATA_HOME`, and `APPDATA`; never point tests at the real user data directory. They run the binary without a terminal, so every run must fail or exit before terminal setup (invalid configuration stops startup before storage, and an invalid `tasks.json` stops it after a valid configuration); otherwise crossterm can take over the developer's `/dev/tty`.
 

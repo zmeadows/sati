@@ -318,18 +318,18 @@ Help, version output, and Markdown export do not load display configuration.
 
 ## Export
 
-Export Markdown to stdout or a file, even while the TUI is running:
+Export Markdown to stdout, even while the TUI is running:
 
 ```sh
 sati export
 sati export > tasks.md
-sati export -o tasks.md
-sati export -o tasks.md --force
+sati export | grep -F '[ ]'
 ```
 
-Use `--output PATH` or `-o PATH` for file output. Existing files require `--force`;
-sati's own state files are protected. Carried tasks export as ordinary unchecked
-items, with task order and literal text preserved.
+Stdout carries only the Markdown, so it can be redirected or piped; errors go to stderr.
+Shell redirection with `>` replaces an existing file, and sati adds no overwrite
+protection of its own. Carried tasks export as ordinary unchecked items, with task
+order and literal text preserved.
 
 Press `c` in the checklist to send the same Markdown, limited to the current section
 tab, to the terminal clipboard using OSC 52. The brief “Copy sent to terminal” message

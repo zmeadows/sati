@@ -104,59 +104,6 @@ impl Storage {
         })
     }
 
-    pub fn export_path(&self, output: &Path) -> Result<PathBuf> {
-        let name = output.file_name().ok_or("export output must name a file")?;
-        let parent = output
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-
-        let directory = fs::canonicalize(parent).map_err(|error| {
-            format!(
-                "could not access export directory {}: {error}",
-                parent.display()
-            )
-        })?;
-
-        let destination = directory.join(name);
-
-        let state_directory = match fs::canonicalize(self.path.parent().unwrap()) {
-            Ok(path) => Some(path),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
-        };
-
-        let state_name = name.to_str();
-        #[cfg(windows)]
-        let state_name =
-            state_name.map(|name| name.split(':').next().unwrap().trim_end_matches(['.', ' ']));
-
-        for reserved in ["tasks.json", "history.json", "tasks.lock"] {
-            if state_directory.as_ref() == Some(&directory)
-                && state_name.is_some_and(|name| {
-                    name.eq_ignore_ascii_case(reserved)
-                        || name
-                            .to_ascii_lowercase()
-                            .starts_with(&format!(".{reserved}."))
-                })
-            {
-                return Err("export cannot overwrite sati state files".into());
-            }
-
-            // Also reject existing symlink/junction aliases to state files.
-            let state = self.path.with_file_name(reserved);
-
-            if let (Ok(state), Ok(target)) =
-                (fs::canonicalize(state), fs::canonicalize(&destination))
-                && state == target
-            {
-                return Err("export cannot overwrite sati state files".into());
-            }
-        }
-
-        Ok(destination)
-    }
-
     pub fn lock(&self) -> Result<File> {
         let directory = self
             .path
@@ -397,7 +344,7 @@ fn create_data_directory(directory: &Path) -> io::Result<()> {
     }
 }
 
-pub(crate) fn create_temporary(directory: &Path, name: &str) -> Result<(PathBuf, File)> {
+fn create_temporary(directory: &Path, name: &str) -> Result<(PathBuf, File)> {
     for sequence in 0..1000 {
         let path = directory.join(format!(".{name}.{}.{sequence}.tmp", std::process::id()));
         let mut options = OpenOptions::new();
