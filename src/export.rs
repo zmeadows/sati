@@ -18,7 +18,7 @@ pub fn markdown(tasks: &[Task]) -> String {
     for task in tasks {
         output.push_str(if task.completed { "- [x] " } else { "- [ ] " });
 
-        for character in task.text.chars() {
+        for character in task.display_text().chars() {
             if "\\`*_{}[]<>!&#|~+-.()".contains(character) {
                 output.push('\\');
             }

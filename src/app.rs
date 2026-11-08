@@ -21,6 +21,10 @@ pub struct Task {
     pub id: Uuid,
     #[serde(with = "utc_seconds")]
     pub created_at: OffsetDateTime,
+    // The task's section, such as "Work". This field is the source of truth: `text` holds only
+    // the body, and "Work: " is just the syntax for typing and editing it (`display_text`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
     pub text: String,
     pub completed: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -28,19 +32,42 @@ pub struct Task {
 }
 
 impl Task {
-    // A new, unfinished, uncarried task with a fresh UUID v4 and the current time.
-    pub fn new(text: impl Into<String>) -> Self {
+    // A new, unfinished, uncarried task with a fresh UUID v4 and the current time, from text as
+    // typed: "Work: fix bug" becomes section "Work" with the body "fix bug".
+    pub fn new(input: impl Into<String>) -> Self {
+        let input = input.into();
+        let (section, text) = split_section(&input);
+
         Self {
             id: Uuid::new_v4(),
             created_at: current_time(),
-            text: text.into(),
+            section,
+            text,
             completed: false,
             carried: false,
         }
     }
 
+    // The task as typed: "Work: fix bug", or just the body without a section.
+    pub fn display_text(&self) -> String {
+        match &self.section {
+            Some(section) => format!("{section}: {}", self.text),
+            None => self.text.clone(),
+        }
+    }
+
     pub(crate) fn validation_error(&self) -> Option<&'static str> {
-        if self.completed && self.carried {
+        // Stored sections must round-trip through the "Name: " typing syntax.
+        let invalid_section = self.section.as_deref().is_some_and(|section| {
+            section.is_empty()
+                || section
+                    .chars()
+                    .any(|c| c == ':' || c.is_whitespace() || single_line_character(c) != c)
+        });
+
+        if invalid_section {
+            Some("section must be one word without spaces, colons, or control characters")
+        } else if self.completed && self.carried {
             Some("cannot be both completed and carried")
         } else if self.text.is_empty() {
             Some("text is empty")
@@ -122,8 +149,18 @@ pub(crate) fn section_body(text: &str) -> &str {
     task_prefix(text).map_or(text, |prefix| text[prefix.len() + 1..].trim_start())
 }
 
-fn section_key(text: &str) -> Option<String> {
-    task_prefix(text).map(str::to_lowercase)
+// Split typed text into its section and body: "Work: fix bug" → (Some("Work"), "fix bug").
+pub(crate) fn split_section(input: &str) -> (Option<String>, String) {
+    let section = task_prefix(input).map(str::to_owned);
+
+    (section, section_body(input).to_owned())
+}
+
+impl Task {
+    // Sections match case-insensitively.
+    fn section_key(&self) -> Option<String> {
+        self.section.as_deref().map(str::to_lowercase)
+    }
 }
 
 // Which tasks are shown: all of them, one section (by lowercase key), or unsectioned ones.
@@ -312,7 +349,7 @@ impl App {
         let mut unsectioned = false;
 
         for task in &self.tasks {
-            match task_prefix(&task.text) {
+            match task.section.as_deref() {
                 Some(prefix) => {
                     let key = prefix.to_lowercase();
 
@@ -347,14 +384,12 @@ impl App {
     }
 
     pub fn is_visible(&self, index: usize) -> bool {
-        let text = &self.tasks[index].text;
+        let task = &self.tasks[index];
 
         match &self.view {
             SectionView::All => true,
-            SectionView::Named(key) => {
-                task_prefix(text).is_some_and(|prefix| prefix.to_lowercase() == *key)
-            }
-            SectionView::Unsectioned => task_prefix(text).is_none(),
+            SectionView::Named(key) => task.section_key().as_ref() == Some(key),
+            SectionView::Unsectioned => task.section.is_none(),
         }
     }
 
@@ -365,18 +400,18 @@ impl App {
     }
 
     // Search matches what a tab shows, so a section tab ignores its own prefix.
-    fn search_text(&self, index: usize) -> &str {
-        let text = &self.tasks[index].text;
+    fn search_text(&self, index: usize) -> std::borrow::Cow<'_, str> {
+        let task = &self.tasks[index];
 
         match self.view {
-            SectionView::Named(_) => section_body(text),
-            _ => text,
+            SectionView::Named(_) => task.text.as_str().into(),
+            _ => task.display_text().into(),
         }
     }
 
     // The tab a task belongs to, given that sections exist.
     fn home_view(&self, index: usize) -> SectionView {
-        match section_key(&self.tasks[index].text) {
+        match self.tasks[index].section_key() {
             Some(key) => SectionView::Named(key),
             None => SectionView::Unsectioned,
         }
@@ -707,7 +742,7 @@ impl App {
 
         let anchor = original.unwrap_or(0).min(self.tasks.len());
         let selected = (anchor..self.tasks.len()).chain(0..anchor).find(|&index| {
-            self.is_visible(index) && crate::search::matches(self.search_text(index), input.text())
+            self.is_visible(index) && crate::search::matches(&self.search_text(index), input.text())
         });
         self.list.select(selected);
         self.reveal_selection = true;
@@ -716,7 +751,7 @@ impl App {
     fn find_search_result(&self, query: &str, forward: bool) -> Option<usize> {
         let len = self.tasks.len();
         let matches = |&index: &usize| {
-            self.is_visible(index) && crate::search::matches(self.search_text(index), query)
+            self.is_visible(index) && crate::search::matches(&self.search_text(index), query)
         };
 
         if forward {
@@ -752,7 +787,7 @@ impl App {
         let original = self.list.selected();
         let selected = original
             .filter(|&index| {
-                self.is_visible(index) && crate::search::matches(self.search_text(index), query)
+                self.is_visible(index) && crate::search::matches(&self.search_text(index), query)
             })
             .or_else(|| self.find_search_result(query, forward));
 
@@ -1050,7 +1085,7 @@ impl App {
 
     fn yank_task(&mut self) {
         if let Some(task) = self.list.selected().and_then(|index| self.tasks.get(index)) {
-            self.task_register = Some(task.text.clone());
+            self.task_register = Some(task.display_text());
             self.notify("Copied task");
         }
     }
@@ -1314,7 +1349,7 @@ impl App {
                     let single_match = (0..self.tasks.len())
                         .filter(|&index| {
                             self.is_visible(index)
-                                && crate::search::matches(self.search_text(index), input.text())
+                                && crate::search::matches(&self.search_text(index), input.text())
                         })
                         .take(2)
                         .count()
@@ -1392,9 +1427,13 @@ impl App {
 
                 if !text.is_empty() && !bare_section {
                     if let Some(index) = edited_task {
-                        if self.tasks[index].text != text {
+                        // Editing re-reads the "Name: " syntax, so it can change the section.
+                        let (section, body) = split_section(&text);
+
+                        if self.tasks[index].section != section || self.tasks[index].text != body {
                             let mut tasks = self.tasks.clone();
-                            tasks[index].text = text;
+                            tasks[index].section = section;
+                            tasks[index].text = body;
                             self.replace(tasks, Some(index), "edit task", storage)?;
                         }
                     } else {
@@ -1549,7 +1588,7 @@ impl App {
                 if let Some(index) = self.list.selected() {
                     self.mode = Mode::Editing {
                         index,
-                        input: self.tasks[index].text.clone().into(),
+                        input: self.tasks[index].display_text().into(),
                     };
                 }
             }
@@ -1699,8 +1738,9 @@ mod tests {
         App::new(texts.iter().map(|text| Task::new(*text)).collect())
     }
 
-    fn texts(app: &App) -> Vec<&str> {
-        app.tasks.iter().map(|task| task.text.as_str()).collect()
+    // Tasks as typed, including any "Name: " section prefix.
+    fn texts(app: &App) -> Vec<String> {
+        app.tasks.iter().map(Task::display_text).collect()
     }
 
     fn press(app: &mut App, fixture: &Fixture, key: impl Into<KeyEvent>) -> bool {
@@ -1791,7 +1831,7 @@ mod tests {
 
         // A clean quit writes the migrated, versioned document.
         let saved = std::fs::read_to_string(fixture.task_path()).unwrap();
-        assert!(saved.contains("\"schema_version\": 2"), "{saved}");
+        assert!(saved.contains("\"schema_version\": 3"), "{saved}");
 
         app.list.select(Some(2));
         assert_eq!(fixture.storage.load_document().unwrap().selected, Some(0));
@@ -2157,11 +2197,9 @@ mod tests {
                     assert_eq!(
                         *pasted,
                         Task {
-                            text: text.into(),
-                            completed: false,
-                            carried: false,
                             id: pasted.id,
                             created_at: pasted.created_at,
+                            ..Task::new(text)
                         }
                     );
                     assert_eq!(app.list.selected(), Some(index));
@@ -2831,8 +2869,11 @@ mod tests {
         let fixture = Fixture::new();
         let mut app = app_with_texts(&["Work: a", "plain"]);
         fixture.storage.save(&app.tasks).unwrap();
-        let unsectioned_file = std::fs::read_to_string(fixture.task_path()).unwrap();
-        assert!(!unsectioned_file.contains("section"));
+        // In [*] the document has no active-tab `section` key (tasks still store theirs).
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(fixture.task_path()).unwrap()).unwrap();
+        assert!(saved.get("section").is_none());
+        assert_eq!(saved["tasks"][0]["section"], "Work");
 
         for (view, saved) in [
             (SectionView::Named("work".into()), "\"section\": \"work\""),
@@ -4763,6 +4804,56 @@ mod tests {
 
         assert_eq!(loaded.tasks, app.tasks);
         assert_eq!(std::fs::read(fixture.task_path()).unwrap(), saved);
+    }
+
+    #[test]
+    fn typed_prefixes_set_the_section_field_and_edits_or_pastes_keep_it_consistent() {
+        let fixture = Fixture::new();
+        let mut app = App::new(Vec::new());
+
+        type_keys(&mut app, &fixture, "a");
+        app.paste("Work: fix bug");
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        let task = &app.tasks[0];
+        assert_eq!(
+            (task.section.as_deref(), task.text.as_str()),
+            (Some("Work"), "fix bug")
+        );
+        let id = task.id;
+
+        for (typed, section, body) in [
+            ("Home: fix bug", Some("Home"), "fix bug"),
+            ("fix bug", None, "fix bug"),
+            ("Work: fix bug", Some("Work"), "fix bug"),
+        ] {
+            press(&mut app, &fixture, KeyCode::Char('e'));
+            press(
+                &mut app,
+                &fixture,
+                KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            );
+            app.paste(typed);
+            press(&mut app, &fixture, KeyCode::Enter);
+
+            let task = &app.tasks[0];
+            assert_eq!(
+                (task.section.as_deref(), task.text.as_str()),
+                (section, body)
+            );
+            assert_eq!(task.id, id);
+        }
+
+        // Yank and paste carry the section through the typed form.
+        app.show_section(SectionView::All);
+        type_keys(&mut app, &fixture, "yp");
+        assert_eq!(app.tasks[1].section.as_deref(), Some("Work"));
+        assert_ne!(app.tasks[1].id, id);
+
+        assert_eq!(
+            crate::export::markdown(&app.tasks[..1]),
+            "- [ ] Work: fix bug\n"
+        );
     }
 
     #[test]

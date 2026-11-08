@@ -332,9 +332,9 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
         let in_section = matches!(app.view, SectionView::Named(_));
 
         let shown = if in_section {
-            crate::app::section_body(&task.text)
+            task.text.clone()
         } else {
-            &task.text
+            task.display_text()
         };
 
         let text: String = shown
@@ -342,10 +342,11 @@ fn prepare_task_layout(app: &App, width: u16, mut row_tasks: Vec<Option<usize>>)
             .map(|c| if c.is_control() { ' ' } else { c })
             .collect();
 
+        // Bold the "Work:" part of the composed text; the section comes from its field.
         let section_prefix = if in_section {
             None
         } else {
-            crate::app::task_prefix(&text)
+            task.section.as_deref()
         };
 
         let tag_end = section_prefix.map_or(0, |prefix| {

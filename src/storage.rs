@@ -14,18 +14,18 @@ use serde_json::Value;
 
 use uuid::Uuid;
 
-use crate::app::{Task, current_time};
+use crate::app::{Task, current_time, split_section};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 // The `tasks.json` format written by this build. Files without `schema_version` are version 0.
-const SCHEMA_VERSION: u64 = 2;
+const SCHEMA_VERSION: u64 = 3;
 
 // `MIGRATIONS[n]` upgrades a version `n` document to version `n + 1`. To change the format,
 // bump `SCHEMA_VERSION` and append one migration; the array length enforces the pairing.
 // Migrations run in memory on load; the upgraded document is written by the next save.
 const MIGRATIONS: [fn(Value) -> std::result::Result<Value, String>; SCHEMA_VERSION as usize] =
-    [v0_to_v1, v1_to_v2];
+    [v0_to_v1, v1_to_v2, v2_to_v3];
 
 // Versions 0 and 1 share one document shape; version 0 also allows a bare task array.
 // Parsing into these strict types validates legacy data before it is migrated, so
@@ -78,19 +78,49 @@ fn v0_to_v1(value: Value) -> std::result::Result<Value, String> {
     versioned(1, legacy_document(value)?)
 }
 
+// Version 2 documents, the output of `v1_to_v2` and the input of `v2_to_v3`. Each step
+// uses its own types so that migrations never depend on today's `Task`.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct V2Document {
+    tasks: Vec<V2Task>,
+    #[serde(default)]
+    selected: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    section: Option<String>,
+}
+
+// Version 2 tasks still carry their section as a "Name: " prefix in `text`. `id` and
+// `created_at` pass through unchanged and are validated once the current `Task` is parsed.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct V2Task {
+    id: String,
+    created_at: String,
+    text: String,
+    completed: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    carried: bool,
+}
+
+fn parse_version(value: Value) -> std::result::Result<Value, String> {
+    // `load_document` has already checked the version.
+    match value {
+        Value::Object(mut fields) => {
+            fields.remove("schema_version");
+            Ok(Value::Object(fields))
+        }
+        _ => Err("expected an object".to_owned()),
+    }
+}
+
 // Version 2 gives every task a unique `id` and a `created_at` time. Their true creation times
 // are unknown, so all existing tasks share the moment of migration.
 fn v1_to_v2(value: Value) -> std::result::Result<Value, String> {
-    #[derive(Serialize)]
-    struct Document {
-        tasks: Vec<Task>,
-        selected: Option<usize>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section: Option<String>,
-    }
-
     let legacy = legacy_document(value)?;
-    let created_at = current_time();
+    let created_at = current_time()
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|error| error.to_string())?;
     let mut ids = std::collections::HashSet::new();
 
     let tasks = legacy
@@ -102,10 +132,62 @@ fn v1_to_v2(value: Value) -> std::result::Result<Value, String> {
                 .find(|id| ids.insert(*id))
                 .unwrap();
 
-            Task {
-                id,
-                created_at,
+            V2Task {
+                id: id.to_string(),
+                created_at: created_at.clone(),
                 text: task.text,
+                completed: task.completed,
+                carried: task.carried,
+            }
+        })
+        .collect();
+
+    let document = V2Document {
+        tasks,
+        selected: legacy.selected,
+        section: legacy.section,
+    };
+
+    versioned(2, document)
+}
+
+// Version 3 stores each task's section in its own field instead of a "Name: " text prefix,
+// so the meaning of stored tasks no longer depends on how typed text is parsed.
+fn v2_to_v3(value: Value) -> std::result::Result<Value, String> {
+    #[derive(Serialize)]
+    struct Document {
+        tasks: Vec<V3Task>,
+        selected: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        section: Option<String>,
+    }
+
+    #[derive(Serialize)]
+    struct V3Task {
+        id: String,
+        created_at: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        section: Option<String>,
+        text: String,
+        completed: bool,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        carried: bool,
+    }
+
+    let document: V2Document =
+        serde_json::from_value(parse_version(value)?).map_err(|error| error.to_string())?;
+
+    let tasks = document
+        .tasks
+        .into_iter()
+        .map(|task| {
+            let (section, text) = split_section(&task.text);
+
+            V3Task {
+                id: task.id,
+                created_at: task.created_at,
+                section,
+                text,
                 completed: task.completed,
                 carried: task.carried,
             }
@@ -114,11 +196,11 @@ fn v1_to_v2(value: Value) -> std::result::Result<Value, String> {
 
     let document = Document {
         tasks,
-        selected: legacy.selected,
-        section: legacy.section,
+        selected: document.selected,
+        section: document.section,
     };
 
-    versioned(2, document)
+    versioned(3, document)
 }
 
 #[derive(Default, Deserialize)]
@@ -564,7 +646,12 @@ pub mod tests {
                 true,
             ),
             (
-                format!(r#"{{"schema_version":2,"tasks":{CURRENT_TASKS},"selected":1}}"#),
+                format!(r#"{{"schema_version":2,"tasks":{IDENTIFIED_TASKS},"selected":1}}"#),
+                Some(1),
+                true,
+            ),
+            (
+                format!(r#"{{"schema_version":3,"tasks":{IDENTIFIED_TASKS},"selected":1}}"#),
                 Some(1),
                 false,
             ),
@@ -615,12 +702,12 @@ pub mod tests {
 
         assert_eq!(
             json,
-            serde_json::json!({"schema_version": 2, "tasks":[], "selected":null})
+            serde_json::json!({"schema_version": 3, "tasks":[], "selected":null})
         );
 
         // The version comes first so it is the first thing a reader sees.
         let saved = fs::read_to_string(fixture.task_path()).unwrap();
-        assert!(saved.starts_with("{\n  \"schema_version\": 2,"), "{saved}");
+        assert!(saved.starts_with("{\n  \"schema_version\": 3,"), "{saved}");
         assert!(!fixture.storage.load_document().unwrap().needs_migration);
     }
 
@@ -631,8 +718,8 @@ pub mod tests {
         serde_json::from_value(saved["tasks"].clone()).unwrap()
     }
 
-    // Two version 2 tasks with valid ids and creation times.
-    const CURRENT_TASKS: &str = r#"[
+    // Two tasks with valid ids and creation times and no section, valid in versions 2 and 3.
+    const IDENTIFIED_TASKS: &str = r#"[
         {"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"first","completed":false},
         {"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:06Z","text":"second","completed":false}
     ]"#;
@@ -655,12 +742,17 @@ pub mod tests {
             let content: Vec<_> = document
                 .tasks
                 .iter()
-                .map(|task| (task.text.as_str(), task.completed, task.carried))
+                .map(|task| (task.display_text(), task.completed, task.carried))
                 .collect();
             assert_eq!(
                 content,
-                [("Work: keep", false, true), ("other", true, false)]
+                [
+                    ("Work: keep".into(), false, true),
+                    ("other".into(), true, false)
+                ]
             );
+            assert_eq!(document.tasks[0].section.as_deref(), Some("Work"));
+            assert_eq!(document.tasks[0].text, "keep");
             assert_eq!(document.selected, Some(0));
             assert_eq!(
                 document.section.as_deref(),
@@ -748,6 +840,115 @@ pub mod tests {
     }
 
     #[test]
+    fn version_2_prefixes_become_section_fields_exactly_once() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+        let texts = ["Work: a", "plain", "a:b", "https://x", "Home: Work: nested"];
+        let tasks: Vec<_> = texts
+            .iter()
+            .enumerate()
+            .map(|(index, text)| {
+                serde_json::json!({
+                    "id": format!("00000000-0000-4000-8000-00000000000{index}"),
+                    "created_at": format!("2026-11-07T19:24:0{index}Z"),
+                    "text": text,
+                    "completed": index == 1,
+                    "carried": index == 0,
+                })
+            })
+            .collect();
+        let json = serde_json::json!({
+            "schema_version": 2, "tasks": tasks, "selected": 2, "section": "work"
+        })
+        .to_string();
+        fs::write(fixture.task_path(), &json).unwrap();
+
+        let document = fixture.storage.load_document().unwrap();
+
+        let fields: Vec<_> = document
+            .tasks
+            .iter()
+            .map(|task| (task.section.as_deref(), task.text.as_str()))
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                (Some("Work"), "a"),
+                (None, "plain"),
+                (None, "a:b"),
+                (None, "https://x"),
+                (Some("Home"), "Work: nested"),
+            ]
+        );
+
+        for (index, task) in document.tasks.iter().enumerate() {
+            assert_eq!(
+                task.id.to_string(),
+                format!("00000000-0000-4000-8000-00000000000{index}")
+            );
+            assert_eq!(task.created_at.second(), index as u8);
+            assert_eq!(task.completed, index == 1);
+            assert_eq!(task.carried, index == 0);
+        }
+
+        assert_eq!(document.selected, Some(2));
+        assert_eq!(document.section.as_deref(), Some("work"));
+        assert!(document.needs_migration);
+        assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
+    }
+
+    #[test]
+    fn stored_sections_are_validated_and_bodies_are_never_reparsed() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+        let task = |section: &str, text: &str| {
+            format!(
+                r#"{{"schema_version":3,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":{section},"text":"{text}","completed":false}}]}}"#
+            )
+        };
+
+        for section in [r#""""#, r#""Side project""#, r#""a:b""#, r#""tab\t""#, "5"] {
+            let json = task(section, "body");
+            fs::write(fixture.task_path(), &json).unwrap();
+            let error = fixture
+                .storage
+                .load_document()
+                .err()
+                .expect("rejected")
+                .to_string();
+
+            assert!(error.contains("invalid task file"), "{section}: {error}");
+            assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
+        }
+
+        // A body that looks like a prefix is just text in its stored section.
+        fs::write(fixture.task_path(), task(r#""Work""#, "Home: x")).unwrap();
+        let document = fixture.storage.load_document().unwrap();
+
+        assert_eq!(document.tasks[0].section.as_deref(), Some("Work"));
+        assert_eq!(document.tasks[0].text, "Home: x");
+        assert!(!document.needs_migration);
+
+        // Saving omits `section` for tasks without one.
+        fixture.storage.save(&[Task::new("plain")]).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixture.task_path()).unwrap()).unwrap();
+        assert!(saved["tasks"][0].get("section").is_none());
+
+        let stray = r#"{"schema_version":2,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Work","text":"a","completed":false}]}"#;
+        fs::write(fixture.task_path(), stray).unwrap();
+        let error = fixture
+            .storage
+            .load_document()
+            .err()
+            .expect("rejected")
+            .to_string();
+
+        assert!(error.contains("migrating from version 2"), "{error}");
+        assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), stray);
+    }
+
+    #[test]
     fn duplicate_ids_and_malformed_identities_are_rejected_without_writing() {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
@@ -815,7 +1016,7 @@ pub mod tests {
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
 
-        let future = r#"{"schema_version":3,"tasks":[],"future":"field"}"#;
+        let future = r#"{"schema_version":4,"tasks":[],"future":"field"}"#;
         fs::write(fixture.task_path(), future).unwrap();
         let error = fixture
             .storage
@@ -824,8 +1025,8 @@ pub mod tests {
             .expect("rejected")
             .to_string();
 
-        assert!(error.contains("schema version 3"), "{error}");
-        assert!(error.contains("supports version 2"), "{error}");
+        assert!(error.contains("schema version 4"), "{error}");
+        assert!(error.contains("supports version 3"), "{error}");
         assert!(error.contains("left untouched"), "{error}");
         assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), future);
 

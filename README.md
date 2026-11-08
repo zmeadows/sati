@@ -320,15 +320,19 @@ task save.
 
 Each task has a unique `id` (a UUID) that stays the same as the task is edited, completed,
 or moved, and a `created_at` time in UTC (RFC 3339, such as `2026-11-07T19:24:05Z`).
-Pasting a copied task creates a new task with its own `id`.
+Pasting a copied task creates a new task with its own `id`. A task's section is stored in
+its own `section` field, separate from its `text`; typing `Work: fix bug` sets the section
+to `Work` and the text to `fix bug`, and the task is still shown, edited, and exported as
+`Work: fix bug`.
 
-The file starts with a `schema_version` (currently `2`). Older files, including the
+The file starts with a `schema_version` (currently `3`). Older files, including the
 original bare task lists, are upgraded in memory when sati starts and written in the
 current format on the next save or normal quit; starting sati never rewrites the file by
 itself. Upgraded tasks receive new ids and share the upgrade time as their `created_at`,
-since their real creation times are unknown. A file written by a newer version of sati is
+since their real creation times are unknown, and `Name: ` prefixes in older files move into
+the `section` field once. A file written by a newer version of sati is
 refused and left untouched, as is any file that cannot be read or upgraded, or that gives
-two tasks the same `id`. Older versions of sati cannot open version 2 files.
+two tasks the same `id`. Older versions of sati cannot open version 3 files.
 
 ## Credits
 
