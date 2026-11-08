@@ -10,7 +10,7 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Mode, SectionView, Task, TaskStatus};
+use crate::app::{App, Mode, SectionView, Task, TaskStatus, task_prefix};
 use crate::input::TextInput;
 use crate::styles::Styles;
 
@@ -126,7 +126,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
             "search"
         };
 
-        draw_input_line(frame, sections[1], input, label, &app.styles, true, None);
+        draw_input_line(
+            frame,
+            sections[1],
+            input,
+            label,
+            &app.styles,
+            true,
+            false,
+            None,
+        );
 
         // The hint sits at the right edge only while the prompt, query, and cursor cell
         // leave room for it, so it never covers typing.
@@ -226,6 +235,7 @@ fn draw_section_tabs(
                 "",
                 &app.styles,
                 true,
+                false,
                 None,
             );
         }
@@ -354,6 +364,7 @@ fn draw_section_tabs(
                 RENAME_LABEL,
                 &styles,
                 true,
+                false,
                 None,
             );
         } else {
@@ -702,6 +713,7 @@ fn draw_inline_input(
             label,
             &app.styles,
             true,
+            true,
             app.completion_ghost().as_deref(),
         );
     }
@@ -840,6 +852,7 @@ fn task_spans(
     spans
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_input_line(
     frame: &mut Frame,
     area: Rect,
@@ -847,6 +860,7 @@ fn draw_input_line(
     label: &str,
     styles: &Styles,
     show_cursor: bool,
+    bold_section_prefix: bool,
     ghost: Option<&str>,
 ) {
     if area.is_empty() {
@@ -907,8 +921,25 @@ fn draw_input_line(
         end += grapheme.len();
     }
 
-    let visible = &text[start..end];
-    line.push_span(Span::styled(visible, styles.normal));
+    // A task input bolds a complete "Work: " prefix, as task rows bold their section. The
+    // prefix ends at a grapheme boundary so a mark joined to its space stays with it.
+    let prefix_end = if bold_section_prefix {
+        task_prefix(text).map_or(0, |prefix| {
+            let space = prefix.len() + 1;
+            text.grapheme_indices(true)
+                .find(|(index, _)| *index == space)
+                .map_or(0, |(index, grapheme)| index + grapheme.len())
+        })
+    } else {
+        0
+    };
+
+    let bold_end = prefix_end.clamp(start, end);
+    line.push_span(Span::styled(
+        &text[start..bold_end],
+        styles.normal.add_modifier(Modifier::BOLD),
+    ));
+    line.push_span(Span::styled(&text[bold_end..end], styles.normal));
 
     // A suggested section follows the cursor in dim text, cut to the remaining cells.
     if let Some(ghost) = ghost {
@@ -2116,6 +2147,7 @@ mod tests {
                     "add",
                     &app.styles,
                     true,
+                    false,
                     None,
                 )
             })
@@ -3718,6 +3750,7 @@ mod tests {
                             label,
                             &Styles::default(),
                             true,
+                            false,
                             None,
                         )
                     })
@@ -3752,6 +3785,7 @@ mod tests {
                         label,
                         &Styles::default(),
                         true,
+                        false,
                         None,
                     )
                 })
@@ -3763,6 +3797,59 @@ mod tests {
             );
             assert!(screen(&terminal).contains("hidden text"));
         }
+    }
+
+    // Draws `text` in an input line and returns which cells after the prompt are bold.
+    fn input_bold_cells(text: &str, width: u16, bold_section_prefix: bool) -> Vec<bool> {
+        let mut terminal = test_terminal(width, 1);
+        let input = TextInput::from(text);
+
+        terminal
+            .draw(|frame| {
+                draw_input_line(
+                    frame,
+                    frame.area(),
+                    &input,
+                    "",
+                    &Styles::default(),
+                    true,
+                    bold_section_prefix,
+                    None,
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let prompt_width = "› ".width() as u16;
+
+        (prompt_width..width)
+            .map(|x| buffer[(x, 0)].modifier.contains(Modifier::BOLD))
+            .collect()
+    }
+
+    #[test]
+    fn task_inputs_bold_only_a_complete_section_prefix() {
+        let complete = input_bold_cells("Wörk: fix", 20, true);
+        let without_space = input_bold_cells("Work:fix", 20, true);
+        let partial = input_bold_cells("Work:", 20, true);
+        let other_input = input_bold_cells("Work: fix", 20, false);
+
+        assert_eq!(
+            &complete[..9],
+            [true, true, true, true, true, true, false, false, false]
+        );
+        assert!(without_space.iter().all(|bold| !bold));
+        assert!(partial.iter().all(|bold| !bold));
+        assert!(other_input.iter().all(|bold| !bold));
+    }
+
+    #[test]
+    fn scrolled_task_inputs_keep_bolding_the_visible_part_of_the_prefix() {
+        // The cursor sits at the end, so the start of "Section: " scrolls out of view.
+        let bold = input_bold_cells("Section: abc", 10, true);
+
+        // Visible: "on: abc" and the cursor cell.
+        assert_eq!(bold, [true, true, true, true, false, false, false, false]);
     }
 
     #[test]
@@ -3787,6 +3874,7 @@ mod tests {
                                 ..Styles::default()
                             },
                             true,
+                            false,
                             None,
                         )
                     })
@@ -3854,6 +3942,7 @@ mod tests {
                                 label,
                                 &Styles::default(),
                                 true,
+                                false,
                                 None,
                             )
                         })
