@@ -286,11 +286,15 @@ fn atomic_save<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
     // The live file is never truncated: the crate writes a temporary file beside it, syncs it,
     // renames it over `path`, and on Unix also syncs the directory. A failure before the rename
     // leaves the previous file in place.
-    let mut options = AtomicWriteFile::options();
+    let options = AtomicWriteFile::options();
 
     // Publish a private file even when replacing one with looser permissions.
     #[cfg(unix)]
-    options.preserve_mode(false).mode(0o600);
+    let options = {
+        let mut options = options;
+        options.preserve_mode(false).mode(0o600);
+        options
+    };
 
     let save_error = |error: io::Error| format!("could not save {}: {error}", path.display());
     let mut file = options.open(path).map_err(save_error)?;
