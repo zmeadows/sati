@@ -178,7 +178,7 @@ fn export_rejects_removed_file_options_and_unknown_arguments() {
 
         assert!(!output.status.success(), "accepted {args:?}");
         assert!(output.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("unknown export argument"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument"));
         assert!(!fixture.root.join("tasks.md").exists());
     }
 

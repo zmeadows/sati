@@ -1,14 +1,9 @@
-use std::{
-    ffi::OsString,
-    io::{self, Write},
-};
+use std::io::{self, Write};
 
 use crate::{
     app::{Task, TaskStatus},
     storage::{Result, Storage},
 };
-
-pub const USAGE: &str = "Usage: sati export";
 
 pub fn markdown(tasks: &[Task]) -> String {
     let mut output = String::new();
@@ -35,26 +30,7 @@ pub fn markdown(tasks: &[Task]) -> String {
     output
 }
 
-pub fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<()> {
-    let mut help = false;
-
-    for argument in arguments {
-        if argument == "--help" || argument == "-h" {
-            help = true;
-        } else {
-            return Err(format!(
-                "unknown export argument: {}. {USAGE}",
-                argument.to_string_lossy()
-            )
-            .into());
-        }
-    }
-
-    if help {
-        println!("{USAGE}\n\nWrite the current checklist as Markdown to stdout.");
-        return Ok(());
-    }
-
+pub fn run() -> Result<()> {
     let storage = Storage::discover()?;
     // Atomic task-file replacement allows a consistent read without the writer lock.
     let contents = markdown(&storage.load()?);

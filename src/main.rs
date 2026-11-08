@@ -11,6 +11,7 @@ mod ui;
 
 use std::{
     io, panic,
+    path::PathBuf,
     process::ExitCode,
     sync::{
         Arc,
@@ -33,10 +34,31 @@ use ratatui::crossterm::{
 #[cfg(unix)]
 use ratatui::crossterm::event::EnableBracketedPaste;
 
+use clap::{
+    Args, Parser, Subcommand,
+    builder::{
+        PossibleValuesParser, TypedValueParser,
+        styling::{AnsiColor, Styles},
+    },
+};
+use ratatui::style::Color;
+
 use app::App;
 use storage::{Result, Storage};
 
-const USAGE: &str = "Usage: sati [--theme NAME] [--config PATH] [--wrap | --no-wrap] [--round-corners | --square-corners] [--ascii-markers | --unicode-markers] [--notifications | --no-notifications] [--accent COLOR] [--version]\n       sati export";
+// Cargo-like help colors; clap drops them when the output is not a color terminal.
+const HELP_STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Green.on_default().bold())
+    .usage(AnsiColor::Green.on_default().bold())
+    .literal(AnsiColor::Cyan.on_default().bold())
+    .placeholder(AnsiColor::Cyan.on_default());
+
+const DISPLAY_HEADING: &str = "Display";
+
+const CONFIG_HELP: &str = concat!(
+    "Settings can also come from config.toml; command-line options take precedence.\n",
+    "See the README for the configuration file and its location.",
+);
 
 // Report repeats for plain characters and Enter too; alternate keys preserve shifted text.
 const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
@@ -54,49 +76,148 @@ struct Options {
     styles: styles::Styles,
     theme: themes::BuiltinTheme,
     style_overrides: config::StyleOverrides,
-    cli_accent: Option<ratatui::style::Color>,
-    print_version: bool,
+    cli_accent: Option<Color>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Parser)]
+#[command(
+    version,
+    about,
+    styles = HELP_STYLES,
+    after_help = CONFIG_HELP,
+    args_conflicts_with_subcommands = true,
+    disable_help_subcommand = true
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+
+    #[command(flatten)]
+    options: CliOptions,
+}
+
+// Each subcommand runs instead of the interactive checklist.
+#[derive(Debug, PartialEq, Subcommand)]
+enum CliCommand {
+    /// Print the checklist as Markdown
+    ///
+    /// Writes every task, in list order, to stdout as a Markdown checklist. It works while
+    /// sati is open and never changes the task file.
+    Export,
+}
+
+// Each display pair overrides the other, so the last flag given wins.
+#[derive(Debug, Args)]
 struct CliOptions {
-    display: config::Display,
-    accent: Option<ratatui::style::Color>,
+    /// Read settings from this file instead of the default config.toml
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    /// Use a built-in color theme
+    #[arg(
+        long,
+        value_name = "NAME",
+        value_parser = theme_parser(),
+        help_heading = DISPLAY_HEADING
+    )]
     theme: Option<themes::BuiltinTheme>,
-    print_version: bool,
-    config: Option<std::path::PathBuf>,
+
+    /// Override the accent color: an ANSI name, #RRGGBB, or index 0-255
+    #[arg(
+        long,
+        value_name = "COLOR",
+        value_parser = parse_accent,
+        help_heading = DISPLAY_HEADING
+    )]
+    accent: Option<Color>,
+
+    /// Wrap long tasks onto several rows (default)
+    #[arg(long, overrides_with = "no_wrap", help_heading = DISPLAY_HEADING)]
+    wrap: bool,
+
+    /// Keep each task on a single row
+    #[arg(long, overrides_with = "wrap", help_heading = DISPLAY_HEADING)]
+    no_wrap: bool,
+
+    /// Draw rounded borders
+    #[arg(long, overrides_with = "square_corners", help_heading = DISPLAY_HEADING)]
+    round_corners: bool,
+
+    /// Draw square borders (default)
+    #[arg(long, overrides_with = "round_corners", help_heading = DISPLAY_HEADING)]
+    square_corners: bool,
+
+    /// Mark tasks with ASCII: >, [ ], [x], [>]
+    #[arg(long, overrides_with = "unicode_markers", help_heading = DISPLAY_HEADING)]
+    ascii_markers: bool,
+
+    /// Mark tasks with Unicode symbols (default)
+    #[arg(long, overrides_with = "ascii_markers", help_heading = DISPLAY_HEADING)]
+    unicode_markers: bool,
+
+    /// Show brief confirmation messages (default)
+    #[arg(long, overrides_with = "no_notifications", help_heading = DISPLAY_HEADING)]
+    notifications: bool,
+
+    /// Hide brief confirmation messages
+    #[arg(long, overrides_with = "notifications", help_heading = DISPLAY_HEADING)]
+    no_notifications: bool,
 }
 
 impl CliOptions {
     fn resolve(&self, config: config::Config) -> Options {
+        let theme = self.theme.unwrap_or(config.theme);
+
         Options {
-            wrap: self.display.wrap.or(config.display.wrap).unwrap_or(true),
-            notifications: self
-                .display
-                .notifications
+            wrap: chosen_flag(self.wrap, self.no_wrap)
+                .or(config.display.wrap)
+                .unwrap_or(true),
+            notifications: chosen_flag(self.notifications, self.no_notifications)
                 .or(config.display.notifications)
                 .unwrap_or(true),
-            rounded: self
-                .display
-                .rounded_corners
+            rounded: chosen_flag(self.round_corners, self.square_corners)
                 .or(config.display.rounded_corners)
                 .unwrap_or(false),
-            ascii_markers: self
-                .display
-                .ascii_markers
+            ascii_markers: chosen_flag(self.ascii_markers, self.unicode_markers)
                 .or(config.display.ascii_markers)
                 .unwrap_or(false),
-            styles: styles::Styles::resolve(
-                self.theme.unwrap_or(config.theme),
-                &config.styles,
-                self.accent,
-            ),
-            theme: self.theme.unwrap_or(config.theme),
+            styles: styles::Styles::resolve(theme, &config.styles, self.accent),
+            theme,
             style_overrides: config.styles,
             cli_accent: self.accent,
-            print_version: self.print_version,
         }
     }
+}
+
+// Turns an on/off flag pair into an optional setting; `overrides_with` keeps at most one set.
+fn chosen_flag(on: bool, off: bool) -> Option<bool> {
+    if on {
+        Some(true)
+    } else if off {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+// Listing the names lets clap show them in help and suggest close matches for typos.
+fn theme_parser() -> impl TypedValueParser<Value = themes::BuiltinTheme> {
+    let names = themes::BuiltinTheme::ALL.iter().map(|(_, name, _)| *name);
+
+    PossibleValuesParser::new(names).map(|name| {
+        name.parse::<themes::BuiltinTheme>()
+            .expect("listed theme names parse")
+    })
+}
+
+fn parse_accent(value: &str) -> std::result::Result<Color, String> {
+    value
+        .parse::<Color>()
+        .ok()
+        .filter(|color| *color != Color::Reset)
+        .ok_or_else(|| {
+            "expected an ANSI color name, #RRGGBB, or index 0-255; reset is not allowed".to_owned()
+        })
 }
 
 fn main() -> ExitCode {
@@ -110,33 +231,20 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
-    let mut arguments = std::env::args_os().skip(1).peekable();
+    // Clap answers --help, --version, and argument errors itself and exits before
+    // configuration, storage, or the terminal are touched.
+    let cli = Cli::parse();
 
-    if arguments
-        .peek()
-        .is_some_and(|argument| argument == "export")
-    {
-        arguments.next();
-        return export::run(arguments);
-    }
-
-    let Some(cli) = parse_arguments(arguments)? else {
-        println!(
-            "{USAGE}\n\n--theme NAME      Select a built-in theme (available: {available_themes}; default: default).\n--config PATH     Read this configuration file instead of the default location.\n--wrap / --no-wrap  Wrap tasks / keep one row per task.\n--round-corners / --square-corners  Rounded / sharp borders.\n--ascii-markers / --unicode-markers  ASCII >, [x], [>] / Unicode task markers.\n--notifications / --no-notifications  Show / hide brief confirmation messages.\n--accent COLOR    Override theme/TOML accent foreground: ANSI name, #RRGGBB, or index 0-255.\n--version          Print the version.\n--help, -h         Show this help.\n\nOptional config.toml: Linux $XDG_CONFIG_HOME/sati/config.toml (or ~/.config/sati/config.toml), macOS ~/Library/Application Support/sati/config.toml, Windows %APPDATA%\\sati\\config.toml.\nPrecedence: CLI > TOML > defaults. [display] accepts optional booleans: wrap, rounded_corners, ascii_markers, notifications.\n[styles.ROLE] supports normal, muted, completed, border, accent; each accepts fg, bg (#RRGGBB or reset), and modifiers. --accent overrides only the accent foreground.\n\nexport             Write the checklist as Markdown to stdout.",
-            available_themes = themes::BuiltinTheme::names(),
-        );
-        return Ok(());
-    };
-
-    if cli.print_version {
-        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
-        return Ok(());
+    if let Some(command) = cli.command {
+        return match command {
+            CliCommand::Export => export::run(),
+        };
     }
 
     // Configuration is read once, before storage and the terminal are touched, so an
     // invalid file is reported on stderr and changes made later need a restart.
-    let config = config::Config::load(cli.config.as_deref())?;
-    let options = cli.resolve(config);
+    let config = config::Config::load(cli.options.config.as_deref())?;
+    let options = cli.options.resolve(config);
 
     let storage = Storage::discover()?;
     let _instance_lock = storage.lock()?;
@@ -410,117 +518,21 @@ fn keyboard_support(result: io::Result<bool>) -> io::Result<bool> {
     }
 }
 
-fn parse_arguments(
-    arguments: impl IntoIterator<Item = std::ffi::OsString>,
-) -> Result<Option<CliOptions>> {
-    let mut options = CliOptions {
-        display: config::Display::default(),
-        accent: None,
-        theme: None,
-        print_version: false,
-        config: None,
-    };
-
-    let mut help = false;
-    let mut arguments = arguments.into_iter();
-
-    while let Some(argument) = arguments.next() {
-        let flag = argument.to_str().unwrap_or("");
-
-        let setting = match flag {
-            "--wrap" | "--no-wrap" => Some((&mut options.display.wrap, flag == "--wrap")),
-            "--notifications" | "--no-notifications" => Some((
-                &mut options.display.notifications,
-                flag == "--notifications",
-            )),
-            "--round-corners" | "--square-corners" => Some((
-                &mut options.display.rounded_corners,
-                flag == "--round-corners",
-            )),
-            "--ascii-markers" | "--unicode-markers" => Some((
-                &mut options.display.ascii_markers,
-                flag == "--ascii-markers",
-            )),
-            _ => None,
-        };
-
-        if let Some((setting, value)) = setting {
-            if setting.is_some_and(|previous| previous != value) {
-                return Err(format!("contradictory display flags: {flag}").into());
-            }
-            *setting = Some(value);
-        } else if argument == "--theme" {
-            if options.theme.is_some() {
-                return Err(format!(
-                    "--theme specified more than once; available themes: {}",
-                    themes::BuiltinTheme::names()
-                )
-                .into());
-            }
-
-            let name = arguments.next().ok_or_else(|| {
-                format!(
-                    "--theme requires a name; available themes: {}",
-                    themes::BuiltinTheme::names()
-                )
-            })?;
-
-            options.theme = Some(
-                name.to_str()
-                    .unwrap_or("")
-                    .parse::<themes::BuiltinTheme>()?,
-            );
-        } else if argument == "--config" {
-            if options.config.is_some() {
-                return Err("--config specified more than once".into());
-            }
-
-            let path = arguments.next().ok_or("--config requires a path")?;
-
-            if path.is_empty()
-                || path
-                    .to_str()
-                    .is_some_and(|value| value.starts_with("--") || value == "-h")
-            {
-                return Err("--config requires a path".into());
-            }
-
-            options.config = Some(path.into());
-        } else if argument == "--version" {
-            options.print_version = true;
-        } else if argument == "--accent" {
-            let value = arguments
-                .next()
-                .ok_or("--accent requires a color (ANSI name, #RRGGBB, or index 0-255)")?;
-            options.accent = Some(parse_accent(&value)?);
-        } else if argument == "--help" || argument == "-h" {
-            help = true;
-        } else {
-            return Err(
-                format!("unknown argument: {}. {USAGE}", argument.to_string_lossy()).into(),
-            );
-        }
-    }
-
-    Ok((!help).then_some(options))
-}
-
-fn parse_accent(value: &std::ffi::OsStr) -> Result<ratatui::style::Color> {
-    value.to_str()
-        .and_then(|text| text.parse::<ratatui::style::Color>().ok())
-        .filter(|color| *color != ratatui::style::Color::Reset)
-        .ok_or_else(|| format!("invalid accent color: {}. Expected an ANSI color name, #RRGGBB, or index 0-255; reset is not allowed", value.to_string_lossy()).into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn parse_arguments(
-        arguments: impl IntoIterator<Item = std::ffi::OsString>,
-    ) -> Result<Option<Options>> {
-        super::parse_arguments(arguments)
-            .map(|options| options.map(|cli| cli.resolve(config::Config::default())))
+    // Parses arguments as if typed after `sati`, keeping only the interactive options.
+    fn parse_cli(arguments: &[&str]) -> std::result::Result<CliOptions, clap::Error> {
+        let arguments = std::iter::once("sati").chain(arguments.iter().copied());
+
+        Cli::try_parse_from(arguments).map(|cli| cli.options)
+    }
+
+    fn resolve_defaults(arguments: &[&str]) -> Options {
+        parse_cli(arguments)
+            .unwrap()
+            .resolve(config::Config::default())
     }
 
     // Records bytes even when flushing fails, making ambiguous command delivery explicit.
@@ -698,8 +710,7 @@ mod tests {
                     args.extend(["--theme", name]);
                 }
 
-                let options = super::parse_arguments(args.into_iter().map(Into::into))
-                    .unwrap()
+                let options = parse_cli(&args)
                     .unwrap()
                     .resolve(config::Config::load(Some(&path)).unwrap());
                 let mut app = App::new(Vec::new());
@@ -790,9 +801,7 @@ mod tests {
     fn every_theme_is_selectable_from_cli_over_toml() {
         for name in themes::BuiltinTheme::names().split(", ") {
             let config: config::Config = toml::from_str("theme='gruvbox-material'").unwrap();
-            let cli = super::parse_arguments(["--theme", name].map(Into::into))
-                .unwrap()
-                .unwrap();
+            let cli = parse_cli(&["--theme", name]).unwrap();
             let selected = name.parse::<themes::BuiltinTheme>().unwrap();
 
             assert_eq!(
@@ -823,9 +832,7 @@ mod tests {
         ] {
             let config = toml::from_str(&format!("theme='{configured}'")).unwrap();
             let args = cli.map_or_else(Vec::new, |name| vec!["--theme", name]);
-            let cli = super::parse_arguments(args.into_iter().map(Into::into))
-                .unwrap()
-                .unwrap();
+            let cli = parse_cli(&args).unwrap();
 
             assert_eq!(cli.resolve(config).styles.normal.fg, Some(expected));
         }
@@ -834,10 +841,7 @@ mod tests {
     #[test]
     fn theme_selection_keeps_cascading_and_final_accent_precedence() {
         let config: config::Config = toml::from_str("theme='default'\n[styles.normal]\nfg='lightblue'\nmodifiers=['bold']\n[styles.muted]\nmodifiers=[]\n[styles.accent]\nfg='red'\nmodifiers=['bold']").unwrap();
-        let cli =
-            super::parse_arguments(["--theme", "default", "--accent", "blue"].map(Into::into))
-                .unwrap()
-                .unwrap();
+        let cli = parse_cli(&["--theme", "default", "--accent", "blue"]).unwrap();
 
         assert_eq!(cli.theme, Some(themes::BuiltinTheme::Default));
 
@@ -850,18 +854,18 @@ mod tests {
         assert_eq!(styles.accent.fg, Some(ratatui::style::Color::Blue));
         assert_eq!(styles.accent.add_modifier, ratatui::style::Modifier::BOLD);
 
+        // Clap lists the available themes whenever a name is missing or unknown.
         for args in [
             vec!["--theme"],
             vec!["--theme", "unknown"],
             vec!["--theme", "Default"],
-            vec!["--theme", "default", "--theme", "default"],
         ] {
-            let error = super::parse_arguments(args.into_iter().map(Into::into))
-                .unwrap_err()
-                .to_string();
+            let error = parse_cli(&args).unwrap_err().to_string();
 
-            assert!(error.contains("default"), "{error}");
+            assert!(error.contains("gruvbox-material"), "{error}");
         }
+
+        assert!(parse_cli(&["--theme", "default", "--theme", "default"]).is_err());
     }
 
     #[test]
@@ -871,25 +875,13 @@ mod tests {
                 .unwrap()
         };
 
-        assert!(
-            super::parse_arguments([])
-                .unwrap()
-                .unwrap()
-                .accent
-                .is_none()
-        );
+        assert!(parse_cli(&[]).unwrap().accent.is_none());
 
-        let options = super::parse_arguments([])
-            .unwrap()
-            .unwrap()
-            .resolve(config());
+        let options = parse_cli(&[]).unwrap().resolve(config());
 
         assert_eq!(options.styles.accent.fg, Some(ratatui::style::Color::Blue));
 
-        let options = super::parse_arguments(["--accent", "red"].map(Into::into))
-            .unwrap()
-            .unwrap()
-            .resolve(config());
+        let options = parse_cli(&["--accent", "red"]).unwrap().resolve(config());
 
         assert_eq!(options.styles.accent.fg, Some(ratatui::style::Color::Red));
         assert_eq!(
@@ -899,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn display_precedence_and_conflicts_cover_both_boolean_directions() {
+    fn display_precedence_and_last_flag_of_a_pair_cover_both_boolean_directions() {
         let fields = ["wrap", "rounded_corners", "ascii_markers", "notifications"];
 
         let flags = [
@@ -923,34 +915,25 @@ mod tests {
                 let text = format!("[display]\n{} = {configured}", fields[index]);
                 let config = || toml::from_str::<config::Config>(&text).unwrap();
                 assert_eq!(
-                    values(
-                        super::parse_arguments([])
-                            .unwrap()
-                            .unwrap()
-                            .resolve(config())
-                    )[index],
+                    values(parse_cli(&[]).unwrap().resolve(config()))[index],
                     configured
                 );
 
                 for (flag, expected) in [(yes, true), (no, false)] {
-                    let options = super::parse_arguments([flag.into()])
-                        .unwrap()
-                        .unwrap()
-                        .resolve(config());
+                    let options = parse_cli(&[flag]).unwrap().resolve(config());
 
                     assert_eq!(values(options)[index], expected);
                 }
             }
 
-            for pair in [[yes, no], [no, yes]] {
-                assert!(super::parse_arguments(pair.map(Into::into)).is_err());
+            // Each flag of a pair overrides the other, so the last one given wins.
+            for (pair, expected) in [([yes, no], false), ([no, yes], true)] {
+                assert_eq!(values(resolve_defaults(&pair))[index], expected);
             }
         }
 
-        assert!(
-            super::parse_arguments(["--config", "one", "--config", "two"].map(Into::into)).is_err()
-        );
-        assert!(super::parse_arguments(["--config"].map(Into::into)).is_err());
+        assert!(parse_cli(&["--config", "one", "--config", "two"]).is_err());
+        assert!(parse_cli(&["--config"]).is_err());
     }
 
     #[test]
@@ -1274,54 +1257,63 @@ mod tests {
 
     #[test]
     fn wrapping_is_enabled_by_default_and_can_be_disabled() {
-        let defaults = parse_arguments([]).unwrap().unwrap();
+        let defaults = resolve_defaults(&[]);
         assert!(defaults.wrap);
         assert!(!defaults.rounded);
         assert!(!defaults.ascii_markers);
         assert!(defaults.notifications);
-        assert!(
-            parse_arguments(["--ascii-markers".into(), "--no-wrap".into()])
-                .unwrap()
-                .unwrap()
-                .ascii_markers
-        );
         assert_eq!(defaults.styles.accent.fg, Some(styles::DEFAULT_ACCENT));
-        assert!(!defaults.print_version);
-        assert!(!parse_arguments(["--no-wrap".into()]).unwrap().unwrap().wrap);
 
-        for removed in ["--keybinds", "--no-keybinds"] {
-            assert!(parse_arguments([removed.into()]).is_err());
+        assert!(resolve_defaults(&["--ascii-markers", "--no-wrap"]).ascii_markers);
+        assert!(!resolve_defaults(&["--no-wrap"]).wrap);
+
+        for removed in ["--keybinds", "--no-keybinds", "--unknown"] {
+            assert!(parse_cli(&[removed]).is_err());
         }
 
-        let options = parse_arguments(["--round-corners"].map(Into::into))
-            .unwrap()
-            .unwrap();
+        let options = resolve_defaults(&["--round-corners"]);
 
         assert!(options.rounded);
         assert!(options.wrap);
-        assert_eq!(parse_arguments(["--help".into()]).unwrap(), None);
-        assert!(parse_arguments(["--unknown".into()]).is_err());
     }
 
     #[test]
-    fn version_preserves_option_parsing_and_argument_validation() {
-        let options =
-            parse_arguments(["--version", "--no-wrap", "--accent", "#a9b665"].map(Into::into))
-                .unwrap()
-                .unwrap();
+    fn help_and_version_requests_stop_parsing_before_startup() {
+        use clap::error::ErrorKind;
 
-        assert!(options.print_version);
-        assert!(!options.wrap);
-        assert_eq!(
-            options.styles.accent.fg,
-            Some(ratatui::style::Color::Rgb(169, 182, 101))
-        );
-        assert_eq!(
-            parse_arguments(["--version", "--help"].map(Into::into)).unwrap(),
-            None
-        );
-        assert!(parse_arguments(["--version", "--unknown"].map(Into::into)).is_err());
-        assert!(parse_arguments(["--version", "--accent"].map(Into::into)).is_err());
+        for (args, kind) in [
+            (vec!["--help"], ErrorKind::DisplayHelp),
+            (vec!["-h"], ErrorKind::DisplayHelp),
+            (vec!["export", "--help"], ErrorKind::DisplayHelp),
+            (vec!["--version"], ErrorKind::DisplayVersion),
+            (vec!["--no-wrap", "--version"], ErrorKind::DisplayVersion),
+        ] {
+            assert_eq!(parse_cli(&args).unwrap_err().kind(), kind, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn export_is_a_subcommand_that_takes_no_display_options() {
+        let cli = Cli::try_parse_from(["sati", "export"]).unwrap();
+        assert_eq!(cli.command, Some(CliCommand::Export));
+
+        assert!(Cli::try_parse_from(["sati"]).unwrap().command.is_none());
+
+        for args in [
+            vec!["sati", "--no-wrap", "export"],
+            vec!["sati", "export", "--no-wrap"],
+            vec!["sati", "export", "unexpected"],
+            vec!["sati", "help"],
+        ] {
+            assert!(Cli::try_parse_from(&args).is_err(), "accepted {args:?}");
+        }
+    }
+
+    #[test]
+    fn cli_definition_passes_clap_consistency_checks() {
+        use clap::CommandFactory;
+
+        Cli::command().debug_assert();
     }
 
     #[test]
@@ -1330,7 +1322,7 @@ mod tests {
             ["--accent", "#a9B665", "--no-wrap"],
             ["--no-wrap", "--accent", "#A9b665"],
         ] {
-            let options = parse_arguments(values.map(Into::into)).unwrap().unwrap();
+            let options = resolve_defaults(&values);
             assert!(!options.wrap);
             assert_eq!(
                 options.styles.accent.fg,
@@ -1339,7 +1331,7 @@ mod tests {
         }
 
         for color in ["#000000", "#ffffff"] {
-            assert!(parse_accent(std::ffi::OsStr::new(color)).is_ok());
+            assert!(parse_accent(color).is_ok());
         }
     }
 
@@ -1353,13 +1345,13 @@ mod tests {
             ("3", Color::Indexed(3)),
             ("255", Color::Indexed(255)),
         ] {
-            assert_eq!(parse_accent(std::ffi::OsStr::new(text)).unwrap(), expected);
+            assert_eq!(parse_accent(text).unwrap(), expected);
         }
     }
 
     #[test]
     fn accent_rejects_missing_or_invalid_values() {
-        assert!(parse_arguments(["--accent".into()]).is_err());
+        assert!(parse_cli(&["--accent"]).is_err());
 
         for color in [
             "",
@@ -1373,10 +1365,7 @@ mod tests {
             "#é1234",
             "--no-wrap",
         ] {
-            assert!(
-                parse_arguments(["--accent".into(), color.into()]).is_err(),
-                "accepted {color}"
-            );
+            assert!(parse_cli(&["--accent", color]).is_err(), "accepted {color}");
         }
     }
 }

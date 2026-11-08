@@ -13,13 +13,13 @@
 
 - Rust 2024 edition; minimum supported Rust version (MSRV) **1.89** (`Cargo.toml`).
 - Ratatui **0.30.2** with its Crossterm backend (default features off; see `Cargo.toml` for the enabled set). Import Crossterm via **`ratatui::crossterm`**, not an independently versioned direct dependency.
-- Serde/JSON for persisted tasks; `toml` for optional configuration; the standard library (`File::try_lock`) for advisory file locks; `atomic-write-file` for atomic task-file saves; `unicode-segmentation` and `unicode-width` for text handling; `nucleo-matcher` for the section picker's fuzzy matching (kept separate from task search).
-- `src/main.rs`: CLI arguments (hand-parsed, no CLI framework), `export` subcommand dispatch, startup, applying the effective configuration, terminal lifecycle, event loop, and platform-specific terminal capabilities.
+- Clap (derive) for command-line parsing and help; Serde/JSON for persisted tasks; `toml` for optional configuration; the standard library (`File::try_lock`) for advisory file locks; `atomic-write-file` for atomic task-file saves; `unicode-segmentation` and `unicode-width` for text handling; `nucleo-matcher` for the section picker's fuzzy matching (kept separate from task search).
+- `src/main.rs`: the Clap derive CLI (`Cli`, with `CliOptions` for the interactive options and a `CliCommand` enum for subcommands such as `export`; add a subcommand as a new variant and a `run()` match arm), subcommand dispatch, startup, applying the effective configuration, terminal lifecycle, event loop, and platform-specific terminal capabilities.
 - `src/app.rs`: `Task`, application modes, key/mouse dispatch, task mutations, selection, scrolling, and bounded undo history.
 - `src/input.rs`: single-line, grapheme-aware `TextInput`; cursor is a UTF-8 byte offset kept at a grapheme boundary.
 - `src/ui.rs`: layout, wrapping, drawing, mouse row mapping, input cursor placement, and the `?` keyboard reference (`HELP_GROUPS`, `draw_help`).
 - `src/storage.rs`: platform data paths, exclusive instance lock, JSON loading/validation, schema versioning and migrations, and atomic replacement saves.
-- `src/config.rs`: TOML config discovery (`$XDG_CONFIG_HOME`/`~/.config`, macOS Application Support, `%APPDATA%`), reading, and parsing through `Config::load`. A missing default file means defaults; an explicit `--config` file must exist. Unknown keys and invalid files are errors; sati never writes config files. Precedence is CLI > TOML > defaults; contradictory CLI flag pairs are rejected.
+- `src/config.rs`: TOML config discovery (`$XDG_CONFIG_HOME`/`~/.config`, macOS Application Support, `%APPDATA%`), reading, and parsing through `Config::load`. A missing default file means defaults; an explicit `--config` file must exist. Unknown keys and invalid files are errors; sati never writes config files. Precedence is CLI > TOML > defaults; within a CLI on/off pair (`--wrap`/`--no-wrap`), the last flag wins (Clap `overrides_with`).
 - `src/themes.rs` / `src/styles.rs`: built-in theme palettes and the resolved `Styles` (theme + TOML overrides + `--accent`).
 - `src/search.rs`: search matching and highlight ranges for `Searching`.
 - `src/export.rs`: Markdown rendering shared by `sati export` (stdout only) and the `c` OSC 52 clipboard copy. Export runs without taking the instance lock (it works while the TUI is open) and never writes files.
@@ -51,7 +51,7 @@
 
 ### Configuration
 
-- `run()` reads and validates the configuration once with `Config::load`, before taking the instance lock, loading tasks, or setting up the terminal, then applies `CliOptions::resolve` (CLI > TOML > defaults) to the `App`. Any configuration error is fatal and reported on stderr with a nonzero exit; `--help`, `--version`, and `export` return before configuration is read.
+- `run()` reads and validates the configuration once with `Config::load`, before taking the instance lock, loading tasks, or setting up the terminal, then applies `CliOptions::resolve` (CLI > TOML > defaults) to the `App`. Any configuration error is fatal and reported on stderr with a nonzero exit; `--help`, `--version`, and `export` return before configuration is read. Argument errors, help, and version are Clap's own (`Cli::parse()` exits before anything else runs; usage errors exit with status 2), and display options cannot be combined with a subcommand.
 - sati does not watch or reload its configuration: edits take effect on the next start. Do not add file watching, polling, or an in-app configuration error display.
 - Runtime `t` / `T` theme cycling is session-only and never writes configuration.
 

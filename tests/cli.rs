@@ -19,16 +19,19 @@ fn version_succeeds_without_a_terminal_or_valid_storage_environment() {
 }
 
 #[test]
-fn version_does_not_hide_invalid_arguments() {
+fn invalid_arguments_fail_with_usage_before_startup() {
     let output = Command::new(env!("CARGO_BIN_EXE_sati"))
-        .args(["--version", "--unknown"])
+        .args(["--no-wrap", "--unknown"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown argument: --unknown"));
+    assert!(error.contains("unexpected argument '--unknown'"), "{error}");
+    assert!(error.contains("Usage:"), "{error}");
 }
 
 #[test]

@@ -229,7 +229,8 @@ sati --accent '#a9b665'
 sati --accent 3
 ```
 
-Run `sati --help` for the full command-line help.
+Run `sati --help` for the command-line help (`-h` and `--help` are the same), `sati --version`
+for the version, and `sati export --help` for export's own help.
 
 ## Configuration
 
@@ -282,7 +283,7 @@ key, a bad value or color, or a missing `--config` file) stops sati with an erro
 before the interface opens.
 
 CLI pairs override either TOML value: `--no-wrap` disables wrapping, and `--wrap`
-re-enables it. Contradictory pairs are rejected.
+re-enables it. When both flags of a pair are given, the last one wins.
 
 The `default` theme uses terminal-native colors and remains the default. Other
 built-in themes provide five RGB foregrounds, their original Neovim-inspired dark
