@@ -5,13 +5,12 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Mode, SectionView, Task, TaskStatus, single_line_character};
-use crate::config::ConfigError;
+use crate::app::{App, Mode, SectionView, Task, TaskStatus};
 use crate::input::TextInput;
 use crate::styles::Styles;
 
@@ -140,15 +139,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
             "search"
         };
 
-        draw_input_line(
-            frame,
-            sections[1],
-            input,
-            label,
-            &app.styles,
-            app.config_error.is_none(),
-            None,
-        );
+        draw_input_line(frame, sections[1], input, label, &app.styles, true, None);
 
         // The hint sits at the right edge only while the prompt, query, and cursor cell
         // leave room for it, so it never covers typing.
@@ -156,7 +147,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         let typed_width = prompt_width + input.text().width() + 1;
         let needed_width = typed_width + SEARCH_HINT_GAP + SEARCH_HINT.width();
 
-        if app.config_error.is_none() && needed_width <= usize::from(sections[1].width) {
+        if needed_width <= usize::from(sections[1].width) {
             frame.render_widget(
                 Paragraph::new(Line::styled(SEARCH_HINT, app.styles.muted).right_aligned()),
                 sections[1],
@@ -175,10 +166,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         draw_confirmation(frame, area, &app.styles, &question);
     }
 
-    if let Some(error) = &app.config_error {
-        draw_config_error(frame, area, &app.styles, error);
-    }
-
     rows
 }
 
@@ -192,9 +179,9 @@ const SEARCH_HINT_GAP: usize = 2;
 // `s1` … `s9` and `s0` reach the first ten tabs.
 const JUMPABLE_TABS: usize = 10;
 
-// After `s` / Alt+S, Normal mode waits for a digit; the error overlay hides the hints.
+// After `s` / Alt+S, Normal mode waits for a digit.
 fn showing_section_jump(app: &App) -> bool {
-    app.mode == Mode::Normal && app.section_jump_pending() && app.config_error.is_none()
+    app.mode == Mode::Normal && app.section_jump_pending()
 }
 
 // The prompt drawn before a section name being renamed, like the inline edit row's.
@@ -250,7 +237,7 @@ fn draw_section_tabs(
                 input,
                 "",
                 &app.styles,
-                app.config_error.is_none(),
+                true,
                 None,
             );
         }
@@ -378,7 +365,7 @@ fn draw_section_tabs(
                 input,
                 RENAME_LABEL,
                 &styles,
-                app.config_error.is_none(),
+                true,
                 None,
             );
         } else {
@@ -717,7 +704,7 @@ fn draw_inline_input(
             input,
             label,
             &app.styles,
-            app.config_error.is_none(),
+            true,
             app.completion_ghost().as_deref(),
         );
     }
@@ -856,8 +843,7 @@ fn task_spans(
 }
 
 fn shortcut_lines(app: &App, width: u16) -> Vec<Line<'static>> {
-    // Dialogs show their own keys, and the error overlay disables everything else.
-    if !app.keybinds || width == 0 || app.mode == Mode::ConfirmClear || app.config_error.is_some() {
+    if !app.keybinds || width == 0 || app.mode == Mode::ConfirmClear {
         return Vec::new();
     }
 
@@ -1249,150 +1235,6 @@ fn draw_confirmation(frame: &mut Frame, area: Rect, styles: &Styles, question: &
             .style(styles.normal),
         inner,
     );
-}
-
-// Fixed rather than themed, so the overlay stays recognizable whatever the file says.
-const ERROR_COLOR: Color = Color::Red;
-const ERROR_DIALOG_MAX_WIDTH: u16 = 72;
-// Below this width, the dialog takes the whole terminal width instead of keeping a margin.
-const ERROR_DIALOG_MIN_WIDTH: u16 = 24;
-const ERROR_DIALOG_MARGIN: u16 = 2;
-// The border plus one cell of padding on each side.
-const ERROR_DIALOG_FRAME_WIDTH: u16 = 4;
-
-fn draw_config_error(frame: &mut Frame, area: Rect, styles: &Styles, error: &ConfigError) {
-    let error_style = Style::default().fg(ERROR_COLOR);
-
-    let mut width = area
-        .width
-        .saturating_sub(2 * ERROR_DIALOG_MARGIN)
-        .min(ERROR_DIALOG_MAX_WIDTH);
-
-    if width < ERROR_DIALOG_MIN_WIDTH {
-        width = area.width;
-    }
-
-    let text_width = usize::from(width.saturating_sub(ERROR_DIALOG_FRAME_WIDTH));
-    let mut text = Vec::new();
-
-    if text_width > 0 {
-        let path = error.path.display().to_string();
-
-        for (_, part) in wrap_text(&path, text_width) {
-            text.push(Line::styled(part.to_string(), styles.muted));
-        }
-
-        text.push(Line::raw(""));
-
-        for message_line in error.message.lines() {
-            for (_, part) in wrap_text(message_line, text_width) {
-                text.push(Line::raw(part.to_string()));
-            }
-        }
-    }
-
-    // A blank row and the source with its caret, then a blank row and the hint.
-    let source_height = if error.location.is_some() { 3 } else { 0 };
-    let hint_height = 2;
-    let border_height = 2;
-    let needed = text.len() + source_height + hint_height + border_height;
-    let height = area.height.min(u16::try_from(needed).unwrap_or(u16::MAX));
-
-    let dialog = Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y + (area.height - height) / 2,
-        width,
-        height,
-    );
-
-    let block = Block::bordered()
-        .border_style(error_style)
-        .title(Line::styled(
-            " Configuration error ",
-            error_style.add_modifier(Modifier::BOLD),
-        ))
-        .title_bottom(Line::styled(" q Quit ", styles.muted))
-        .padding(Padding::horizontal(1))
-        .style(styles.normal);
-
-    let mut remaining = block.inner(dialog);
-    frame.render_widget(Clear, dialog);
-    frame.render_widget(block, dialog);
-
-    let text_height = u16::try_from(text.len()).unwrap_or(u16::MAX);
-    frame.render_widget(Paragraph::new(text), take_rows(&mut remaining, text_height));
-
-    if let Some(location) = &error.location
-        && remaining.height >= 3
-    {
-        take_rows(&mut remaining, 1);
-        let rows = take_rows(&mut remaining, 2);
-
-        let number = location.line_number.to_string();
-        let gutter = [
-            Line::raw(format!("{number} │ ")),
-            Line::raw(format!("{} │ ", " ".repeat(number.len()))),
-        ];
-        let gutter_width = (gutter[0].width() as u16).min(rows.width);
-
-        frame.render_widget(
-            Paragraph::new(gutter.to_vec()).style(styles.muted),
-            Rect::new(rows.x, rows.y, gutter_width, rows.height),
-        );
-
-        let source_area = Rect::new(
-            rows.x + gutter_width,
-            rows.y,
-            rows.width - gutter_width,
-            rows.height,
-        );
-
-        // Control characters such as tabs have no cell width; show them as spaces.
-        let printable =
-            |text: &str| -> String { text.chars().map(single_line_character).collect() };
-        let columns = location.columns.clone();
-        let before = printable(&location.line[..columns.start]);
-        let marked = printable(&location.line[columns.clone()]);
-        let after = printable(&location.line[columns.end..]);
-
-        let caret_start = before.width();
-        let caret_width = marked.width().max(1);
-
-        // Scroll a long line sideways so the start of the marked text stays in view.
-        let visible = usize::from(source_area.width);
-        let scroll = (caret_start + caret_width.min(visible)).saturating_sub(visible);
-
-        let source = vec![
-            Line::raw(format!("{before}{marked}{after}")),
-            Line::styled(
-                format!("{}{}", " ".repeat(caret_start), "^".repeat(caret_width)),
-                error_style.add_modifier(Modifier::BOLD),
-            ),
-        ];
-
-        frame.render_widget(
-            Paragraph::new(source).scroll((0, u16::try_from(scroll).unwrap_or(u16::MAX))),
-            source_area,
-        );
-    }
-
-    if remaining.height >= 2 {
-        take_rows(&mut remaining, 1);
-        frame.render_widget(
-            Paragraph::new("Save a valid file to continue.").style(styles.muted),
-            take_rows(&mut remaining, 1),
-        );
-    }
-}
-
-// Splits up to `count` rows off the top of `area`.
-fn take_rows(area: &mut Rect, count: u16) -> Rect {
-    let count = count.min(area.height);
-    let taken = Rect::new(area.x, area.y, area.width, count);
-    area.y += count;
-    area.height -= count;
-
-    taken
 }
 
 #[cfg(test)]
@@ -4632,132 +4474,5 @@ mod tests {
         assert!(app.row_tasks.len() < total);
         assert!(screen(&terminal).contains("[ ] word"));
         assert!(!fixture.task_path().exists());
-    }
-
-    fn config_error(message: &str, line: &str, columns: Range<usize>) -> ConfigError {
-        ConfigError {
-            path: "/home/me/.config/sati/config.toml".into(),
-            message: message.into(),
-            location: Some(crate::config::SourceLocation {
-                line_number: 2,
-                line: line.into(),
-                columns,
-            }),
-        }
-    }
-
-    #[test]
-    fn config_error_overlay_shows_the_path_message_and_marked_source_line() {
-        let mut app = App::new(vec![Task::new("Write report")]);
-        app.config_error = Some(config_error(
-            "invalid type: string \"x\", expected a boolean",
-            "wrap = 'x'",
-            7..10,
-        ));
-        let mut terminal = test_terminal(70, 20);
-
-        render(&mut terminal, &mut app);
-        let text = screen(&terminal);
-
-        assert!(text.contains("Configuration error"), "{text}");
-        assert!(text.contains("/home/me/.config/sati/config.toml"), "{text}");
-        assert!(text.contains("expected a boolean"), "{text}");
-        assert!(text.contains("q Quit"), "{text}");
-        assert!(text.contains("Save a valid file to continue."), "{text}");
-
-        let lines: Vec<&str> = text.lines().collect();
-        let source = lines
-            .iter()
-            .position(|line| line.contains("2 │ wrap = 'x'"))
-            .unwrap();
-        let value_column = lines[source].find("'x'").unwrap();
-        let caret_column = lines[source + 1].find("^^^").unwrap();
-
-        assert_eq!(caret_column, value_column);
-        assert!(!lines[source + 1].contains("^^^^"));
-    }
-
-    #[test]
-    fn config_error_overlay_uses_a_red_frame_and_hides_shortcuts() {
-        let mut app = App::new(vec![Task::new("Write report")]);
-        app.config_error = Some(config_error(
-            "invalid color: orange",
-            "fg = 'orange'",
-            5..13,
-        ));
-        let mut terminal = test_terminal(70, 20);
-
-        render(&mut terminal, &mut app);
-
-        let buffer = terminal.backend().buffer();
-        let red_corner = (0..buffer.area.height)
-            .flat_map(|y| (0..buffer.area.width).map(move |x| &buffer[(x, y)]))
-            .any(|cell| cell.symbol() == "┌" && cell.fg == ERROR_COLOR);
-
-        assert!(red_corner, "{}", screen(&terminal));
-        assert!(!screen(&terminal).contains("Navigate"));
-    }
-
-    #[test]
-    fn config_error_overlay_scrolls_long_source_lines_to_keep_the_caret_visible() {
-        let mut app = App::new(Vec::new());
-        let line = format!("{}= 'x'", "k".repeat(200));
-        app.config_error = Some(config_error("unknown field", &line, 202..205));
-        let mut terminal = test_terminal(40, 16);
-
-        render(&mut terminal, &mut app);
-        let text = screen(&terminal);
-
-        let lines: Vec<&str> = text.lines().collect();
-        let caret = lines.iter().position(|line| line.contains("^^^")).unwrap();
-        let caret_column = lines[caret].find("^^^").unwrap();
-
-        assert_eq!(
-            lines[caret - 1].get(caret_column..caret_column + 3),
-            Some("'x'")
-        );
-    }
-
-    #[test]
-    fn config_error_overlay_fits_every_terminal_size_without_panicking() {
-        let message = "first line of a long explanation that needs wrapping\n\nlast line";
-        let line = "\tvalue = 'é漢字' # trailing\u{85}comment";
-        let mut app = App::new(vec![Task::new("Write report")]);
-        app.config_error = Some(config_error(message, line, 1..6));
-
-        for width in 0..=40 {
-            for height in 0..=14 {
-                let mut terminal = test_terminal(width, height);
-                render(&mut terminal, &mut app);
-
-                assert!(
-                    screen(&terminal)
-                        .lines()
-                        .all(|row| row.width() <= usize::from(width))
-                );
-            }
-        }
-
-        app.config_error.as_mut().unwrap().location = None;
-        render(&mut test_terminal(200, 50), &mut app);
-    }
-
-    #[test]
-    fn config_error_overlay_keeps_the_input_cursor_hidden() {
-        let mut app = App::new(vec![Task::new("Write report")]);
-        app.mode = Mode::Adding(TextInput::default(), AddPlacement::End);
-        app.config_error = Some(config_error(
-            "invalid color: orange",
-            "fg = 'orange'",
-            5..13,
-        ));
-        let mut terminal = test_terminal(60, 16);
-
-        render(&mut terminal, &mut app);
-        assert_eq!(terminal.get_cursor_position().unwrap(), (0, 0).into());
-
-        app.config_error = None;
-        render(&mut terminal, &mut app);
-        assert_ne!(terminal.get_cursor_position().unwrap(), (0, 0).into());
     }
 }

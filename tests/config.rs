@@ -58,16 +58,27 @@ impl Drop for Fixture {
 }
 
 // Every run here must fail before terminal setup: with stdin redirected, crossterm would
-// otherwise take over the developer's terminal. An invalid task file stops startup there.
+// otherwise take over the developer's terminal. Invalid configuration stops startup before
+// storage; with a valid one, an invalid task file stops it before the terminal.
 fn write_invalid_tasks(fixture: &Fixture) {
     fs::create_dir_all(&fixture.data).unwrap();
     fs::write(fixture.data.join("tasks.json"), "invalid task data").unwrap();
 }
 
 #[test]
-fn invalid_config_no_longer_stops_startup_and_help_version_and_export_ignore_it() {
+fn invalid_config_is_fatal_before_storage_but_help_version_and_export_ignore_it() {
     let fixture = Fixture::new();
     fixture.config("[display]\nwrap = 'invalid'");
+
+    let output = fixture.command().output().unwrap();
+    let error = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success());
+    assert!(
+        error.contains("invalid configuration") && error.contains("config.toml"),
+        "{error}"
+    );
+    assert!(!fixture.data.join("tasks.lock").exists());
 
     for args in [
         vec!["--help"],
@@ -87,15 +98,6 @@ fn invalid_config_no_longer_stops_startup_and_help_version_and_export_ignore_it(
 
     assert!(!fixture.data.join("tasks.lock").exists());
     assert!(!fixture.data.join("tasks.json").exists());
-
-    write_invalid_tasks(&fixture);
-    let output = fixture.command().output().unwrap();
-    let error = String::from_utf8_lossy(&output.stderr);
-
-    // Startup reached storage: the configuration error is left for the in-app overlay.
-    assert!(!output.status.success());
-    assert!(error.contains("invalid task file"), "{error}");
-    assert!(!error.contains("configuration"), "{error}");
     assert!(!fixture.data.join("history.json").exists());
     assert_eq!(
         fs::read_to_string(&fixture.config).unwrap(),
@@ -104,9 +106,8 @@ fn invalid_config_no_longer_stops_startup_and_help_version_and_export_ignore_it(
 }
 
 #[test]
-fn missing_explicit_paths_no_longer_stop_startup_and_replace_discovery() {
+fn missing_explicit_config_fails_clearly_without_creating_storage() {
     let fixture = Fixture::new();
-    write_invalid_tasks(&fixture);
 
     let output = fixture
         .command()
@@ -115,10 +116,16 @@ fn missing_explicit_paths_no_longer_stop_startup_and_replace_discovery() {
         .unwrap();
     let error = String::from_utf8_lossy(&output.stderr);
 
-    assert!(error.contains("invalid task file"), "{error}");
-    assert!(!fixture.root.join("missing.toml").exists());
+    assert!(!output.status.success());
+    assert!(error.contains("missing.toml"), "{error}");
+    assert_eq!(fs::read_dir(&fixture.root).unwrap().count(), 0);
+}
 
+#[test]
+fn explicit_config_replaces_an_invalid_default_file() {
+    let fixture = Fixture::new();
     fixture.config("invalid default");
+    write_invalid_tasks(&fixture);
     let explicit = fixture.root.join("alternate.toml");
     fs::write(&explicit, "[display]\nwrap = false").unwrap();
 
@@ -146,9 +153,8 @@ fn missing_default_config_does_not_get_created() {
 }
 
 #[test]
-fn invalid_style_and_theme_files_reach_storage_and_stay_untouched() {
+fn invalid_style_theme_and_toml_files_are_reported_before_storage_and_stay_untouched() {
     let fixture = Fixture::new();
-    write_invalid_tasks(&fixture);
 
     for text in [
         "theme='unknown'",
@@ -160,12 +166,30 @@ fn invalid_style_and_theme_files_reach_storage_and_stay_untouched() {
         "bad toml",
     ] {
         fixture.config(text);
+
         let output = fixture.command().output().unwrap();
         let error = String::from_utf8_lossy(&output.stderr);
 
-        assert!(error.contains("invalid task file"), "{text}: {error}");
+        assert!(!output.status.success(), "{text}");
+        assert!(
+            error.contains("invalid configuration") && error.contains("config.toml"),
+            "{text}: {error}"
+        );
+        assert!(!fixture.data.join("tasks.lock").exists());
+        assert!(!fixture.data.join("tasks.json").exists());
         assert_eq!(fs::read_to_string(&fixture.config).unwrap(), text);
     }
+}
+
+#[test]
+fn unknown_theme_errors_list_the_available_themes() {
+    let fixture = Fixture::new();
+    fixture.config("theme='unknown'");
+
+    let output = fixture.command().output().unwrap();
+    let error = String::from_utf8_lossy(&output.stderr);
+
+    assert!(error.contains("Available themes: default"), "{error}");
 }
 
 #[test]

@@ -133,7 +133,7 @@ fn invalid_section_name(section: &str) -> bool {
             .any(|c| c == ':' || c.is_whitespace() || single_line_character(c) != c)
 }
 
-pub fn single_line_character(character: char) -> char {
+fn single_line_character(character: char) -> char {
     if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
         ' '
     } else {
@@ -389,9 +389,6 @@ pub struct App {
     pub viewport_height: u16,
     pub reveal_selection: bool,
     pub notification: Option<Notification>,
-    // An invalid configuration file, shown as a blocking overlay until a valid file is
-    // applied. Not a mode: whatever the user was doing underneath is kept. Never saved.
-    pub config_error: Option<crate::config::ConfigError>,
     pub view: SectionView,
     // Clickable tab regions from the last draw.
     pub tab_targets: Vec<(Rect, SectionView)>,
@@ -437,7 +434,6 @@ impl App {
             viewport_height: 0,
             reveal_selection: true,
             notification: None,
-            config_error: None,
             view: SectionView::All,
             tab_targets: Vec::new(),
             tab_scroll: 0,
@@ -1563,26 +1559,13 @@ impl App {
         }
     }
 
-    pub fn notify(&mut self, message: impl Into<String>) {
+    fn notify(&mut self, message: impl Into<String>) {
         if self.notifications {
             self.notification = Some(Notification::new(message));
         }
     }
 
     pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
-        // The configuration error overlay blocks everything except quitting; it only goes
-        // away once a valid file is applied.
-        if self.config_error.is_some() {
-            let quit = key.kind == KeyEventKind::Press
-                && matches!(
-                    (key.code, key.modifiers),
-                    (KeyCode::Char('q'), KeyModifiers::NONE)
-                        | (KeyCode::Char('c' | 'C'), KeyModifiers::CONTROL)
-                );
-
-            return Ok(quit);
-        }
-
         let key = self.normalize_key(key);
 
         if key.kind == KeyEventKind::Release
@@ -2176,10 +2159,6 @@ impl App {
     }
 
     pub fn paste(&mut self, text: &str) {
-        if self.config_error.is_some() {
-            return;
-        }
-
         self.notification = None;
         self.pending_count = None;
         self.pending_section_jump = false;
@@ -2207,10 +2186,6 @@ impl App {
     }
 
     pub fn mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
-        if self.config_error.is_some() {
-            return Ok(());
-        }
-
         self.notification = None;
         self.pending_count = None;
         self.pending_section_jump = false;
@@ -7947,75 +7922,5 @@ mod tests {
         );
         assert_eq!(app.tasks, original);
         assert_eq!(app.list.selected(), Some(0));
-    }
-
-    fn config_error() -> crate::config::ConfigError {
-        crate::config::ConfigError {
-            path: "config.toml".into(),
-            message: "invalid color: orange".into(),
-            location: None,
-        }
-    }
-
-    #[test]
-    fn config_error_overlay_ignores_every_key_but_quit_and_keeps_the_session() {
-        let fixture = Fixture::new();
-        let mut app = app_with_tasks(3);
-        let mut input = TextInput::default();
-        input.insert("draft");
-        app.mode = Mode::Adding(input.clone(), AddPlacement::End);
-        app.config_error = Some(config_error());
-        let original_tasks = app.tasks.clone();
-
-        for key in [
-            KeyEvent::from(KeyCode::Char('j')),
-            KeyCode::Char('t').into(),
-            KeyCode::Char('d').into(),
-            KeyCode::Enter.into(),
-            KeyCode::Esc.into(),
-            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
-            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::ALT),
-            KeyEvent::new_with_kind(
-                KeyCode::Char('q'),
-                KeyModifiers::NONE,
-                KeyEventKind::Release,
-            ),
-        ] {
-            assert!(!press(&mut app, &fixture, key), "{key:?}");
-        }
-
-        app.paste("pasted");
-        let click = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 1,
-            row: 1,
-            modifiers: KeyModifiers::NONE,
-        };
-        app.mouse(click, Rect::new(0, 0, 30, 10), &fixture.storage)
-            .unwrap();
-
-        assert_eq!(app.tasks, original_tasks);
-        assert_eq!(app.mode, Mode::Adding(input, AddPlacement::End));
-        assert_eq!(app.theme, crate::themes::BuiltinTheme::Default);
-        assert_eq!(app.list.selected(), Some(0));
-        assert_eq!(app.config_error, Some(config_error()));
-        assert!(!fixture.task_path().exists());
-        assert!(!app.can_undo());
-    }
-
-    #[test]
-    fn q_and_ctrl_c_quit_from_the_config_error_overlay() {
-        let fixture = Fixture::new();
-
-        for key in [
-            KeyEvent::from(KeyCode::Char('q')),
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        ] {
-            let mut app = app_with_tasks(1);
-            app.mode = Mode::Adding(TextInput::default(), AddPlacement::End);
-            app.config_error = Some(config_error());
-
-            assert!(press(&mut app, &fixture, key), "{key:?}");
-        }
     }
 }

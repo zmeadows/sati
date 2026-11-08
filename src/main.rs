@@ -1,6 +1,5 @@
 mod app;
 mod config;
-mod config_watch;
 mod export;
 mod input;
 mod notification;
@@ -106,46 +105,6 @@ impl CliOptions {
     }
 }
 
-// The one place effective settings reach the app, at startup and on every reload. It
-// always restores the effective theme, replacing any `t` / `T` selection.
-fn apply_options(app: &mut App, options: Options) {
-    app.wrap = options.wrap;
-    app.notifications = options.notifications;
-    app.keybinds = options.keybinds;
-    app.rounded = options.rounded;
-    app.unicode_markers = !options.ascii_markers;
-    app.styles = options.styles;
-    app.theme = options.theme;
-    app.style_overrides = options.style_overrides;
-    app.cli_accent = options.cli_accent;
-
-    // Wrapping changes can move the selected task out of view.
-    app.reveal_selection = true;
-}
-
-// Applies a configuration file's contents on top of the CLI options. An invalid file keeps
-// every current setting and shows the error overlay instead. Returns whether it applied.
-fn apply_config(
-    app: &mut App,
-    cli: &CliOptions,
-    file: &config::ConfigFile,
-    text: &config::ConfigText,
-) -> bool {
-    match config::Config::parse(file, text) {
-        Ok(config) => {
-            apply_options(app, cli.resolve(config));
-            app.config_error = None;
-
-            true
-        }
-        Err(error) => {
-            app.config_error = Some(error);
-
-            false
-        }
-    }
-}
-
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -180,28 +139,24 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    // An invalid file is shown in the UI rather than ending the session, so only an
-    // unusable environment stops sati here.
-    let config_file = config::ConfigFile::locate(cli.config.as_deref())?;
-    let config_text = config_file.as_ref().map(config::ConfigFile::read);
+    // Configuration is read once, before storage and the terminal are touched, so an
+    // invalid file is reported on stderr and changes made later need a restart.
+    let config = config::Config::load(cli.config.as_deref())?;
+    let options = cli.resolve(config);
 
     let storage = Storage::discover()?;
     let _instance_lock = storage.lock()?;
+
     let mut app = App::from_document(storage.load_document()?);
-
-    let applied = match (&config_file, &config_text) {
-        (Some(file), Some(text)) => apply_config(&mut app, &cli, file, text),
-        _ => false,
-    };
-
-    // Without a usable file, built-in defaults and CLI flags sit beneath any error overlay.
-    if !applied {
-        apply_options(&mut app, cli.resolve(config::Config::default()));
-    }
-
-    let mut config_watch = config_file
-        .zip(config_text)
-        .map(|(file, text)| config_watch::ConfigWatch::new(file, text, Instant::now()));
+    app.wrap = options.wrap;
+    app.notifications = options.notifications;
+    app.keybinds = options.keybinds;
+    app.rounded = options.rounded;
+    app.unicode_markers = !options.ascii_markers;
+    app.styles = options.styles;
+    app.theme = options.theme;
+    app.style_overrides = options.style_overrides;
+    app.cli_accent = options.cli_accent;
 
     // Atomics let the panic hook clean up without locking state held by setup.
     let modes = Arc::new(TerminalModes::default());
@@ -255,54 +210,13 @@ fn run() -> Result<()> {
             let mut rows = ratatui::layout::Rect::default();
             terminal.draw(|frame| rows = ui::draw(frame, &mut app))?;
 
-            let notification_deadline = app
+            // Without a notification to animate, block until the next input event.
+            if let Some(wait) = app
                 .notification
                 .as_ref()
                 .and_then(|notice| notice.next_redraw(draw_started))
-                .map(|wait| draw_started + wait);
-
-            // Wait for input, the next notification phase, or a configuration change. Reloads
-            // happen here between draws, so they never race with rendering.
-            // Checking before every wait, not only after idle ones, keeps reloads coming while
-            // input arrives faster than the watcher's interval.
-            let input_ready = loop {
-                let now = Instant::now();
-
-                if let Some(watch) = config_watch.as_mut()
-                    && let Some(text) = watch.check(now)
-                {
-                    // An invalid file redraws too, to show or update the error overlay.
-                    if apply_config(&mut app, &cli, watch.file(), &text) {
-                        app.notify("Configuration reloaded");
-                    }
-
-                    break false;
-                }
-
-                if notification_deadline.is_some_and(|deadline| now >= deadline) {
-                    break false;
-                }
-
-                let notification_wait =
-                    notification_deadline.map(|deadline| deadline.saturating_duration_since(now));
-                let config_wait = config_watch.as_ref().map(|watch| watch.next_check(now));
-
-                let wait = match (notification_wait, config_wait) {
-                    (Some(notification), Some(config)) => Some(notification.min(config)),
-                    (wait, None) | (None, wait) => wait,
-                };
-
-                // With nothing else to wait for, block until input arrives.
-                let Some(wait) = wait else {
-                    break true;
-                };
-
-                if event::poll(wait)? {
-                    break true;
-                }
-            };
-
-            if !input_ready {
+                && !event::poll(wait.saturating_sub(draw_started.elapsed()))?
+            {
                 continue;
             }
 
@@ -786,15 +700,15 @@ mod tests {
                     args.extend(["--theme", name]);
                 }
 
-                let cli = super::parse_arguments(args.into_iter().map(Into::into))
+                let options = super::parse_arguments(args.into_iter().map(Into::into))
                     .unwrap()
-                    .unwrap();
-                let file = config::ConfigFile {
-                    path: path.clone(),
-                    required: true,
-                };
+                    .unwrap()
+                    .resolve(config::Config::load(Some(&path)).unwrap());
                 let mut app = App::new(Vec::new());
-                assert!(apply_config(&mut app, &cli, &file, &file.read()));
+                app.styles = options.styles;
+                app.theme = options.theme;
+                app.style_overrides = options.style_overrides;
+                app.cli_accent = options.cli_accent;
                 let modes = TerminalModes::default();
                 let mut current = None;
                 let mut output = Vec::new();
@@ -872,97 +786,6 @@ mod tests {
                 assert!(!app.can_undo() && !app.can_redo());
             }
         }
-    }
-
-    fn config_file(fixture: &storage::tests::Fixture) -> config::ConfigFile {
-        config::ConfigFile {
-            path: fixture.directory.join("config.toml"),
-            required: false,
-        }
-    }
-
-    fn text(contents: &str) -> config::ConfigText {
-        config::ConfigText::Text(contents.into())
-    }
-
-    #[test]
-    fn reloads_keep_cli_precedence_and_reset_a_cycled_theme() {
-        use ratatui::crossterm::event::KeyCode;
-
-        let fixture = storage::tests::Fixture::new();
-        let file = config_file(&fixture);
-        let cli = super::parse_arguments(["--no-wrap", "--accent", "blue"].map(Into::into))
-            .unwrap()
-            .unwrap();
-        let mut app = App::new(Vec::new());
-        assert!(apply_config(&mut app, &cli, &file, &text("theme = 'nord'")));
-
-        app.key(KeyCode::Char('t').into(), &fixture.storage)
-            .unwrap();
-        assert_ne!(app.theme, themes::BuiltinTheme::Nord);
-
-        let reloaded = "theme = 'nord'\n[display]\nwrap = true\nkeybinds = false";
-        assert!(apply_config(&mut app, &cli, &file, &text(reloaded)));
-
-        assert_eq!(app.theme, themes::BuiltinTheme::Nord);
-        assert!(!app.wrap);
-        assert!(!app.keybinds);
-        assert_eq!(app.styles.accent.fg, Some(ratatui::style::Color::Blue));
-        assert!(!fixture.task_path().exists());
-    }
-
-    #[test]
-    fn invalid_reloads_keep_the_last_applied_settings_until_the_file_is_fixed() {
-        let fixture = storage::tests::Fixture::new();
-        let file = config_file(&fixture);
-        let cli = super::parse_arguments([]).unwrap().unwrap();
-        let mut app = App::new(Vec::new());
-        assert!(apply_config(
-            &mut app,
-            &cli,
-            &file,
-            &text("theme = 'dracula'")
-        ));
-        let styles = app.styles;
-
-        let invalid = "theme = 'nord'\n[display]\nwrap = 'no'";
-        assert!(!apply_config(&mut app, &cli, &file, &text(invalid)));
-
-        assert_eq!(app.theme, themes::BuiltinTheme::Dracula);
-        assert_eq!(app.styles, styles);
-        assert!(app.wrap);
-        assert_eq!(app.config_error.as_ref().unwrap().path, file.path);
-
-        assert!(apply_config(
-            &mut app,
-            &cli,
-            &file,
-            &config::ConfigText::Missing
-        ));
-
-        assert_eq!(app.config_error, None);
-        assert_eq!(app.theme, themes::BuiltinTheme::Default);
-    }
-
-    #[test]
-    fn reload_notifications_follow_the_newly_applied_setting() {
-        let fixture = storage::tests::Fixture::new();
-        let file = config_file(&fixture);
-        let cli = super::parse_arguments([]).unwrap().unwrap();
-        let mut app = App::new(Vec::new());
-
-        assert!(apply_config(
-            &mut app,
-            &cli,
-            &file,
-            &text("[display]\nnotifications = false")
-        ));
-        app.notify("Configuration reloaded");
-        assert!(app.notification.is_none());
-
-        assert!(apply_config(&mut app, &cli, &file, &text("")));
-        app.notify("Configuration reloaded");
-        assert!(app.notification.is_some());
     }
 
     #[test]

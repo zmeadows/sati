@@ -247,34 +247,13 @@ modifiers = ["bold"]
 
 Use `sati --config ./sati.toml` for another file. sati never creates or edits
 configuration files. A missing default file is harmless; an explicit file must
-exist. Environment directory paths must be absolute; `--config` also accepts
-relative paths without expanding `~`.
+exist. Invalid files and unknown keys are errors. Environment directory paths
+must be absolute; `--config` also accepts relative paths without expanding `~`.
 
-### Live reloading
-
-sati watches the active configuration file while it runs and applies valid changes
-right away, showing "Configuration reloaded". It watches the file's directory, so
-editors that save by replacing the file work too, as does creating the file (or its
-directory) after sati starts. A burst of writes from one save reloads once, and saving
-identical contents does nothing. Only the configuration file is watched.
-
-Every reload resolves settings again with the same precedence: flags given on the
-command line still win over the file. A reload restores the effective theme, replacing
-any theme chosen with `t` / `T`. Tasks, selection, undo history, and any text you are
-typing are kept.
-
-An invalid file (malformed TOML, unknown keys, bad values or colors, or a file that
-cannot be read) shows a red **Configuration error** box with the file path, the error,
-and, when known, the offending line with a caret under the problem. This happens both
-at startup and during a session; sati no longer exits. While the box is shown, every
-other key, mouse click, and paste is ignored, and `Esc` does not dismiss it; `q` or
-`Ctrl+C` quits. At startup, sati runs underneath with built-in defaults plus your
-command-line flags; during a session it keeps the last valid settings. Saving a valid
-file removes the box automatically and shows "Configuration reloaded".
-
-Deleting the default `config.toml` reloads the built-in defaults. An explicit
-`--config` file that is missing or deleted shows the error box until the file exists
-and is valid again. A relative `XDG_CONFIG_HOME` is still rejected before sati starts.
+sati reads its configuration once, at startup. After editing the file, restart sati
+for the changes to take effect. A configuration problem (malformed TOML, an unknown
+key, a bad value or color, or a missing `--config` file) stops sati with an error
+before the interface opens.
 
 CLI pairs override either TOML value: `--no-wrap` disables wrapping, and `--wrap`
 re-enables it. Contradictory pairs are rejected.
@@ -306,8 +285,8 @@ unless explicitly overridden.
 Select a theme with `theme = "catppuccin-mocha"` at the TOML root or
 `sati --theme catppuccin-mocha`; CLI selection takes precedence.
 Cycle themes during a session with `t` / `T`. Changes are temporary and never
-modify configuration; restarting, or a configuration reload, restores the
-CLI/configured theme. TOML style overrides and CLI accent remain active while cycling.
+modify configuration; restarting restores the CLI/configured theme. TOML style
+overrides and CLI accent remain active while cycling.
 
 Explicit `[styles.*]` settings override the chosen theme, and
 `--accent` takes final precedence for the accent foreground only, preserving
