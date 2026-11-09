@@ -7,7 +7,7 @@
 A small, persistent checklist for the terminal on Linux, macOS, and Windows.
 
 <p align="center">
-  <img src="sati_screenshot.png" alt="sati displaying a checklist in the terminal">
+  <img src="assets/demo/demo.gif" alt="sati demo: adding, checking off, and organizing tasks in the terminal">
 </p>
 
 ## Why sati?
