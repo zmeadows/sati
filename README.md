@@ -16,6 +16,8 @@ I wanted a to-do list that felt more like a checklist in a notebook. Calendars, 
 
 `sati` is for writing things down, checking them off, and clearing the list when the day is over or priorities change.
 
+It should also feel familiar if you already use Vim or Emacs. Most checklist actions use Vim-style keys, many also have an Emacs-style alternative, and the text prompts use the editing keys you know from Emacs and the shell: move with `j` / `k` or `Ctrl+N` / `Ctrl+P`, copy and paste a task with `y` / `p` or `Alt+W` / `Ctrl+Y`, and jump to the end of a line with `Ctrl+E`. Most shortcuts should work the way your fingers expect.
+
 ## Features
 
 - **One local list.** Changes are saved automatically, without accounts or synchronization.
@@ -55,6 +57,8 @@ cargo install --git https://github.com/zmeadows/sati --locked
 Then run `sati`.
 
 ## Keyboard shortcuts
+
+Where a row lists several keys, Vim-style keys usually come first, followed by arrow-key and Emacs-style alternatives.
 
 ### Checklist
 
