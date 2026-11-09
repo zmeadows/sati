@@ -20,7 +20,8 @@ Read the relevant implementation and documentation before editing. This file des
 The project uses Rust 2024 with MSRV **1.89**. Consult `Cargo.toml` for dependencies and enabled features; do not assume a new dependency is needed. Import Crossterm through `ratatui::crossterm`, not a separately versioned direct dependency.
 
 - `src/main.rs` — Clap CLI and subcommands, configuration startup order, terminal setup/cleanup, and event loop.
-- `src/app.rs` — task model, modes, application state, input dispatch, task mutations, navigation, and undo/redo.
+- `src/model.rs` — `Task`, `TaskStatus`, `SectionView`, task validation and timestamps, section parsing, tab ordering, and view filtering.
+- `src/app.rs` — modes, application state, input dispatch, task mutations, navigation, and undo/redo.
 - `src/ui.rs` — layout, drawing, wrapped rows, mouse mapping, and the `?` keyboard reference (`HELP_GROUPS`).
 - `src/storage.rs` — platform data paths, instance locking, persistent schema, validation, migration, and atomic saving.
 - `src/input.rs` — grapheme-aware single-line editing.

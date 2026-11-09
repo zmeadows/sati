@@ -2,6 +2,7 @@ mod app;
 mod config;
 mod export;
 mod input;
+mod model;
 mod search;
 mod status_message;
 mod storage;

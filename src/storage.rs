@@ -16,7 +16,7 @@ use atomic_write_file::unix::OpenOptionsExt as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::app::{Task, settled_section_order};
+use crate::model::{Task, settled_section_order};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 

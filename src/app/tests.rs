@@ -1,8 +1,10 @@
 use super::*;
+use crate::model::current_time;
 use crate::status_message::DEFAULT_DURATION;
 use crate::storage::tests::Fixture;
 
 use unicode_segmentation::UnicodeSegmentation;
+use uuid::Uuid;
 
 fn app_with_tasks(count: usize) -> App {
     App::new(

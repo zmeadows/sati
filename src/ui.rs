@@ -10,9 +10,10 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Mode, SectionView, Task, TaskStatus, task_prefix};
+use crate::app::{App, Mode};
 use crate::config::{BorderStyle, MarkerStyle};
 use crate::input::TextInput;
+use crate::model::{SectionView, Task, TaskStatus, task_prefix};
 use crate::styles::Styles;
 
 pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {

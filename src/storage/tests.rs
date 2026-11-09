@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::TaskStatus;
+use crate::model::TaskStatus;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicUsize, Ordering};

@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    app::{SectionView, Task, TaskStatus, section_tabs_of, view_shows},
+    model::{SectionView, Task, TaskStatus, section_tabs_of, view_shows},
     storage::{Result, Storage},
 };
 

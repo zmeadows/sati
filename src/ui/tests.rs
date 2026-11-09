@@ -1,5 +1,6 @@
 use super::*;
-use crate::app::{AddPlacement, Task};
+use crate::app::AddPlacement;
+use crate::model::Task;
 use crate::styles::DEFAULT_ACCENT;
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -103,7 +104,7 @@ fn section_tabs_sit_on_the_top_border_in_fixed_positions() {
 #[test]
 fn a_section_tab_shows_only_its_tasks_without_the_prefix() {
     let mut app = app_with_texts(&["Work: fix bug", "Home: laundry", "Work: email"]);
-    app.show_section(crate::app::SectionView::Named("work".into()));
+    app.show_section(crate::model::SectionView::Named("work".into()));
     let mut terminal = test_terminal(40, 8);
     render(&mut terminal, &mut app);
     let screen = screen(&terminal);
@@ -118,7 +119,7 @@ fn a_section_tab_shows_only_its_tasks_without_the_prefix() {
             .contains(Modifier::BOLD)
     );
 
-    app.show_section(crate::app::SectionView::All);
+    app.show_section(crate::model::SectionView::All);
     render(&mut terminal, &mut app);
 
     assert!(row_text(&terminal, 2).contains("Work: fix bug"));
@@ -139,7 +140,7 @@ fn moving_a_section_on_a_narrow_terminal_keeps_its_tab_visible() {
     let mut app = app_with_texts(&texts);
     let mut terminal = test_terminal(24, 8);
 
-    app.show_section(crate::app::SectionView::Named("s0".into()));
+    app.show_section(crate::model::SectionView::Named("s0".into()));
     render(&mut terminal, &mut app);
 
     for _ in 0..7 {
@@ -177,7 +178,7 @@ fn overflowing_tabs_scroll_only_to_keep_the_active_tab_visible() {
     assert!(first.starts_with("┌─ [*] ─ Section00 ›"), "{first}");
     assert!(first.ends_with("─┐"), "{first}");
 
-    app.show_section(crate::app::SectionView::Named("section11".into()));
+    app.show_section(crate::model::SectionView::Named("section11".into()));
     render(&mut terminal, &mut app);
     let last = row_text(&terminal, 0);
 
@@ -194,7 +195,7 @@ fn overflowing_tabs_scroll_only_to_keep_the_active_tab_visible() {
     // Within the visible window, moving back and forth never slides the tabs.
     let fixture = crate::storage::tests::Fixture::new();
     let mut wide = test_terminal(60, 8);
-    app.show_section(crate::app::SectionView::All);
+    app.show_section(crate::model::SectionView::All);
     render(&mut wide, &mut app);
     let initial = row_text(&wide, 0);
 
@@ -246,7 +247,7 @@ fn the_clear_confirmation_names_the_current_tab() {
     app.tasks[1].status = TaskStatus::Completed;
     let mut terminal = test_terminal(80, 14);
 
-    app.show_section(crate::app::SectionView::Named("work".into()));
+    app.show_section(crate::model::SectionView::Named("work".into()));
     app.key(
         ratatui::crossterm::event::KeyEvent::new(
             ratatui::crossterm::event::KeyCode::Char('D'),
@@ -289,7 +290,7 @@ fn the_clear_confirmation_uses_the_configured_border_style() {
 fn a_suggested_section_is_drawn_dim_after_the_cursor() {
     let fixture = crate::storage::tests::Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b"]);
-    app.show_section(crate::app::SectionView::Named("work".into()));
+    app.show_section(crate::model::SectionView::Named("work".into()));
     app.key(
         ratatui::crossterm::event::KeyEvent::new(
             ratatui::crossterm::event::KeyCode::Char('a'),
@@ -712,7 +713,7 @@ fn clicking_a_tab_shows_that_section() {
     let rows = render(&mut terminal, &mut app);
 
     let (area, view) = app.tab_targets[1].clone();
-    assert_eq!(view, crate::app::SectionView::Named("home".into()));
+    assert_eq!(view, crate::model::SectionView::Named("home".into()));
 
     app.mouse(
         ratatui::crossterm::event::MouseEvent {
