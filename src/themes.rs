@@ -494,7 +494,7 @@ impl BuiltinTheme {
 }
 
 // Prints one theme ID per line for `sati --list-themes`.
-pub fn print_list() -> crate::storage::Result<()> {
+pub fn print_list() -> crate::Result<()> {
     let mut contents = String::new();
     for (_, id) in BuiltinTheme::ALL {
         contents.push_str(id);

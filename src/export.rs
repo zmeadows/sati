@@ -5,8 +5,9 @@ use std::{
 };
 
 use crate::{
+    Result,
     model::{SectionView, Task, TaskStatus, section_tabs_of, view_shows},
-    storage::{Result, Storage},
+    storage::Storage,
 };
 
 // Each task as typed ("Work: fix bug"), or only its body when every task is from one section.

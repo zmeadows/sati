@@ -1,4 +1,4 @@
-use crate::storage::Result;
+use crate::Result;
 use ratatui::style::{Color, Modifier};
 use serde::{Deserialize, Deserializer, de::Error};
 use std::{

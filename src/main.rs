@@ -45,7 +45,10 @@ use clap::{
 use ratatui::style::Color;
 
 use app::App;
-use storage::{Result, Storage};
+use storage::Storage;
+
+// The error type shared by every module: errors are reported to the user, not matched on.
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 // Cargo-like help colors; clap drops them when the output is not a color terminal.
 const HELP_STYLES: Styles = Styles::styled()

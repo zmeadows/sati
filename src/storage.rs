@@ -16,9 +16,8 @@ use atomic_write_file::unix::OpenOptionsExt as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::Result;
 use crate::model::{Task, settled_section_order};
-
-pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 // The `tasks.json` format written by this build.
 const SCHEMA_VERSION: u64 = 5;

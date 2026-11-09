@@ -1,6 +1,6 @@
 use ratatui::style::{Color, Modifier, Style};
 
-use crate::config::StyleOverrides;
+use crate::config::{StyleOverride, StyleOverrides};
 use crate::themes::BuiltinTheme;
 
 pub const DEFAULT_ACCENT: Color = Color::LightYellow;
@@ -72,7 +72,7 @@ impl Styles {
     ) -> Self {
         let bases = theme.base_styles();
 
-        let apply = |base: Style, value: &crate::config::StyleOverride| {
+        let apply = |base: Style, value: &StyleOverride| {
             let style = if let Some(fg) = value.fg {
                 base.fg(fg)
             } else {

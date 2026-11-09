@@ -8,6 +8,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::{layout::Rect, widgets::ListState};
 
+use crate::Result;
 use crate::config::{BorderStyle, MarkerStyle};
 use crate::input::TextInput;
 use crate::model::{
@@ -16,7 +17,7 @@ use crate::model::{
     view_shows,
 };
 use crate::status_message::StatusMessage;
-use crate::storage::{Result, Storage};
+use crate::storage::Storage;
 
 const HISTORY_LIMIT: usize = 256;
 

@@ -19,18 +19,18 @@ Read the relevant implementation and documentation before editing. This file des
 
 The project uses Rust 2024 with MSRV **1.89**. Consult `Cargo.toml` for dependencies and enabled features; do not assume a new dependency is needed. Import Crossterm through `ratatui::crossterm`, not a separately versioned direct dependency.
 
-- `src/main.rs` — Clap CLI and subcommands, configuration startup order, terminal setup/cleanup, and event loop.
+- `src/main.rs` — Clap CLI and subcommands, configuration startup order, terminal setup/cleanup, event loop, and the crate-wide `Result` alias.
 - `src/model.rs` — `Task`, `TaskStatus`, `SectionView`, task validation and timestamps, section parsing, tab ordering, and view filtering.
-- `src/app.rs` — modes, application state, input dispatch, task mutations, navigation, and undo/redo.
+- `src/app.rs` — modes, application state, input dispatch, task mutations, navigation, undo/redo, and the `ViewportState` that drawing records for input.
 - `src/ui.rs` — layout, drawing, wrapped rows, mouse mapping, and the `?` keyboard reference (`HELP_GROUPS`).
 - `src/storage.rs` — platform data paths, instance locking, persistent schema, validation, migration, and atomic saving.
 - `src/input.rs` — grapheme-aware single-line editing.
 - `src/config.rs` — strict TOML configuration and discovery.
-- `src/styles.rs`, `src/themes.rs` — resolved styling and built-in themes.
+- `src/styles.rs`, `src/themes.rs` — style resolution, the session's theme state (`Appearance`), and built-in themes.
 - `src/search.rs` — task search and highlight ranges.
 - `src/export.rs` — Markdown output and clipboard content.
 - `src/status_message.rs` — timed, in-terminal feedback.
-- `tests/` — binary-level integration checks; module-local checks live in `#[cfg(test)]` sections.
+- `tests/` — binary-level integration checks; module-local checks live in `#[cfg(test)]` sections, or in `src/<module>/tests.rs` for the larger modules.
 
 Prefer keeping work within an existing module when its responsibility naturally owns the behavior. Create a module only when it represents a substantial, coherent responsibility—not simply because a file is long.
 
@@ -106,7 +106,7 @@ The following are architectural invariants, not a complete shortcut specificatio
 
 - Preserve Clap's existing command/option structure, global `--data-dir`, and command-line error behavior. Keep interactive-only options separate from subcommands. `--help`, `--version`, and `export` return without loading interactive configuration.
 - Load and validate configuration once, before storage or terminal initialization. Configuration errors are fatal and actionable. Effective option precedence is **CLI > TOML > defaults**. Missing default configuration is allowed; an explicitly named config file must exist. Unknown keys are errors. Do not introduce live reload or automatic config writing.
-- Runtime theme changes are session-only. Preserve existing style override precedence and terminal-default theme semantics.
+- Runtime theme changes are session-only and go through `Appearance::set_theme`, which re-resolves the effective styles; do not store theme inputs or resolved styles elsewhere. Preserve existing style override precedence and terminal-default theme semantics.
 
 ### Input, rendering, and terminal operation
 
