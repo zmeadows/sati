@@ -77,10 +77,7 @@ struct Options {
     show_help_hint: bool,
     border_style: config::BorderStyle,
     marker_style: config::MarkerStyle,
-    styles: styles::Styles,
-    theme: themes::BuiltinTheme,
-    style_overrides: config::StyleOverrides,
-    cli_accent: Option<Color>,
+    appearance: styles::Appearance,
     mouse: bool,
 }
 
@@ -225,8 +222,6 @@ struct CliOptions {
 
 impl CliOptions {
     fn resolve(&self, config: config::Config) -> Options {
-        let theme = self.theme.unwrap_or(config.theme);
-
         Options {
             wrap: chosen_flag(self.wrap, self.no_wrap)
                 .or(config.display.wrap)
@@ -250,10 +245,11 @@ impl CliOptions {
                 .marker_style
                 .or(config.display.marker_style)
                 .unwrap_or_default(),
-            styles: styles::Styles::resolve(theme, &config.styles, self.accent),
-            theme,
-            style_overrides: config.styles,
-            cli_accent: self.accent,
+            appearance: styles::Appearance::new(
+                self.theme.unwrap_or(config.theme),
+                config.styles,
+                self.accent,
+            ),
             mouse: chosen_flag(self.mouse, self.no_mouse)
                 .or(config.input.mouse)
                 .unwrap_or(true),
@@ -337,10 +333,7 @@ fn run() -> Result<()> {
     app.show_help_hint = options.show_help_hint;
     app.border_style = options.border_style;
     app.marker_style = options.marker_style;
-    app.styles = options.styles;
-    app.theme = options.theme;
-    app.style_overrides = options.style_overrides;
-    app.cli_accent = options.cli_accent;
+    app.appearance = options.appearance;
 
     // Atomics let the panic hook clean up without locking state held by setup.
     let modes = Arc::new(TerminalModes::default());
@@ -373,18 +366,18 @@ fn run() -> Result<()> {
             .map_err(terminal_setup_error)?;
 
         let mut background = None;
-        let mut rendered_theme = app.theme;
+        let mut rendered_theme = app.appearance.theme();
 
         loop {
             let changed = modes.update_background(
                 &mut io::stdout(),
                 &mut background,
-                app.styles.normal.bg,
+                app.appearance.styles().normal.bg,
             )?;
 
-            if changed || rendered_theme != app.theme {
+            if changed || rendered_theme != app.appearance.theme() {
                 terminal.clear()?;
-                rendered_theme = app.theme;
+                rendered_theme = app.appearance.theme();
             }
 
             let draw_started = Instant::now();

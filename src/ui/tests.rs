@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::AddPlacement;
 use crate::model::Task;
-use crate::styles::DEFAULT_ACCENT;
+use crate::styles::{Appearance, DEFAULT_ACCENT};
 use ratatui::{Terminal, backend::TestBackend};
 
 #[track_caller]
@@ -70,7 +70,7 @@ fn section_tabs_sit_on_the_top_border_in_fixed_positions() {
     assert!(row_text(&terminal, 0).starts_with("┌──────"));
 
     let mut app = app_with_texts(&["Work: a", "home: b", "plain"]);
-    app.styles.accent = app.styles.accent.fg(Color::Rgb(20, 40, 60));
+    app.appearance.styles_mut().accent.fg = Some(Color::Rgb(20, 40, 60));
     let rows = render(&mut terminal, &mut app);
 
     assert_eq!(rows.y, 2);
@@ -407,7 +407,7 @@ fn a_pending_section_jump_numbers_the_tabs_under_their_names() {
     );
 
     let digit_style = terminal.backend().buffer()[(4, 1)].style();
-    assert_eq!(digit_style.fg, app.styles.accent.fg);
+    assert_eq!(digit_style.fg, app.appearance.styles().accent.fg);
 }
 
 #[test]
@@ -764,7 +764,7 @@ fn semantic_styles_and_reverse_highlights_preserve_modifier_hierarchy() {
             status: TaskStatus::Completed,
             ..Task::new("Work: text")
         }]);
-        app.styles.accent = app.styles.accent.fg(accent);
+        app.appearance.styles_mut().accent.fg = Some(accent);
         app.mode = Mode::Searching {
             input: "Work".into(),
             original: Some(0),
@@ -823,7 +823,7 @@ fn focus_is_bold_accented_in_both_marker_modes_without_bolding_task() {
         for accent in [DEFAULT_ACCENT, Color::Indexed(3), Color::Rgb(12, 34, 56)] {
             let mut app = App::new(vec![Task::new("ordinary text")]);
             app.marker_style = marker_style;
-            app.styles.accent = app.styles.accent.fg(accent);
+            app.appearance.styles_mut().accent.fg = Some(accent);
             let mut terminal = test_terminal(40, 10);
             render(&mut terminal, &mut app);
             let buffer = terminal.backend().buffer();
@@ -849,11 +849,11 @@ fn rendering_uses_resolved_roles_without_reconstructing_defaults() {
             ..Task::new("completed")
         },
     ]);
-    app.styles.normal = app.styles.normal.fg(Color::Red);
-    app.styles.muted = app.styles.muted.fg(Color::Green);
-    app.styles.completed = app.styles.completed.fg(Color::Blue);
-    app.styles.border = app.styles.border.fg(Color::Cyan);
-    app.styles.accent = app.styles.accent.fg(Color::Magenta);
+    app.appearance.styles_mut().normal.fg = Some(Color::Red);
+    app.appearance.styles_mut().muted.fg = Some(Color::Green);
+    app.appearance.styles_mut().completed.fg = Some(Color::Blue);
+    app.appearance.styles_mut().border.fg = Some(Color::Cyan);
+    app.appearance.styles_mut().accent.fg = Some(Color::Magenta);
     let mut terminal = test_terminal(60, 12);
     render(&mut terminal, &mut app);
     let buffer = terminal.backend().buffer();
@@ -873,7 +873,7 @@ fn rendering_uses_resolved_roles_without_reconstructing_defaults() {
                 frame.area(),
                 &TextInput::from("draft"),
                 "add",
-                &app.styles,
+                app.appearance.styles(),
                 true,
                 false,
                 None,
@@ -896,7 +896,7 @@ fn configured_styles_preserve_mandatory_focus_completion_and_search_modifiers() 
             status: TaskStatus::Completed,
             ..Task::new("Work: task")
         }]);
-        app.styles = Styles::resolve(config.theme, &config.styles, None);
+        app.appearance = Appearance::new(config.theme, config.styles, None);
         let mut terminal = test_terminal(40, 12);
         render(&mut terminal, &mut app);
         let buffer = terminal.backend().buffer();
@@ -948,7 +948,7 @@ fn themed_background_fills_every_cell_including_empty_regions_and_dialogs() {
 
             let config: crate::config::Config =
                 toml::from_str("theme='nord'\n[styles.normal]\nbg='#20242d'").unwrap();
-            app.styles = Styles::resolve(config.theme, &config.styles, None);
+            app.appearance = Appearance::new(config.theme, config.styles, None);
             app.mode = match mode {
                 0 => Mode::Normal,
                 1 => Mode::Adding("draft".into(), AddPlacement::End),
@@ -993,7 +993,7 @@ fn themed_background_fills_every_cell_including_empty_regions_and_dialogs() {
     let mut app = App::new(Vec::new());
     let config: crate::config::Config =
         toml::from_str("theme='nord'\n[styles.border]\nbg='#112233'").unwrap();
-    app.styles = Styles::resolve(config.theme, &config.styles, None);
+    app.appearance = Appearance::new(config.theme, config.styles, None);
     let mut terminal = test_terminal(40, 12);
     render(&mut terminal, &mut app);
 
@@ -1220,7 +1220,7 @@ fn unicode_checkboxes_are_single_cell_and_preserve_rendering_and_search() {
                 app.mode = mode;
                 app.list.select(Some(1));
                 app.wrap = wrap;
-                app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
+                app.appearance.styles_mut().accent.fg = Some(Color::Rgb(169, 182, 101));
                 let mut terminal = test_terminal(width, 12);
                 let rows = render(&mut terminal, &mut app);
                 let ascii = terminal.backend().buffer().clone();
@@ -1267,7 +1267,7 @@ fn carryover_checkboxes_preserve_layout_and_search_markers() {
         status: TaskStatus::Carried,
         ..Task::new("carry words across wrapped lines")
     }]);
-    app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
+    app.appearance.styles_mut().accent.fg = Some(Color::Rgb(169, 182, 101));
     let mut terminal = test_terminal(24, 12);
     render(&mut terminal, &mut app);
     let mapping = app.viewport.row_tasks.clone();
@@ -1276,10 +1276,11 @@ fn carryover_checkboxes_preserve_layout_and_search_markers() {
     assert!(screen(&terminal).contains("› [↪] carry"));
 
     let buffer = terminal.backend().buffer();
-    assert_eq!(buffer[(1, 1)].fg, app.styles.accent.fg.unwrap());
-    assert_eq!(buffer[(3, 1)].fg, app.styles.accent.fg.unwrap());
-    assert_eq!(buffer[(4, 1)].fg, app.styles.carried.fg.unwrap());
-    assert_eq!(buffer[(5, 1)].fg, app.styles.accent.fg.unwrap());
+    let styles = app.appearance.styles();
+    assert_eq!(buffer[(1, 1)].fg, styles.accent.fg.unwrap());
+    assert_eq!(buffer[(3, 1)].fg, styles.accent.fg.unwrap());
+    assert_eq!(buffer[(4, 1)].fg, styles.carried.fg.unwrap());
+    assert_eq!(buffer[(5, 1)].fg, styles.accent.fg.unwrap());
 
     // Continuation rows leave the marker columns blank.
     for x in 1..7 {
@@ -1301,7 +1302,7 @@ fn carryover_checkboxes_preserve_layout_and_search_markers() {
     // Search markers describe the search, so they keep their own colors.
     let found = &terminal.backend().buffer()[(4, 1)];
     assert_eq!(found.symbol(), "■");
-    assert_eq!(found.fg, app.styles.accent.fg.unwrap());
+    assert_eq!(found.fg, app.appearance.styles().accent.fg.unwrap());
 
     app.key(
         KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
@@ -1335,8 +1336,8 @@ fn only_the_carried_arrow_takes_the_carried_color() {
                 },
             ]);
             app.marker_style = marker_style;
-            app.styles.accent = app.styles.accent.fg(accent);
-            app.styles.carried = app.styles.carried.fg(carried);
+            app.appearance.styles_mut().accent.fg = Some(accent);
+            app.appearance.styles_mut().carried.fg = Some(carried);
             app.list.select(Some(selected));
             let mut terminal = test_terminal(30, 8);
             render(&mut terminal, &mut app);
@@ -1397,7 +1398,7 @@ fn inline_add_preview_matches_saved_position_without_changing_tasks() {
                         .collect(),
                 );
                 app.list.select(selected);
-                app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
+                app.appearance.styles_mut().accent.fg = Some(Color::Rgb(169, 182, 101));
                 fixture.storage.save(&app.tasks).unwrap();
                 let original = app.tasks.clone();
                 let bytes = std::fs::read(fixture.task_path()).unwrap();
@@ -1436,7 +1437,10 @@ fn inline_add_preview_matches_saved_position_without_changing_tasks() {
 
                 let buffer = terminal.backend().buffer();
                 assert_eq!(buffer[(rows.x + 2, y)].fg, Color::Reset);
-                assert_eq!(buffer[(rows.x + 6, y)].fg, app.styles.accent.fg.unwrap());
+                assert_eq!(
+                    buffer[(rows.x + 6, y)].fg,
+                    app.appearance.styles().accent.fg.unwrap()
+                );
                 assert_eq!(buffer[(rows.x + 8, y)].fg, Color::Reset);
                 assert!(terminal.backend().cursor_visible());
                 assert_eq!(
@@ -1818,7 +1822,7 @@ fn search_markers_highlights_and_exit_preserve_text_and_alignment() {
 
     let original = app.tasks.clone();
     app.list.select(Some(2));
-    app.styles.accent = app.styles.accent.fg(Color::Rgb(20, 40, 60));
+    app.appearance.styles_mut().accent.fg = Some(Color::Rgb(20, 40, 60));
     let mut terminal = test_terminal(40, 10);
     let key = |app: &mut App, code| {
         app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
@@ -1835,7 +1839,10 @@ fn search_markers_highlights_and_exit_preserve_text_and_alignment() {
 
     for y in [2, 3] {
         assert_eq!(buffer[(4, y)].symbol(), "■");
-        assert_eq!(buffer[(4, y)].fg, app.styles.accent.fg.unwrap());
+        assert_eq!(
+            buffer[(4, y)].fg,
+            app.appearance.styles().accent.fg.unwrap()
+        );
     }
 
     assert_eq!(buffer[(4, 4)].symbol(), "□");
@@ -1844,7 +1851,7 @@ fn search_markers_highlights_and_exit_preserve_text_and_alignment() {
     assert!(buffer[(7, 2)].modifier.contains(Modifier::BOLD));
 
     // Only the focused result's matches take the accent.
-    let accent = app.styles.accent.fg.unwrap();
+    let accent = app.appearance.styles().accent.fg.unwrap();
 
     for (y, expected, match_fg) in [(2, "İfooİFOO", accent), (3, "İfoo", Color::Reset)] {
         let mut highlighted = String::new();
@@ -1898,8 +1905,8 @@ fn focused_search_matches_use_the_accent_across_wrapped_rows_and_repeated_matche
     let background = Color::Rgb(250, 248, 240);
 
     let mut app = App::new(vec![Task::new("abcdef abcdefabcdef")]);
-    app.styles.normal = app.styles.normal.bg(background);
-    app.styles.accent = app.styles.accent.fg(accent);
+    app.appearance.styles_mut().normal.bg = Some(background);
+    app.appearance.styles_mut().accent.fg = Some(accent);
     app.mode = Mode::Searching {
         input: "abcdef".into(),
         original: Some(0),
@@ -2146,11 +2153,7 @@ fn tiny_terminals_and_resizing_are_safe_in_every_mode() {
     let mut terminal = test_terminal(40, 12);
 
     let mut app = App::new(vec![Task::new("日本語 🪷 ".repeat(8).trim_end())]);
-    app.styles = Styles::resolve(
-        crate::themes::BuiltinTheme::Nord,
-        &crate::config::StyleOverrides::default(),
-        None,
-    );
+    app.appearance.set_theme(crate::themes::BuiltinTheme::Nord);
 
     for width in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 40, 60, 80] {
         for height in [0, 1, 2, 3, 6, 12] {
@@ -2483,7 +2486,7 @@ fn only_leading_tags_are_bold_headings_across_wrapping_and_completion_styles() {
 
                         // A completed task keeps one color, its section prefix included.
                         let expected = if in_tag && !completed {
-                            app.styles.heading.fg.unwrap()
+                            app.appearance.styles().heading.fg.unwrap()
                         } else {
                             Color::Reset
                         };
@@ -2496,7 +2499,10 @@ fn only_leading_tags_are_bold_headings_across_wrapping_and_completion_styles() {
 
                 assert_eq!(bold, tag, "{text:?}, width={width}, wrap={wrap}");
                 assert!(!buffer[(3, first_row)].modifier.contains(Modifier::BOLD));
-                assert_eq!(buffer[(1, first_row)].fg, app.styles.accent.fg.unwrap());
+                assert_eq!(
+                    buffer[(1, first_row)].fg,
+                    app.appearance.styles().accent.fg.unwrap()
+                );
                 assert_eq!(app.tasks, original);
                 assert!(!app.can_undo());
             }
@@ -2516,8 +2522,8 @@ fn search_matches_replace_the_heading_color_where_they_cover_a_section_prefix() 
             ..Task::new("Work: redo")
         },
     ]);
-    app.styles.heading = app.styles.heading.fg(heading);
-    app.styles.accent = app.styles.accent.fg(accent);
+    app.appearance.styles_mut().heading.fg = Some(heading);
+    app.appearance.styles_mut().accent.fg = Some(accent);
     app.mode = Mode::Searching {
         input: "rk: re".into(),
         original: Some(0),
@@ -2564,7 +2570,7 @@ fn completed_text_stays_muted_with_accented_marker_and_checkbox() {
         status: TaskStatus::Completed,
         ..Task::new("Completed")
     }]);
-    app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
+    app.appearance.styles_mut().accent.fg = Some(Color::Rgb(169, 182, 101));
     render(&mut terminal, &mut app);
     let buffer = terminal.backend().buffer();
     let marker = &buffer[(1, 1)];
@@ -2572,9 +2578,9 @@ fn completed_text_stays_muted_with_accented_marker_and_checkbox() {
     let text = &buffer[(7, 1)];
 
     assert_eq!(marker.symbol(), "›");
-    assert_eq!(marker.fg, app.styles.accent.fg.unwrap());
+    assert_eq!(marker.fg, app.appearance.styles().accent.fg.unwrap());
     assert_eq!(marker.bg, Color::Reset);
-    assert_eq!(checkbox.fg, app.styles.accent.fg.unwrap());
+    assert_eq!(checkbox.fg, app.appearance.styles().accent.fg.unwrap());
     assert_eq!(text.fg, Color::Reset);
     assert!(text.modifier.contains(Modifier::CROSSED_OUT));
     assert!(text.modifier.contains(Modifier::DIM));
@@ -3146,7 +3152,7 @@ fn the_reference_title_and_group_names_are_its_only_headings() {
     let heading = Color::Rgb(1, 2, 3);
     let mut app = app_with_texts(&["task"]);
     app.mode = help_mode();
-    app.styles.heading = app.styles.heading.fg(heading);
+    app.appearance.styles_mut().heading.fg = Some(heading);
     let mut terminal = test_terminal(100, 80);
     render(&mut terminal, &mut app);
     let buffer = terminal.backend().buffer();

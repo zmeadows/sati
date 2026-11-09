@@ -18,7 +18,8 @@ use crate::styles::Styles;
 
 pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let area = frame.area();
-    frame.render_widget(Block::default().style(app.styles.normal), area);
+    let styles = *app.appearance.styles();
+    frame.render_widget(Block::default().style(styles.normal), area);
     let searching = matches!(app.mode, Mode::Searching { .. });
     // Only search uses a separate input row; add/edit live inside the checklist.
     let input_height = u16::from(searching && area.height > 0);
@@ -32,16 +33,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(border_type(app.border_style))
-        .border_style(app.styles.border);
+        .border_style(styles.border);
 
     let mut showing_status = false;
 
     if let Some(notice) = &app.status_message
-        && let Some(status_style) = notice.style(
-            std::time::Instant::now(),
-            app.styles.accent,
-            app.styles.normal,
-        )
+        && let Some(status_style) =
+            notice.style(std::time::Instant::now(), styles.accent, styles.normal)
     {
         // Status messages may use the whole border between the corners.
         let available = usize::from(list_area.width).saturating_sub(2);
@@ -67,7 +65,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         && list_area.height >= 2
         && HELP_HINT.width() + 2 <= usize::from(list_area.width)
     {
-        block = block.title_bottom(Line::styled(HELP_HINT, app.styles.muted).right_aligned());
+        block = block.title_bottom(Line::styled(HELP_HINT, styles.muted).right_aligned());
     }
 
     let mut rows = block.inner(list_area);
@@ -103,12 +101,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
                     let x = target.x + 1 + u16::from(bracketed);
                     let digit = (position + 1) % JUMPABLE_TABS;
 
-                    frame.buffer_mut().set_string(
-                        x,
-                        blank_row,
-                        digit.to_string(),
-                        app.styles.accent,
-                    );
+                    frame
+                        .buffer_mut()
+                        .set_string(x, blank_row, digit.to_string(), styles.accent);
                 }
             }
         }
@@ -125,16 +120,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
             "search"
         };
 
-        draw_input_line(
-            frame,
-            sections[1],
-            input,
-            label,
-            &app.styles,
-            true,
-            false,
-            None,
-        );
+        draw_input_line(frame, sections[1], input, label, &styles, true, false, None);
 
         // The hint sits at the right edge only while the prompt, query, and cursor cell
         // leave room for it, so it never covers typing.
@@ -144,7 +130,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
 
         if needed_width <= usize::from(sections[1].width) {
             frame.render_widget(
-                Paragraph::new(Line::styled(SEARCH_HINT, app.styles.muted).right_aligned()),
+                Paragraph::new(Line::styled(SEARCH_HINT, styles.muted).right_aligned()),
                 sections[1],
             );
         }
@@ -153,7 +139,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     if app.mode == Mode::ConfirmClear {
         let section = app.scope_label().map(|label| format!("{label} "));
         let question = format!("Clear unmarked {}tasks?", section.unwrap_or_default());
-        draw_confirmation(frame, area, &app.styles, app.border_style, &question);
+        draw_confirmation(frame, area, &styles, app.border_style, &question);
     }
 
     if matches!(app.mode, Mode::Help { .. }) {
@@ -202,6 +188,7 @@ fn draw_section_tabs(
     tabs: &[(SectionView, String)],
     mut strip: Rect,
 ) -> Vec<(Rect, SectionView)> {
+    let styles = *app.appearance.styles();
     let mut tabs = tabs.to_vec();
     let picking = matches!(app.mode, Mode::FuzzySection { .. });
 
@@ -225,14 +212,14 @@ fn draw_section_tabs(
             // Blank the input first so the border doesn't show under the cursor cell.
             frame
                 .buffer_mut()
-                .set_string(x, strip.y, " ".repeat(input_width), app.styles.normal);
+                .set_string(x, strip.y, " ".repeat(input_width), styles.normal);
 
             draw_input_line(
                 frame,
                 Rect::new(x + 1, strip.y, (input_width as u16).saturating_sub(2), 1),
                 input,
                 "",
-                &app.styles,
+                &styles,
                 true,
                 false,
                 None,
@@ -322,9 +309,7 @@ fn draw_section_tabs(
     let mut targets = Vec::new();
 
     if start > 0 {
-        frame
-            .buffer_mut()
-            .set_string(strip.x, y, "‹", app.styles.muted);
+        frame.buffer_mut().set_string(strip.x, y, "‹", styles.muted);
     }
 
     let mut x = strip.x + TAB_MARKER as u16;
@@ -333,35 +318,32 @@ fn draw_section_tabs(
         let tab_width = widths[index] as u16;
 
         let style = if Some(index) == active {
-            app.styles.accent
+            styles.accent
         } else {
-            app.styles.muted
+            styles.muted
         };
 
         if Some(index) == active
             && let Some(input) = rename_input
         {
             // A name that can't be used is drawn struck through; the notice says why.
-            let mut styles = app.styles;
+            let mut input_styles = styles;
 
             if app.rename_problem().is_some() {
-                styles.normal = styles.muted.add_modifier(Modifier::CROSSED_OUT);
+                input_styles.normal = styles.muted.add_modifier(Modifier::CROSSED_OUT);
             }
 
             // Blank the whole tab first so the border doesn't show under the cursor cell.
-            frame.buffer_mut().set_string(
-                x,
-                y,
-                " ".repeat(usize::from(tab_width)),
-                app.styles.normal,
-            );
+            frame
+                .buffer_mut()
+                .set_string(x, y, " ".repeat(usize::from(tab_width)), styles.normal);
 
             draw_input_line(
                 frame,
                 Rect::new(x + 1, y, tab_width.saturating_sub(2), 1),
                 input,
                 RENAME_LABEL,
-                &styles,
+                &input_styles,
                 true,
                 false,
                 None,
@@ -379,9 +361,7 @@ fn draw_section_tabs(
     }
 
     if end < tabs.len() {
-        frame
-            .buffer_mut()
-            .set_string(x - 1, y, "›", app.styles.muted);
+        frame.buffer_mut().set_string(x - 1, y, "›", styles.muted);
     }
 
     targets
@@ -431,7 +411,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if lines.is_empty() {
         frame.render_widget(
-            Paragraph::new(" Press a to add a task").style(app.styles.muted),
+            Paragraph::new(" Press a to add a task").style(app.appearance.styles().muted),
             area,
         );
         return;
@@ -447,7 +427,13 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         ),
         area,
     );
-    draw_scrollbar(frame, area, total_rows, visible.start, app.styles.muted);
+    draw_scrollbar(
+        frame,
+        area,
+        total_rows,
+        visible.start,
+        app.appearance.styles().muted,
+    );
     draw_inline_input(frame, app, area, input_row, visible);
 }
 
@@ -473,6 +459,7 @@ fn draw_scrollbar(frame: &mut Frame, area: Rect, total: usize, scroll: usize, st
 }
 
 fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
+    let styles = app.appearance.styles();
     let inline = match &app.mode {
         Mode::Adding(_, placement) => Some(app.insertion_index(*placement)),
         Mode::Editing { index, .. } => Some(*index),
@@ -558,16 +545,16 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
 
         // A completed task is struck through in one color, section prefix included.
         let (text_style, heading_style) = if completed {
-            let style = app.styles.completed.add_modifier(Modifier::CROSSED_OUT);
+            let style = styles.completed.add_modifier(Modifier::CROSSED_OUT);
             (style, style)
         } else {
-            (app.styles.normal, app.styles.heading)
+            (styles.normal, styles.heading)
         };
 
         // Matches are reversed, so the focused result's accent becomes their background and
         // the theme's background becomes their text, legible in light and dark themes alike.
         let match_color = if selected == Some(index) {
-            app.styles.accent.fg.unwrap_or(Color::Reset)
+            styles.accent.fg.unwrap_or(Color::Reset)
         } else {
             Color::Reset
         };
@@ -589,16 +576,16 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
 
             let marker_style = if searching {
                 if matches.is_empty() {
-                    app.styles.muted
+                    styles.muted
                 } else {
-                    app.styles.accent
+                    styles.accent
                 }
             } else if selected == Some(index) {
-                app.styles.accent
+                styles.accent
             } else if completed {
-                app.styles.muted
+                styles.muted
             } else {
-                app.styles.normal
+                styles.normal
             };
 
             let mut line = Line::from(vec![Span::styled(
@@ -607,7 +594,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
                 } else {
                     " "
                 },
-                app.styles.accent.add_modifier(Modifier::BOLD),
+                styles.accent.add_modifier(Modifier::BOLD),
             )]);
 
             // Only the arrow of a carried checkbox takes the carried color, so its brackets
@@ -622,7 +609,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
 
             if let Some(arrow) = carried_arrow {
                 line.push_span(Span::styled(" [", marker_style));
-                line.push_span(Span::styled(arrow, app.styles.carried));
+                line.push_span(Span::styled(arrow, styles.carried));
                 line.push_span(Span::styled("] ", marker_style));
             } else {
                 line.push_span(Span::styled(prefix, marker_style));
@@ -732,7 +719,7 @@ fn draw_inline_input(
             ),
             input,
             label,
-            &app.styles,
+            app.appearance.styles(),
             true,
             true,
             app.completion_ghost().as_deref(),
@@ -1140,7 +1127,7 @@ const HELP_BORDERS: usize = 2;
 // `Mode::Help`. The layout is picked from the terminal size on every draw, so resizing
 // simply switches it; the offset is then clamped to the lines of whichever layout is shown.
 fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
-    let styles = app.styles;
+    let styles = *app.appearance.styles();
 
     if area.width < HELP_MIN_WIDTH || area.height < HELP_MIN_HEIGHT {
         frame.render_widget(Clear, area);

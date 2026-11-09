@@ -1,6 +1,57 @@
 use ratatui::style::{Color, Modifier, Style};
 
+use crate::config::StyleOverrides;
+use crate::themes::BuiltinTheme;
+
 pub const DEFAULT_ACCENT: Color = Color::LightYellow;
+
+/// The selected theme, the inputs layered over it, and the styles they resolve to.
+///
+/// The inputs are private so `styles` is always `Styles::resolve` of the current theme,
+/// configuration overrides, and CLI accent; only the theme changes after startup.
+#[derive(Debug, PartialEq)]
+pub struct Appearance {
+    theme: BuiltinTheme,
+    overrides: StyleOverrides,
+    cli_accent: Option<Color>,
+    styles: Styles,
+}
+
+impl Appearance {
+    pub fn new(theme: BuiltinTheme, overrides: StyleOverrides, cli_accent: Option<Color>) -> Self {
+        Self {
+            styles: Styles::resolve(theme, &overrides, cli_accent),
+            theme,
+            overrides,
+            cli_accent,
+        }
+    }
+
+    pub fn theme(&self) -> BuiltinTheme {
+        self.theme
+    }
+
+    pub fn styles(&self) -> &Styles {
+        &self.styles
+    }
+
+    pub fn set_theme(&mut self, theme: BuiltinTheme) {
+        self.theme = theme;
+        self.styles = Styles::resolve(theme, &self.overrides, self.cli_accent);
+    }
+
+    /// Lets rendering tests adjust individual resolved styles without building a configuration.
+    #[cfg(test)]
+    pub fn styles_mut(&mut self) -> &mut Styles {
+        &mut self.styles
+    }
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self::new(BuiltinTheme::default(), StyleOverrides::default(), None)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Styles {
@@ -15,8 +66,8 @@ pub struct Styles {
 
 impl Styles {
     pub fn resolve(
-        theme: crate::themes::BuiltinTheme,
-        overrides: &crate::config::StyleOverrides,
+        theme: BuiltinTheme,
+        overrides: &StyleOverrides,
         cli_accent: Option<Color>,
     ) -> Self {
         let bases = theme.base_styles();
@@ -69,11 +120,7 @@ impl Styles {
 
 impl Default for Styles {
     fn default() -> Self {
-        Self::resolve(
-            crate::themes::BuiltinTheme::Default,
-            &crate::config::StyleOverrides::default(),
-            None,
-        )
+        Self::resolve(BuiltinTheme::Default, &StyleOverrides::default(), None)
     }
 }
 

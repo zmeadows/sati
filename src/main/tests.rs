@@ -210,10 +210,7 @@ fn runtime_themes_synchronize_resolved_backgrounds_and_leave_config_unchanged() 
                 .unwrap()
                 .resolve(config::Config::load(Some(&path)).unwrap());
             let mut app = App::new(Vec::new());
-            app.styles = options.styles;
-            app.theme = options.theme;
-            app.style_overrides = options.style_overrides;
-            app.cli_accent = options.cli_accent;
+            app.appearance = options.appearance;
             let modes = TerminalModes::default();
             let mut current = None;
             let mut output = Vec::new();
@@ -231,21 +228,24 @@ fn runtime_themes_synchronize_resolved_backgrounds_and_leave_config_unchanged() 
                     );
                 }
 
-                assert_eq!(app.theme, expected);
-                assert_eq!(app.styles.normal.fg, expected.base_styles().normal.fg);
-                assert_eq!(app.styles.accent.fg, Some(Color::Blue));
+                assert_eq!(app.appearance.theme(), expected);
                 assert_eq!(
-                    app.styles.accent.add_modifier,
+                    app.appearance.styles().normal.fg,
+                    expected.base_styles().normal.fg
+                );
+                assert_eq!(app.appearance.styles().accent.fg, Some(Color::Blue));
+                assert_eq!(
+                    app.appearance.styles().accent.add_modifier,
                     ratatui::style::Modifier::BOLD
                 );
 
                 let background = custom_background.or(expected.base_styles().normal.bg);
-                assert_eq!(app.styles.normal.bg, background);
+                assert_eq!(app.appearance.styles().normal.bg, background);
 
                 let previous = current;
                 output.clear();
                 let changed = modes
-                    .update_background(&mut output, &mut current, app.styles.normal.bg)
+                    .update_background(&mut output, &mut current, app.appearance.styles().normal.bg)
                     .unwrap();
 
                 let expected_output = if previous == background {
@@ -301,7 +301,7 @@ fn every_theme_is_selectable_from_cli_over_toml() {
         let selected = name.parse::<themes::BuiltinTheme>().unwrap();
 
         assert_eq!(
-            cli.resolve(config).styles,
+            *cli.resolve(config).appearance.styles(),
             styles::Styles::resolve(selected, &config::StyleOverrides::default(), None)
         );
     }
@@ -330,7 +330,10 @@ fn cli_theme_overrides_toml_in_both_directions() {
         let args = cli.map_or_else(Vec::new, |name| vec!["--theme", name]);
         let cli = parse_cli(&args).unwrap();
 
-        assert_eq!(cli.resolve(config).styles.normal.fg, Some(expected));
+        assert_eq!(
+            cli.resolve(config).appearance.styles().normal.fg,
+            Some(expected)
+        );
     }
 }
 
@@ -341,7 +344,7 @@ fn theme_selection_keeps_cascading_and_final_accent_precedence() {
 
     assert_eq!(cli.theme, Some(themes::BuiltinTheme::Default));
 
-    let styles = cli.resolve(config).styles;
+    let styles = *cli.resolve(config).appearance.styles();
     assert_eq!(styles.normal.fg, Some(ratatui::style::Color::LightBlue));
     assert_eq!(styles.muted.fg, styles.normal.fg);
     assert!(styles.muted.add_modifier.is_empty());
@@ -383,13 +386,19 @@ fn cli_accent_overrides_only_the_resolved_foreground() {
 
     let options = parse_cli(&[]).unwrap().resolve(config());
 
-    assert_eq!(options.styles.accent.fg, Some(ratatui::style::Color::Blue));
+    assert_eq!(
+        options.appearance.styles().accent.fg,
+        Some(ratatui::style::Color::Blue)
+    );
 
     let options = parse_cli(&["--accent", "red"]).unwrap().resolve(config());
 
-    assert_eq!(options.styles.accent.fg, Some(ratatui::style::Color::Red));
     assert_eq!(
-        options.styles.accent.add_modifier,
+        options.appearance.styles().accent.fg,
+        Some(ratatui::style::Color::Red)
+    );
+    assert_eq!(
+        options.appearance.styles().accent.add_modifier,
         ratatui::style::Modifier::BOLD
     );
 }
@@ -960,7 +969,10 @@ fn wrapping_is_enabled_by_default_and_can_be_disabled() {
     assert_eq!(defaults.border_style, config::BorderStyle::Square);
     assert_eq!(defaults.marker_style, config::MarkerStyle::Unicode);
     assert!(defaults.status_messages);
-    assert_eq!(defaults.styles.accent.fg, Some(styles::DEFAULT_ACCENT));
+    assert_eq!(
+        defaults.appearance.styles().accent.fg,
+        Some(styles::DEFAULT_ACCENT)
+    );
 
     let options = resolve_defaults(&["--marker-style", "ascii", "--no-wrap"]);
 
@@ -1142,7 +1154,7 @@ fn accent_accepts_hex_colors_and_combines_with_no_wrap() {
         let options = resolve_defaults(&values);
         assert!(!options.wrap);
         assert_eq!(
-            options.styles.accent.fg,
+            options.appearance.styles().accent.fg,
             Some(ratatui::style::Color::Rgb(169, 182, 101))
         );
     }

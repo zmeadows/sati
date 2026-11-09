@@ -294,14 +294,14 @@ fn disabled_status_messages_hide_confirmations_but_still_report_copy_failures() 
     let fixture = Fixture::new();
     let mut app = app_with_tasks(2);
     app.status_messages = false;
-    let theme = app.theme;
+    let theme = app.appearance.theme();
 
     press(&mut app, &fixture, KeyCode::Char('y'));
     assert_eq!(app.task_register.as_deref(), Some("task 0"));
     assert!(app.status_message.is_none());
 
     press(&mut app, &fixture, KeyCode::Char('t'));
-    assert_ne!(app.theme, theme);
+    assert_ne!(app.appearance.theme(), theme);
     assert!(app.status_message.is_none());
 
     let mut output = Vec::new();
@@ -588,13 +588,16 @@ fn theme_keys_cycle_from_active_theme_without_mutating_tasks_or_history() {
     press(&mut app, &fixture, KeyCode::Char('u'));
     let before = task_state(&app);
     let saved = std::fs::read(fixture.task_path()).unwrap();
-    app.theme = BuiltinTheme::TokyoNightStorm;
-    app.style_overrides = toml::from_str::<crate::config::Config>(
-        "[styles.normal]\nmodifiers=['bold']\n[styles.accent]\nmodifiers=['italic']",
-    )
-    .unwrap()
-    .styles;
-    app.cli_accent = Some(ratatui::style::Color::Blue);
+    let overrides = || {
+        toml::from_str::<crate::config::Config>(
+            "[styles.normal]\nmodifiers=['bold']\n[styles.accent]\nmodifiers=['italic']",
+        )
+        .unwrap()
+        .styles
+    };
+    let cli_accent = Some(ratatui::style::Color::Blue);
+    app.appearance =
+        crate::styles::Appearance::new(BuiltinTheme::TokyoNightStorm, overrides(), cli_accent);
 
     for (key, expected) in [
         (
@@ -611,14 +614,18 @@ fn theme_keys_cycle_from_active_theme_without_mutating_tasks_or_history() {
         ),
     ] {
         press(&mut app, &fixture, key);
-        assert_eq!(app.theme, expected);
+        assert_eq!(app.appearance.theme(), expected);
         assert_eq!(
-            app.styles,
-            crate::styles::Styles::resolve(expected, &app.style_overrides, app.cli_accent)
+            *app.appearance.styles(),
+            crate::styles::Styles::resolve(expected, &overrides(), cli_accent)
         );
-        assert_eq!(app.styles.accent.fg, Some(ratatui::style::Color::Blue));
+        assert_eq!(
+            app.appearance.styles().accent.fg,
+            Some(ratatui::style::Color::Blue)
+        );
         assert!(
-            app.styles
+            app.appearance
+                .styles()
                 .accent
                 .add_modifier
                 .contains(ratatui::style::Modifier::ITALIC)
@@ -642,29 +649,29 @@ fn theme_keys_cycle_from_active_theme_without_mutating_tasks_or_history() {
             },
         );
 
-        assert_eq!(app.theme, BuiltinTheme::CatppuccinMocha);
+        assert_eq!(app.appearance.theme(), BuiltinTheme::CatppuccinMocha);
     }
 
     app.tasks.clear();
     app.list.select(None);
-    app.theme = BuiltinTheme::Default;
+    app.appearance.set_theme(BuiltinTheme::Default);
     press(&mut app, &fixture, KeyCode::Char('T'));
 
-    assert_eq!(app.theme, BuiltinTheme::ModusVivendiTritanopia);
+    assert_eq!(app.appearance.theme(), BuiltinTheme::ModusVivendiTritanopia);
 
     press(&mut app, &fixture, KeyCode::Char('t'));
-    assert_eq!(app.theme, BuiltinTheme::Default);
+    assert_eq!(app.appearance.theme(), BuiltinTheme::Default);
 
     for &(theme, id) in BuiltinTheme::ALL {
         for forward in [false, true] {
-            app.theme = theme.cycle(!forward);
+            app.appearance.set_theme(theme.cycle(!forward));
             press(
                 &mut app,
                 &fixture,
                 KeyCode::Char(if forward { 't' } else { 'T' }),
             );
 
-            assert_eq!(app.theme, theme);
+            assert_eq!(app.appearance.theme(), theme);
             assert_eq!(
                 app.status_message.as_ref().unwrap().message(),
                 format!("Theme: {id}")
@@ -694,7 +701,7 @@ fn theme_keys_remain_text_or_are_ignored_in_other_modes() {
         press(&mut app, &fixture, KeyCode::Char('t'));
         press(&mut app, &fixture, KeyCode::Char('T'));
 
-        assert_eq!(app.theme, crate::themes::BuiltinTheme::Default);
+        assert_eq!(app.appearance.theme(), crate::themes::BuiltinTheme::Default);
         assert!(app.status_message.is_none());
 
         match &app.mode {

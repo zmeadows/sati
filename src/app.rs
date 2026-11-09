@@ -188,10 +188,7 @@ pub struct App {
     pub show_help_hint: bool,
     pub border_style: BorderStyle,
     pub marker_style: MarkerStyle,
-    pub styles: crate::styles::Styles,
-    pub theme: crate::themes::BuiltinTheme,
-    pub style_overrides: crate::config::StyleOverrides,
-    pub cli_accent: Option<ratatui::style::Color>,
+    pub appearance: crate::styles::Appearance,
     pub status_message: Option<StatusMessage>,
     pub view: SectionView,
 
@@ -229,10 +226,7 @@ impl App {
             show_help_hint: true,
             border_style: BorderStyle::default(),
             marker_style: MarkerStyle::default(),
-            styles: crate::styles::Styles::default(),
-            theme: crate::themes::BuiltinTheme::default(),
-            style_overrides: crate::config::StyleOverrides::default(),
-            cli_accent: None,
+            appearance: crate::styles::Appearance::default(),
             status_message: None,
             view: SectionView::All,
             viewport: ViewportState {
@@ -1338,10 +1332,9 @@ impl App {
     }
 
     fn cycle_theme(&mut self, forward: bool) {
-        self.theme = self.theme.cycle(forward);
-        self.styles =
-            crate::styles::Styles::resolve(self.theme, &self.style_overrides, self.cli_accent);
-        self.show_status_message(format!("Theme: {}", self.theme.id()));
+        let theme = self.appearance.theme().cycle(forward);
+        self.appearance.set_theme(theme);
+        self.show_status_message(format!("Theme: {}", theme.id()));
     }
 
     fn yank_task(&mut self) {
