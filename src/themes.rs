@@ -28,6 +28,15 @@ pub enum BuiltinTheme {
     Darcula,
     Gruvbox,
     SolarizedDark,
+    SolarizedLight,
+    GruvboxLight,
+    CatppuccinLatte,
+    GithubLight,
+    RosePineDawn,
+    EverforestLight,
+    ModusOperandi,
+    EfSummer,
+    Monokai,
 }
 
 impl FromStr for BuiltinTheme {
@@ -73,6 +82,15 @@ impl BuiltinTheme {
         (Self::Darcula, "darcula", "Darcula"),
         (Self::Gruvbox, "gruvbox", "Gruvbox Classic"),
         (Self::SolarizedDark, "solarized-dark", "Solarized Dark"),
+        (Self::SolarizedLight, "solarized-light", "Solarized Light"),
+        (Self::GruvboxLight, "gruvbox-light", "Gruvbox Light"),
+        (Self::CatppuccinLatte, "catppuccin-latte", "Catppuccin Latte"),
+        (Self::GithubLight, "github-light", "GitHub Light"),
+        (Self::RosePineDawn, "rose-pine-dawn", "Rosé Pine Dawn"),
+        (Self::EverforestLight, "everforest-light", "Everforest Light"),
+        (Self::ModusOperandi, "modus-operandi", "Modus Operandi"),
+        (Self::EfSummer, "ef-summer", "Ef Summer"),
+        (Self::Monokai, "monokai", "Monokai"),
     ];
 
     pub fn id(self) -> &'static str {
@@ -269,6 +287,96 @@ impl BuiltinTheme {
                     accent: plain.fg(Color::Rgb(38, 139, 210)),
                 }
             }
+            Self::SolarizedLight => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(101, 123, 131)).bg(Color::Rgb(253, 246, 227)),
+                    muted: plain.fg(Color::Rgb(131, 148, 150)),
+                    completed: plain.fg(Color::Rgb(147, 161, 161)),
+                    border: plain.fg(Color::Rgb(147, 161, 161)),
+                    accent: plain.fg(Color::Rgb(38, 139, 210)),
+                }
+            }
+            Self::GruvboxLight => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(60, 56, 54)).bg(Color::Rgb(251, 241, 199)),
+                    muted: plain.fg(Color::Rgb(124, 111, 100)),
+                    completed: plain.fg(Color::Rgb(146, 131, 116)),
+                    border: plain.fg(Color::Rgb(168, 153, 132)),
+                    accent: plain.fg(Color::Rgb(175, 58, 3)),
+                }
+            }
+            Self::CatppuccinLatte => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(76, 79, 105)).bg(Color::Rgb(239, 241, 245)),
+                    muted: plain.fg(Color::Rgb(108, 111, 133)),
+                    completed: plain.fg(Color::Rgb(156, 160, 176)),
+                    border: plain.fg(Color::Rgb(172, 176, 190)),
+                    accent: plain.fg(Color::Rgb(136, 57, 239)),
+                }
+            }
+            Self::GithubLight => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(36, 41, 47)).bg(Color::Rgb(255, 255, 255)),
+                    muted: plain.fg(Color::Rgb(87, 96, 106)),
+                    completed: plain.fg(Color::Rgb(110, 119, 129)),
+                    border: plain.fg(Color::Rgb(208, 215, 222)),
+                    accent: plain.fg(Color::Rgb(9, 105, 218)),
+                }
+            }
+            Self::RosePineDawn => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(70, 66, 97)).bg(Color::Rgb(250, 244, 237)),
+                    muted: plain.fg(Color::Rgb(121, 117, 147)),
+                    completed: plain.fg(Color::Rgb(152, 147, 165)),
+                    border: plain.fg(Color::Rgb(206, 202, 205)),
+                    accent: plain.fg(Color::Rgb(215, 130, 126)),
+                }
+            }
+            Self::EverforestLight => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(92, 106, 114)).bg(Color::Rgb(253, 246, 227)),
+                    muted: plain.fg(Color::Rgb(130, 145, 129)),
+                    completed: plain.fg(Color::Rgb(166, 176, 160)),
+                    border: plain.fg(Color::Rgb(147, 159, 145)),
+                    accent: plain.fg(Color::Rgb(141, 161, 1)),
+                }
+            }
+            Self::ModusOperandi => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(0, 0, 0)).bg(Color::Rgb(255, 255, 255)),
+                    muted: plain.fg(Color::Rgb(89, 89, 89)),
+                    completed: plain.fg(Color::Rgb(89, 89, 89)),
+                    border: plain.fg(Color::Rgb(159, 159, 159)),
+                    accent: plain.fg(Color::Rgb(0, 49, 169)),
+                }
+            }
+            Self::EfSummer => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(79, 64, 115)).bg(Color::Rgb(255, 242, 243)),
+                    muted: plain.fg(Color::Rgb(120, 110, 116)),
+                    completed: plain.fg(Color::Rgb(120, 110, 116)),
+                    border: plain.fg(Color::Rgb(198, 187, 198)),
+                    accent: plain.fg(Color::Rgb(203, 26, 170)),
+                }
+            }
+            Self::Monokai => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(248, 248, 242)).bg(Color::Rgb(39, 40, 34)),
+                    muted: plain.fg(Color::Rgb(144, 144, 138)),
+                    completed: plain.fg(Color::Rgb(117, 113, 94)),
+                    border: plain.fg(Color::Rgb(100, 100, 94)),
+                    accent: plain.fg(Color::Rgb(249, 38, 114)),
+                }
+            }
         }
     }
 }
@@ -298,7 +406,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_dark_theme_backgrounds_are_exact_and_inherited() {
+    fn all_named_theme_backgrounds_are_exact_and_inherited() {
         for (name, rgb) in [
             ("catppuccin-mocha", (30, 30, 46)),
             ("tokyonight-storm", (36, 40, 59)),
@@ -315,6 +423,15 @@ mod tests {
             ("darcula", (43, 43, 43)),
             ("gruvbox", (40, 40, 40)),
             ("solarized-dark", (0, 43, 54)),
+            ("solarized-light", (253, 246, 227)),
+            ("gruvbox-light", (251, 241, 199)),
+            ("catppuccin-latte", (239, 241, 245)),
+            ("github-light", (255, 255, 255)),
+            ("rose-pine-dawn", (250, 244, 237)),
+            ("everforest-light", (253, 246, 227)),
+            ("modus-operandi", (255, 255, 255)),
+            ("ef-summer", (255, 242, 243)),
+            ("monokai", (39, 40, 34)),
         ] {
             let styles = Styles::resolve(
                 name.parse().unwrap(),
@@ -350,19 +467,16 @@ mod tests {
             assert_eq!(theme.cycle(false).cycle(true), theme);
         }
 
-        assert_eq!(
-            BuiltinTheme::Default.cycle(false),
-            BuiltinTheme::SolarizedDark
-        );
+        assert_eq!(BuiltinTheme::Default.cycle(false), BuiltinTheme::Monokai);
     }
 
     #[test]
     fn all_available_themes_parse_and_preserve_overrides_and_modifier_resets() {
         let names: Vec<_> = BuiltinTheme::ALL.iter().map(|(_, name, _)| *name).collect();
-        assert_eq!(names.len(), 16);
+        assert_eq!(names.len(), 25);
         assert_eq!(
             names.iter().collect::<std::collections::HashSet<_>>().len(),
-            16
+            25
         );
 
         for name in names {
@@ -399,6 +513,47 @@ mod tests {
             if theme != BuiltinTheme::Default {
                 assert!(resolved.completed.add_modifier.is_empty());
                 assert!(resolved.border.add_modifier.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn light_and_monokai_themes_have_exact_palettes() {
+        #[rustfmt::skip]
+        let palettes = [
+            ("solarized-light", [(253, 246, 227), (101, 123, 131), (131, 148, 150), (147, 161, 161), (147, 161, 161), (38, 139, 210)]),
+            ("gruvbox-light", [(251, 241, 199), (60, 56, 54), (124, 111, 100), (146, 131, 116), (168, 153, 132), (175, 58, 3)]),
+            ("catppuccin-latte", [(239, 241, 245), (76, 79, 105), (108, 111, 133), (156, 160, 176), (172, 176, 190), (136, 57, 239)]),
+            ("github-light", [(255, 255, 255), (36, 41, 47), (87, 96, 106), (110, 119, 129), (208, 215, 222), (9, 105, 218)]),
+            ("rose-pine-dawn", [(250, 244, 237), (70, 66, 97), (121, 117, 147), (152, 147, 165), (206, 202, 205), (215, 130, 126)]),
+            ("everforest-light", [(253, 246, 227), (92, 106, 114), (130, 145, 129), (166, 176, 160), (147, 159, 145), (141, 161, 1)]),
+            ("modus-operandi", [(255, 255, 255), (0, 0, 0), (89, 89, 89), (89, 89, 89), (159, 159, 159), (0, 49, 169)]),
+            ("ef-summer", [(255, 242, 243), (79, 64, 115), (120, 110, 116), (120, 110, 116), (198, 187, 198), (203, 26, 170)]),
+            ("monokai", [(39, 40, 34), (248, 248, 242), (144, 144, 138), (117, 113, 94), (100, 100, 94), (249, 38, 114)]),
+        ];
+
+        for (name, [background, normal, muted, completed, border, accent]) in palettes {
+            let styles = Styles::resolve(
+                name.parse().unwrap(),
+                &crate::config::StyleOverrides::default(),
+                None,
+            );
+
+            for (role, (r, g, b)) in [
+                (styles.normal, normal),
+                (styles.muted, muted),
+                (styles.completed, completed),
+                (styles.border, border),
+                (styles.accent, accent),
+            ] {
+                assert_eq!(role.fg, Some(Color::Rgb(r, g, b)), "{name}");
+                assert_eq!(
+                    role.bg,
+                    Some(Color::Rgb(background.0, background.1, background.2)),
+                    "{name}"
+                );
+                assert!(role.add_modifier.is_empty(), "{name}");
+                assert_eq!(role.sub_modifier, Modifier::all(), "{name}");
             }
         }
     }

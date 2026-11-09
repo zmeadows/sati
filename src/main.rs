@@ -789,10 +789,20 @@ mod tests {
                 [('t', GithubDark), ('T', OneDark), ('T', Nightfox)],
             ),
             (
+                "monokai",
+                None,
+                Monokai,
+                [('t', Default), ('T', Monokai), ('t', Default)],
+            ),
+            (
                 "solarized-dark",
                 None,
                 SolarizedDark,
-                [('t', Default), ('T', SolarizedDark), ('t', Default)],
+                [
+                    ('t', SolarizedLight),
+                    ('t', GruvboxLight),
+                    ('T', SolarizedLight),
+                ],
             ),
         ] {
             for custom_background in [None, Some(Color::Rgb(32, 36, 45))] {

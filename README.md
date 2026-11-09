@@ -296,9 +296,10 @@ CLI pairs override either TOML value: `--no-wrap` disables wrapping, and `--wrap
 re-enables it. When both flags of a pair are given, the last one wins.
 
 The `default` theme uses terminal-native colors and remains the default. Other
-built-in themes provide five RGB foregrounds, their original Neovim-inspired dark
-backgrounds, and no base text modifiers. `default` keeps the terminal background
-unless explicitly overridden.
+built-in themes reproduce established Vim, Neovim, and Emacs color schemes, in both dark
+and light variants (such as Solarized Light, Catppuccin Latte, Modus Operandi, and Ef
+Summer). Each provides five RGB foregrounds, its original background, and no base text
+modifiers. `default` keeps the terminal background unless explicitly overridden.
 
 Run `sati --list-themes` to print the available theme identifiers.
 

@@ -3086,7 +3086,7 @@ mod tests {
         app.theme = BuiltinTheme::Default;
         press(&mut app, &fixture, KeyCode::Char('T'));
 
-        assert_eq!(app.theme, BuiltinTheme::SolarizedDark);
+        assert_eq!(app.theme, BuiltinTheme::Monokai);
 
         press(&mut app, &fixture, KeyCode::Char('t'));
         assert_eq!(app.theme, BuiltinTheme::Default);
