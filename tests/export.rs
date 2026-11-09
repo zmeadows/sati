@@ -63,7 +63,7 @@ const MARKDOWN: &str = "- [ ] Work: 日本語\n- [x] done\n";
 // A current-format task file with a carried sectioned task and a completed one.
 fn tasks_document(extra_fields: &str) -> String {
     format!(
-        r#"{{"schema_version":5,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Work","text":"日本語","status":"carried"}},{{"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:06Z","text":"done","status":"completed"}}]{extra_fields},"section_order":["work"]}}"#
+        r#"{{"schema_version":6,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Work","text":"日本語","status":"carried"}},{{"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:06Z","text":"done","status":"completed"}}]{extra_fields},"section_order":["work"]}}"#
     )
 }
 
@@ -103,6 +103,19 @@ fn export_reads_committed_tasks_while_the_writer_lock_is_held() {
         fs::read_to_string(fixture.data.join("tasks.json")).unwrap(),
         document
     );
+
+    // A version 5 file is upgraded in memory only; export never rewrites it.
+    let version_5 = tasks_document(r#","section":"work""#)
+        .replace(r#""schema_version":6"#, r#""schema_version":5"#);
+    fs::write(fixture.data.join("tasks.json"), &version_5).unwrap();
+    let output = fixture.run(&[]);
+
+    assert!(output.status.success() && output.stderr.is_empty());
+    assert_eq!(output.stdout, MARKDOWN.as_bytes());
+    assert_eq!(
+        fs::read_to_string(fixture.data.join("tasks.json")).unwrap(),
+        version_5
+    );
     assert_eq!(
         fs::read_to_string(fixture.data.join("history.json")).unwrap(),
         "deliberately invalid unused history"
@@ -130,8 +143,8 @@ fn missing_and_invalid_storage_never_get_created_or_repaired() {
 
     for invalid in [
         "malformed",
-        r#"{"schema_version":5,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"bad","status":"done"}]}"#,
-        r#"{"schema_version":5,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"bad\ntext","status":"pending"}]}"#,
+        r#"{"schema_version":6,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"bad","status":"done"}]}"#,
+        r#"{"schema_version":6,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"bad\ntext","status":"pending"}]}"#,
     ] {
         fs::write(fixture.data.join("tasks.json"), invalid).unwrap();
         let output = fixture.run(&[]);
@@ -314,7 +327,7 @@ fn an_unknown_section_lists_the_known_ones_in_tab_order() {
     fixture.prepare();
 
     // Tab order comes from section_order, and labels keep the first spelling in list order.
-    let document = r#"{"schema_version":5,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Home","text":"a","status":"pending"},{"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:06Z","section":"Work","text":"b","status":"pending"}],"section_order":["work","home"]}"#;
+    let document = r#"{"schema_version":6,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Home","text":"a","status":"pending"},{"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:06Z","section":"Work","text":"b","status":"pending"}],"section_order":["work","home"]}"#;
     fs::write(fixture.data.join("tasks.json"), document).unwrap();
 
     let output = fixture.run(&["play"]);
@@ -325,7 +338,7 @@ fn an_unknown_section_lists_the_known_ones_in_tab_order() {
             .contains(r#"no section named "play"; known sections: Work, Home"#)
     );
 
-    let unsectioned = r#"{"schema_version":5,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"a","status":"pending"}],"section_order":[]}"#;
+    let unsectioned = r#"{"schema_version":6,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"a","status":"pending"}],"section_order":[]}"#;
     fs::write(fixture.data.join("tasks.json"), unsectioned).unwrap();
 
     let output = fixture.run(&["work"]);

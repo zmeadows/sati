@@ -12,7 +12,7 @@ pub struct Task {
     #[serde(with = "utc_seconds")]
     pub created_at: OffsetDateTime,
     // The task's section, such as "Work". This field is the source of truth: `text` holds only
-    // the body, and "Work: " is just the syntax for typing and editing it (`display_text`).
+    // the body, and "Work: " is just the syntax for typing and editing it (`full_text`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
     pub text: String,
@@ -30,11 +30,11 @@ pub enum TaskStatus {
 }
 
 impl Task {
-    // A new, unfinished, uncarried task with a fresh UUID v4 and the current time, from text as
-    // typed: "Work: fix bug" becomes section "Work" with the body "fix bug".
+    // A new, unfinished, uncarried task with a fresh UUID v4 and the current time, from task
+    // input as typed: "Work: fix bug" becomes section "Work" with the body "fix bug".
     pub fn new(input: impl Into<String>) -> Self {
         let input = input.into();
-        let (section, text) = split_section(&input);
+        let (section, text) = parse_task_input(&input);
 
         Self {
             id: Uuid::new_v4(),
@@ -45,8 +45,8 @@ impl Task {
         }
     }
 
-    // The task as typed: "Work: fix bug", or just the body without a section.
-    pub fn display_text(&self) -> String {
+    // The full task text, as typed: "Work: fix bug", or just the body without a section.
+    pub fn full_text(&self) -> String {
         match &self.section {
             Some(section) => format!("{section}: {}", self.text),
             None => self.text.clone(),
@@ -126,26 +126,27 @@ pub(crate) fn single_line_character(character: char) -> char {
     }
 }
 
-// A section is a leading word followed by ": ", as in "Work: Fix bug". Requiring the
-// space keeps URLs ("https://...") and times ("10:30 call") from becoming sections.
-pub(crate) fn task_prefix(text: &str) -> Option<&str> {
+// The section name that task input starts with: a leading word followed by ": ", as in
+// "Work: Fix bug". Requiring the space keeps URLs ("https://...") and times ("10:30 call")
+// from becoming sections.
+pub(crate) fn input_section_name(text: &str) -> Option<&str> {
     let end = text.find(':')?;
-    let prefix = &text[..end];
+    let name = &text[..end];
 
-    let is_word = end > 0 && !prefix.chars().any(char::is_whitespace);
-    (is_word && text[end + 1..].starts_with(' ')).then_some(prefix)
+    let is_word = end > 0 && !name.chars().any(char::is_whitespace);
+    (is_word && text[end + 1..].starts_with(' ')).then_some(name)
 }
 
-// The task text shown inside its own section tab, without the "Work: " prefix.
-pub(crate) fn section_body(text: &str) -> &str {
-    task_prefix(text).map_or(text, |prefix| text[prefix.len() + 1..].trim_start())
+// The task body of task input, without any "Work: " section prefix.
+pub(crate) fn input_task_body(text: &str) -> &str {
+    input_section_name(text).map_or(text, |name| text[name.len() + 1..].trim_start())
 }
 
-// Split typed text into its section and body: "Work: fix bug" → (Some("Work"), "fix bug").
-pub(crate) fn split_section(input: &str) -> (Option<String>, String) {
-    let section = task_prefix(input).map(str::to_owned);
+// Split task input into its section and body: "Work: fix bug" → (Some("Work"), "fix bug").
+pub(crate) fn parse_task_input(input: &str) -> (Option<String>, String) {
+    let section = input_section_name(input).map(str::to_owned);
 
-    (section, section_body(input).to_owned())
+    (section, input_task_body(input).to_owned())
 }
 
 impl Task {
@@ -155,24 +156,26 @@ impl Task {
     }
 }
 
-// The section tab order for `tasks`, starting from `order`: keys that some task still uses
-// keep their places, and sections not listed yet follow in list order. This keeps the saved
-// order matching the tasks: a section's last task takes it out, and a new one goes last.
-pub(crate) fn settled_section_order(order: &[String], tasks: &[Task]) -> Vec<String> {
+// The section tab order for `tasks`, starting from a proposed `order`. A change to the tasks
+// can add, rename, or empty sections without touching the order, so it is reconciled with the
+// sections that actually exist: keys that some task still uses keep their places, and
+// sections not listed yet follow in list order. A section's last task takes it out, and a new
+// one goes last.
+pub(crate) fn reconcile_section_order(order: &[String], tasks: &[Task]) -> Vec<String> {
     let used: Vec<String> = tasks.iter().filter_map(Task::section_key).collect();
     let in_use: HashSet<&String> = used.iter().collect();
 
-    // The sets only answer membership; `settled` keeps the order.
+    // The sets only answer membership; `reconciled` keeps the order.
     let mut seen: HashSet<&String> = HashSet::new();
-    let mut settled: Vec<String> = Vec::new();
+    let mut reconciled: Vec<String> = Vec::new();
 
     for key in order.iter().chain(&used) {
         if in_use.contains(key) && seen.insert(key) {
-            settled.push(key.clone());
+            reconciled.push(key.clone());
         }
     }
 
-    settled
+    reconciled
 }
 
 // Tabs in display order for `tasks`: [*], [-] when some tasks have no section, then sections
@@ -219,7 +222,7 @@ pub(crate) fn section_tabs_of(
     tabs
 }
 
-pub(crate) fn view_shows(view: &SectionView, task: &Task) -> bool {
+pub(crate) fn view_includes_task(view: &SectionView, task: &Task) -> bool {
     match view {
         SectionView::All => true,
         SectionView::Named(key) => task.section_key().as_ref() == Some(key),
@@ -227,11 +230,13 @@ pub(crate) fn view_shows(view: &SectionView, task: &Task) -> bool {
     }
 }
 
-// The view that fits `tasks` when `view` is proposed with `selected`. A selection that left
-// the proposed tab pulls the view along to the task's own tab (an edit or undo moved it); a
-// tab that is gone otherwise falls back to [*]. Removals that empty a tab propose [*]
-// themselves. Mutations resolve this before saving, so the saved tab is the one shown.
-pub(crate) fn settled_view(
+// The active view that fits `tasks` when `view` is proposed with `selected`. A proposed view
+// can name a tab the change removed, or hide the task it selects, so it is reconciled with the
+// tabs that actually exist. A selection that left the proposed tab pulls the view along to the
+// task's own tab (an edit or undo moved it); a tab that is gone otherwise falls back to [*].
+// Removals that empty a tab propose [*] themselves. Mutations reconcile before saving, so the
+// saved tab is the one shown.
+pub(crate) fn reconcile_active_view(
     tasks: &[Task],
     section_order: &[String],
     view: &SectionView,
@@ -242,7 +247,7 @@ pub(crate) fn settled_view(
 
     if !tabs.is_empty()
         && let Some(task) = selected.and_then(|index| tasks.get(index))
-        && !view_shows(&view, task)
+        && !view_includes_task(&view, task)
     {
         view = match task.section_key() {
             Some(key) => SectionView::Named(key),
@@ -257,7 +262,7 @@ pub(crate) fn settled_view(
     view
 }
 
-// Which tasks are shown: all of them, one section (by lowercase key), or unsectioned ones.
+// Which tasks a tab shows: all of them, one section (by lowercase key), or unsectioned ones.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum SectionView {
     #[default]
@@ -267,7 +272,8 @@ pub enum SectionView {
 }
 
 impl SectionView {
-    // Saved in tasks.json: absent for all tasks, "" for unsectioned, else the key.
+    // Saved as `active_view` in tasks.json: absent for all tasks, "" for unsectioned, else the
+    // key.
     pub(crate) fn saved_key(&self) -> Option<&str> {
         match self {
             SectionView::All => None,

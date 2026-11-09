@@ -17,10 +17,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::Result;
-use crate::model::{Task, settled_section_order};
+use crate::model::{Task, reconcile_section_order};
 
 // The `tasks.json` format written by this build.
-const SCHEMA_VERSION: u64 = 5;
+const SCHEMA_VERSION: u64 = 6;
 
 // The oldest `tasks.json` format this build can still upgrade. Older files are refused.
 const OLDEST_SCHEMA_VERSION: u64 = 5;
@@ -34,17 +34,70 @@ type Migration = fn(Value) -> std::result::Result<Value, String>;
 // own typed struct with `deny_unknown_fields`, then build the next version, so unexpected or
 // malformed data is rejected instead of silently carried along. Migrations run in memory on
 // load; the upgraded document is written by the next save.
-const MIGRATIONS: [Migration; (SCHEMA_VERSION - OLDEST_SCHEMA_VERSION) as usize] = [];
+const MIGRATIONS: [Migration; (SCHEMA_VERSION - OLDEST_SCHEMA_VERSION) as usize] = [v5_to_v6];
 
+// Version 5 documents, the input of `v5_to_v6`. Migrations use their own types so they never
+// depend on today's `Task`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V5Document {
+    tasks: Vec<V5Task>,
+    #[serde(default)]
+    selected: Option<usize>,
+    // The active tab, which version 6 calls `active_view`.
+    #[serde(default)]
+    section: Option<String>,
+    #[serde(default)]
+    section_order: Vec<String>,
+}
+
+// Version 6 keeps this task shape, so `V5Task` is also how `v5_to_v6` writes tasks back out.
+// Every field passes through unchanged and is validated once the current `Task` is parsed.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct V5Task {
+    id: String,
+    created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    section: Option<String>,
+    text: String,
+    status: String,
+}
+
+// Version 6 renames the top-level `section`, the active tab, to `active_view`, so it can't be
+// mistaken for a task's own `section`.
+fn v5_to_v6(value: Value) -> std::result::Result<Value, String> {
+    #[derive(Serialize)]
+    struct V6Document {
+        tasks: Vec<V5Task>,
+        selected: Option<usize>,
+        active_view: Option<String>,
+        section_order: Vec<String>,
+    }
+
+    let document: V5Document = serde_json::from_value(value).map_err(|error| error.to_string())?;
+
+    let document = V6Document {
+        tasks: document.tasks,
+        selected: document.selected,
+        active_view: document.section,
+        section_order: document.section_order,
+    };
+
+    serde_json::to_value(document).map_err(|error| error.to_string())
+}
+
+// The complete checklist that `tasks.json` holds: the tasks and the navigation saved with them.
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TaskDocument {
+pub struct ChecklistDocument {
     pub tasks: Vec<Task>,
     #[serde(default)]
     pub selected: Option<usize>,
-    // The active section tab: absent for all tasks, "" for unsectioned, else a lowercase key.
+    // The active tab's filter: absent for all tasks, "" for unsectioned, else a lowercase key.
+    // Each task's own `section` says which section it is in.
     #[serde(default)]
-    pub section: Option<String>,
+    pub active_view: Option<String>,
     // Lowercase keys of the named section tabs, in display order; each task section once.
     #[serde(default)]
     pub section_order: Vec<String>,
@@ -144,14 +197,14 @@ impl Storage {
 
     #[cfg(test)]
     pub fn load(&self) -> Result<Vec<Task>> {
-        Ok(self.load_document()?.tasks)
+        Ok(self.load_checklist()?.tasks)
     }
 
-    pub fn load_document(&self) -> Result<TaskDocument> {
+    pub fn load_checklist(&self) -> Result<ChecklistDocument> {
         let contents = match fs::read(&self.path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(TaskDocument::default());
+                return Ok(ChecklistDocument::default());
             }
             Err(error) => {
                 return Err(format!("could not read {}: {error}", self.path.display()).into());
@@ -207,7 +260,7 @@ impl Storage {
             })?;
         }
 
-        let mut document: TaskDocument =
+        let mut document: ChecklistDocument =
             serde_json::from_value(value).map_err(|error| invalid_file(error.to_string()))?;
         document.needs_migration = version < SCHEMA_VERSION;
 
@@ -230,7 +283,7 @@ impl Storage {
         }
 
         // The order is part of the data, so a mismatch is reported rather than repaired.
-        let expected_order = settled_section_order(&document.section_order, &document.tasks);
+        let expected_order = reconcile_section_order(&document.section_order, &document.tasks);
 
         if document.section_order != expected_order {
             return Err(invalid_file(format!(
@@ -251,15 +304,17 @@ impl Storage {
 
     #[cfg(test)]
     pub fn save_selected(&self, tasks: &[Task], selected: Option<usize>) -> Result<()> {
-        self.save_view(tasks, &settled_section_order(&[], tasks), selected, None)
+        self.save_checklist(tasks, &reconcile_section_order(&[], tasks), selected, None)
     }
 
-    pub fn save_view(
+    // Replaces `tasks.json` with the complete checklist: the tasks, their section order, and the
+    // saved navigation. `active_view` is a `SectionView::saved_key`.
+    pub fn save_checklist(
         &self,
         tasks: &[Task],
         section_order: &[String],
         selected: Option<usize>,
-        section: Option<&str>,
+        active_view: Option<&str>,
     ) -> Result<()> {
         #[derive(Serialize)]
         struct Saved<'a> {
@@ -267,7 +322,7 @@ impl Storage {
             tasks: &'a [Task],
             selected: Option<usize>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            section: Option<&'a str>,
+            active_view: Option<&'a str>,
             section_order: &'a [String],
         }
 
@@ -277,7 +332,7 @@ impl Storage {
                 schema_version: SCHEMA_VERSION,
                 tasks,
                 selected: valid_selection(tasks, selected),
-                section,
+                active_view,
                 section_order,
             },
         )

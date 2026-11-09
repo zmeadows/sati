@@ -495,9 +495,11 @@ an interrupted save leaves the previous list rather than a partial file. Undo/re
 is session-only: exiting sati, even accidentally, discards it. Old `history.json` files
 are ignored and can be removed manually if desired.
 
-The task file stores the checklist, the selected task, the current section tab, and the
-order of the section tabs (`section_order`, the lowercase section names from left to
-right).
+The task file stores the checklist, the selected task, the active tab (`active_view`:
+absent for `[*]`, `""` for `[-]`, otherwise the lowercase section name), and the order of
+the section tabs (`section_order`, the lowercase section names from left to right).
+`active_view` only records which tab was open; each task's own `section` says which section
+it belongs to.
 Navigation is saved on normal quit; a crash may lose selection changes since the last
 task save.
 
@@ -510,14 +512,15 @@ its own `section` field, separate from its `text`; typing `Work: fix bug` sets t
 to `Work` and the text to `fix bug`, and the task is still shown, edited, and exported as
 `Work: fix bug`.
 
-The file starts with a `schema_version` (currently `5`). Files from older formats, including
-the original bare task lists, are no longer upgraded: sati refuses them and leaves them
-untouched, so open such a file once with an older sati release to upgrade it. Future format
-changes will be upgraded in memory when sati starts and written in the current format on
-the next save or normal quit; starting sati never rewrites the file by itself. A file
-written by a newer version of sati is refused and left untouched, as is any file that cannot
-be read (including a task with a missing or unknown `status`), that gives two tasks the
-same `id`, or whose `section_order` doesn't list each section exactly once.
+The file starts with a `schema_version` (currently `6`). Version 5 files, which named the
+active tab `section`, are upgraded in memory when sati starts and written as version 6 on
+the next save or normal quit; starting sati or running `sati export` never rewrites the file
+by itself. Files from formats before version 5, including the original bare task lists, are
+no longer upgraded: sati refuses them and leaves them untouched, so open such a file once
+with an older sati release to upgrade it. A file written by a newer version of sati is
+refused and left untouched, as is any file that cannot be read (including a task with a
+missing or unknown `status`), that gives two tasks the same `id`, or whose `section_order`
+doesn't list each section exactly once.
 
 ## Credits
 

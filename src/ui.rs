@@ -13,7 +13,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{App, Mode};
 use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
-use crate::model::{SectionView, Task, TaskStatus, task_prefix};
+use crate::model::{SectionView, Task, TaskStatus, input_section_name};
 use crate::styles::Styles;
 
 pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
@@ -388,26 +388,27 @@ fn fitting_tabs(widths: &[usize], start: usize, width: usize) -> usize {
     end
 }
 
-// Prepared once per draw; the row mapping is moved back to App for navigation.
+// Prepared once per draw; the row mapping is moved back to App for navigation. Each line is one
+// visual row, and `task_index_by_row` gives the task index drawn on each (none for an add row).
 struct TaskLayout {
     lines: Vec<Line<'static>>,
-    row_tasks: Vec<Option<usize>>,
+    task_index_by_row: Vec<Option<usize>>,
     input_row: Option<usize>,
-    selected_task: Option<usize>,
+    selected_task_index: Option<usize>,
 }
 
 fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
     let layout = prepare_task_layout(app, area.width);
-    let visible = update_task_viewport(app, &layout, area.height);
+    let visible_rows = update_task_viewport(app, &layout, area.height);
 
     let TaskLayout {
         lines,
-        row_tasks,
+        task_index_by_row,
         input_row,
         ..
     } = layout;
 
-    app.viewport.row_tasks = row_tasks;
+    app.viewport.task_index_by_row = task_index_by_row;
     let total_rows = lines.len();
 
     if lines.is_empty() {
@@ -422,8 +423,8 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(
             lines
                 .into_iter()
-                .skip(visible.start)
-                .take(visible.len())
+                .skip(visible_rows.start)
+                .take(visible_rows.len())
                 .collect::<Vec<_>>(),
         ),
         area,
@@ -432,10 +433,10 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         frame,
         area,
         total_rows,
-        visible.start,
+        visible_rows.start,
         app.appearance.styles().muted,
     );
-    draw_inline_input(frame, app, area, input_row, visible);
+    draw_inline_input(frame, app, area, input_row, visible_rows);
 }
 
 // When the rows don't fit, draw a thumb on the right border showing how much is visible and
@@ -476,7 +477,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
     };
 
     let mut lines = Vec::new();
-    let mut row_tasks = Vec::new();
+    let mut task_index_by_row = Vec::new();
     let mut input_row = None;
     let text_width = usize::from(width.saturating_sub(6));
 
@@ -486,7 +487,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
         {
             input_row = Some(lines.len());
             lines.push(Line::default());
-            row_tasks.push(editing.then_some(index));
+            task_index_by_row.push(editing.then_some(index));
 
             if editing {
                 continue;
@@ -497,7 +498,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
             break;
         };
 
-        if !app.is_visible(index) {
+        if !app.task_in_active_view(index) {
             continue;
         }
 
@@ -507,7 +508,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
         let shown = if in_section {
             task.text.clone()
         } else {
-            task.display_text()
+            task.full_text()
         };
 
         let text: String = shown
@@ -561,7 +562,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
         };
 
         for (row, (source, text)) in wrapped.into_iter().enumerate() {
-            row_tasks.push(Some(index));
+            task_index_by_row.push(Some(index));
 
             let prefix = if row > 0 {
                 "     "
@@ -631,9 +632,9 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
 
     TaskLayout {
         lines,
-        row_tasks,
+        task_index_by_row,
         input_row,
-        selected_task: selected,
+        selected_task_index: selected,
     }
 }
 
@@ -656,15 +657,15 @@ fn update_task_viewport(app: &mut App, layout: &TaskLayout, height: u16) -> Rang
     }
 
     let focus = layout.input_row.map(|row| (row, row + 1)).or_else(|| {
-        layout.selected_task.map(|selected| {
+        layout.selected_task_index.map(|selected| {
             let start = layout
-                .row_tasks
+                .task_index_by_row
                 .iter()
                 .position(|&task| task == Some(selected))
                 .unwrap_or(0);
 
             let end = layout
-                .row_tasks
+                .task_index_by_row
                 .iter()
                 .rposition(|&task| task == Some(selected))
                 .unwrap_or(start)
@@ -696,7 +697,7 @@ fn draw_inline_input(
     app: &App,
     area: Rect,
     input_row: Option<usize>,
-    visible: Range<usize>,
+    visible_rows: Range<usize>,
 ) {
     let inline = match &app.mode {
         Mode::Adding(input, _) => Some((input, "add")),
@@ -706,15 +707,15 @@ fn draw_inline_input(
 
     if let Some((input, label)) = inline
         && let Some(row) = input_row
-        && row >= visible.start
-        && row < visible.end
+        && row >= visible_rows.start
+        && row < visible_rows.end
     {
         let indent = area.width.saturating_sub(1).min(2);
         draw_input_line(
             frame,
             Rect::new(
                 area.x + indent,
-                area.y + (row - visible.start) as u16,
+                area.y + (row - visible_rows.start) as u16,
                 area.width - indent,
                 1,
             ),
@@ -951,8 +952,8 @@ fn draw_input_line(
     // section. The prefix ends at a grapheme boundary so a mark joined to its space stays
     // with it.
     let prefix_end = if bold_section_prefix {
-        task_prefix(text).map_or(0, |prefix| {
-            let space = prefix.len() + 1;
+        input_section_name(text).map_or(0, |name| {
+            let space = name.len() + 1;
             text.grapheme_indices(true)
                 .find(|(index, _)| *index == space)
                 .map_or(0, |(index, grapheme)| index + grapheme.len())

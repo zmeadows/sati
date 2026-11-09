@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     Result,
-    model::{SectionView, Task, TaskStatus, section_tabs_of, view_shows},
+    model::{SectionView, Task, TaskStatus, section_tabs_of, view_includes_task},
     storage::Storage,
 };
 
@@ -24,7 +24,7 @@ pub fn markdown(tasks: &[Task], include_sections: bool) -> String {
         output.push_str(checkbox);
 
         let text = if include_sections {
-            task.display_text()
+            task.full_text()
         } else {
             task.text.clone()
         };
@@ -66,7 +66,7 @@ pub fn run(data_dir: Option<&Path>, section: Option<&str>, unsectioned: bool) ->
     let storage = Storage::discover(data_dir)?;
     // Atomic task-file replacement allows a consistent read without the writer lock. Loading
     // validates the whole file, so an invalid one is reported rather than partly exported.
-    let document = storage.load_document()?;
+    let document = storage.load_checklist()?;
 
     // Clap rejects a section name together with `--unsectioned`.
     let view = match (section, unsectioned) {
@@ -91,7 +91,7 @@ pub fn run(data_dir: Option<&Path>, section: Option<&str>, unsectioned: bool) ->
     let tasks: Vec<Task> = document
         .tasks
         .into_iter()
-        .filter(|task| view_shows(&view, task))
+        .filter(|task| view_includes_task(&view, task))
         .collect();
     let contents = markdown(&tasks, !matches!(view, SectionView::Named(_)));
 

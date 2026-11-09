@@ -23,7 +23,7 @@ fn app_with_texts(texts: &[&str]) -> App {
 
 // Tasks as typed, including any "Name: " section prefix.
 fn texts(app: &App) -> Vec<String> {
-    app.tasks.iter().map(Task::display_text).collect()
+    app.tasks.iter().map(Task::full_text).collect()
 }
 
 fn press(app: &mut App, fixture: &Fixture, key: impl Into<KeyEvent>) -> bool {
@@ -76,75 +76,83 @@ fn restore_saves(fixture: &Fixture) {
 #[test]
 fn selection_migrates_on_clean_save_and_tracks_mutations_without_navigation_writes() {
     let fixture = Fixture::new();
-    let mut empty = App::from_document(fixture.storage.load_document().unwrap());
-    empty.save_selection(&fixture.storage).unwrap();
+    let mut empty = App::from_checklist_document(fixture.storage.load_checklist().unwrap());
+    empty
+        .persist_navigation_if_needed(&fixture.storage)
+        .unwrap();
 
     assert!(!fixture.task_path().exists());
 
+    // A version 5 file, which loading upgrades in memory without writing.
     let tasks = app_with_tasks(3).tasks;
-    fixture.storage.save(&tasks).unwrap();
+    let version_5 = serde_json::json!({
+        "schema_version": 5,
+        "tasks": tasks,
+        "selected": 0,
+        "section_order": [],
+    });
+    std::fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+    std::fs::write(fixture.task_path(), version_5.to_string()).unwrap();
     let original = std::fs::read(fixture.task_path()).unwrap();
 
-    // Stands in for a document that a registered migration upgraded in memory.
-    let mut document = fixture.storage.load_document().unwrap();
-    document.needs_migration = true;
-    let mut app = App::from_document(document);
+    let mut app = App::from_checklist_document(fixture.storage.load_checklist().unwrap());
 
+    assert!(app.persisted.needs_migration);
     assert_eq!(std::fs::read(fixture.task_path()).unwrap(), original);
 
     block_saves(&fixture);
-    assert!(app.save_selection(&fixture.storage).is_err());
+    assert!(app.persist_navigation_if_needed(&fixture.storage).is_err());
     assert!(app.persisted.needs_migration);
 
     restore_saves(&fixture);
-    app.save_selection(&fixture.storage).unwrap();
+    app.persist_navigation_if_needed(&fixture.storage).unwrap();
     assert!(!app.persisted.needs_migration && !app.can_undo());
-    assert!(!fixture.storage.load_document().unwrap().needs_migration);
+    assert!(!fixture.storage.load_checklist().unwrap().needs_migration);
 
     // A clean quit writes the migrated, versioned document.
     let saved = std::fs::read_to_string(fixture.task_path()).unwrap();
-    assert!(saved.contains("\"schema_version\": 5"), "{saved}");
+    assert!(saved.contains("\"schema_version\": 6"), "{saved}");
 
     app.list.select(Some(2));
-    assert_eq!(fixture.storage.load_document().unwrap().selected, Some(0));
+    assert_eq!(fixture.storage.load_checklist().unwrap().selected, Some(0));
 
     block_saves(&fixture);
-    assert!(app.save_selection(&fixture.storage).is_err());
+    assert!(app.persist_navigation_if_needed(&fixture.storage).is_err());
     assert_eq!(app.persisted.selected, Some(0));
     assert_eq!(app.list.selected(), Some(2));
 
     restore_saves(&fixture);
-    app.save_selection(&fixture.storage).unwrap();
-    let restarted = App::from_document(fixture.storage.load_document().unwrap());
+    app.persist_navigation_if_needed(&fixture.storage).unwrap();
+    let restarted = App::from_checklist_document(fixture.storage.load_checklist().unwrap());
 
     assert_eq!(restarted.list.selected(), Some(2));
     assert!(!restarted.can_undo() && !restarted.can_redo());
 
     block_saves(&fixture);
-    app.save_selection(&fixture.storage).unwrap(); // No redundant write.
+    app.persist_navigation_if_needed(&fixture.storage).unwrap(); // No redundant write.
     app.start_search();
     app.paste("task 0");
-    app.save_selection(&fixture.storage).unwrap(); // Original settled focus is still 2.
+    app.persist_navigation_if_needed(&fixture.storage).unwrap(); // Original settled focus is still 2.
     restore_saves(&fixture);
     app.finish_search(true);
-    app.save_selection(&fixture.storage).unwrap();
+    app.persist_navigation_if_needed(&fixture.storage).unwrap();
 
-    assert_eq!(fixture.storage.load_document().unwrap().selected, Some(0));
+    assert_eq!(fixture.storage.load_checklist().unwrap().selected, Some(0));
 
     app.list.select(Some(2));
     press(&mut app, &fixture, KeyCode::Char('d'));
-    assert_eq!(fixture.storage.load_document().unwrap().selected, Some(1));
+    assert_eq!(fixture.storage.load_checklist().unwrap().selected, Some(1));
 
     app.undo(&fixture.storage).unwrap();
-    assert_eq!(fixture.storage.load_document().unwrap().selected, Some(2));
+    assert_eq!(fixture.storage.load_checklist().unwrap().selected, Some(2));
 
     app.redo(&fixture.storage).unwrap();
-    assert_eq!(fixture.storage.load_document().unwrap().selected, Some(1));
+    assert_eq!(fixture.storage.load_checklist().unwrap().selected, Some(1));
 
     app.toggle(0, &fixture.storage).unwrap();
     app.undo(&fixture.storage).unwrap();
     block_saves(&fixture);
-    app.save_selection(&fixture.storage).unwrap();
+    app.persist_navigation_if_needed(&fixture.storage).unwrap();
     app.list.select(Some(0));
     let before = task_state(&app);
 
@@ -732,8 +740,8 @@ fn section_prefix_is_a_leading_word_followed_by_a_colon_and_space() {
         ("e\u{301}:\u{301} task", None, "e\u{301}:\u{301} task"),
         ("foo:bar:baz", None, "foo:bar:baz"),
     ] {
-        assert_eq!(task_prefix(text), expected, "{text}");
-        assert_eq!(section_body(text), body, "{text}");
+        assert_eq!(input_section_name(text), expected, "{text}");
+        assert_eq!(input_task_body(text), body, "{text}");
     }
 }
 
@@ -864,7 +872,7 @@ fn held_section_switches_repeat_but_held_section_moves_do_not() {
     repeat(&mut app, &fixture, KeyCode::Char('b'), KeyModifiers::ALT);
     assert_eq!(app.view, SectionView::Unsectioned);
 
-    app.show_section(SectionView::Named("home".into()));
+    app.select_tab(SectionView::Named("home".into()));
 
     for (code, modifiers) in [
         (KeyCode::Char('L'), KeyModifiers::SHIFT),
@@ -1093,7 +1101,7 @@ fn tab_and_control_n_p_step_through_picker_matches_and_wrap() {
 
     // From a section tab, stepping starts at that tab, and a held Tab keeps stepping.
     let mut app = picker_app();
-    app.show_section(named("home"));
+    app.select_tab(named("home"));
     press(&mut app, &fixture, KeyCode::Char('`'));
 
     press(&mut app, &fixture, KeyCode::Tab);
@@ -1160,9 +1168,9 @@ fn enter_keeps_the_previewed_section_without_history_or_saving() {
     assert!(!fixture.task_path().exists());
 
     // Like any navigation, the chosen tab is saved on a clean exit.
-    app.save_selection(&fixture.storage).unwrap();
+    app.persist_navigation_if_needed(&fixture.storage).unwrap();
     assert_eq!(
-        App::from_document(fixture.storage.load_document().unwrap()).view,
+        App::from_checklist_document(fixture.storage.load_checklist().unwrap()).view,
         named("wishlist")
     );
 }
@@ -1207,7 +1215,7 @@ fn saving_while_picking_keeps_the_view_from_before_the_picker() {
     press(&mut app, &fixture, KeyCode::Char('`'));
     type_keys(&mut app, &fixture, "wl");
 
-    app.save_selection(&fixture.storage).unwrap();
+    app.persist_navigation_if_needed(&fixture.storage).unwrap();
 
     assert!(!fixture.task_path().exists());
 }
@@ -1280,7 +1288,7 @@ fn task_shortcuts_and_clicks_only_type_into_the_section_picker() {
         &fixture,
         KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
     );
-    app.viewport.row_tasks = vec![Some(0), Some(1)];
+    app.viewport.task_index_by_row = vec![Some(0), Some(1)];
     app.mouse(
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -1329,7 +1337,7 @@ fn moving_a_section_swaps_named_tabs_as_one_change_and_keeps_tasks_and_view() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b", "Errands: c", "plain"]);
     let tasks = app.tasks.clone();
-    app.show_section(SectionView::Named("errands".into()));
+    app.select_tab(SectionView::Named("errands".into()));
 
     type_keys(&mut app, &fixture, "L");
     assert_eq!(app.section_order, ["home", "errands", "work"]);
@@ -1360,7 +1368,7 @@ fn moving_a_section_swaps_named_tabs_as_one_change_and_keeps_tasks_and_view() {
     assert_eq!(app.tasks, tasks);
     assert_eq!(app.view, SectionView::Named("errands".into()));
 
-    let saved = fixture.storage.load_document().unwrap();
+    let saved = fixture.storage.load_checklist().unwrap();
     assert_eq!(saved.section_order, ["home", "work", "errands"]);
     assert_eq!(saved.tasks, tasks);
 
@@ -1375,7 +1383,7 @@ fn moving_a_section_swaps_named_tabs_as_one_change_and_keeps_tasks_and_view() {
     );
     assert_eq!(app.section_order, ["home", "work", "errands"]);
     assert_eq!(
-        fixture.storage.load_document().unwrap().section_order,
+        fixture.storage.load_checklist().unwrap().section_order,
         app.section_order
     );
 }
@@ -1384,14 +1392,14 @@ fn moving_a_section_swaps_named_tabs_as_one_change_and_keeps_tasks_and_view() {
 fn a_counted_section_move_is_one_saved_and_undoable_change_that_stops_at_the_ends() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b", "Errands: c", "Gym: d"]);
-    app.show_section(SectionView::Named("errands".into()));
+    app.select_tab(SectionView::Named("errands".into()));
 
     type_keys(&mut app, &fixture, "2L");
 
     assert_eq!(app.section_order, ["gym", "home", "errands", "work"]);
     assert_eq!(app.history.len(), 1);
     assert_eq!(
-        fixture.storage.load_document().unwrap().section_order,
+        fixture.storage.load_checklist().unwrap().section_order,
         app.section_order
     );
 
@@ -1421,7 +1429,7 @@ fn a_counted_section_move_is_one_saved_and_undoable_change_that_stops_at_the_end
     );
     assert_eq!(app.section_order, ["gym", "home", "errands", "work"]);
     assert_eq!(
-        fixture.storage.load_document().unwrap().section_order,
+        fixture.storage.load_checklist().unwrap().section_order,
         app.section_order
     );
 }
@@ -1432,14 +1440,14 @@ fn sections_do_not_move_past_the_ends_or_from_the_all_and_unsectioned_tabs() {
     let mut app = app_with_texts(&["Work: a", "Home: b", "plain"]);
 
     for view in [SectionView::All, SectionView::Unsectioned] {
-        app.show_section(view);
+        app.select_tab(view);
         type_keys(&mut app, &fixture, "HL");
     }
 
-    app.show_section(SectionView::Named("home".into()));
+    app.select_tab(SectionView::Named("home".into()));
     type_keys(&mut app, &fixture, "H");
 
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
     type_keys(&mut app, &fixture, "L");
 
     assert_eq!(app.section_order, ["home", "work"]);
@@ -1466,7 +1474,7 @@ fn new_sections_join_at_the_end_and_leave_with_their_last_task() {
     press(&mut app, &fixture, KeyCode::Enter);
     assert_eq!(app.section_order, ["home", "alpha", "work"]);
     assert_eq!(
-        fixture.storage.load_document().unwrap().section_order,
+        fixture.storage.load_checklist().unwrap().section_order,
         app.section_order
     );
 }
@@ -1475,7 +1483,7 @@ fn new_sections_join_at_the_end_and_leave_with_their_last_task() {
 fn renaming_a_section_keeps_its_place_in_the_tab_order() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Alpha: a", "Beta: b", "Gamma: c"]);
-    app.show_section(SectionView::Named("alpha".into()));
+    app.select_tab(SectionView::Named("alpha".into()));
 
     press(&mut app, &fixture, KeyCode::Char('E'));
     type_rename(&mut app, &fixture, "Zulu");
@@ -1501,7 +1509,7 @@ fn reordering_tasks_never_changes_the_section_order() {
 fn navigation_and_jumps_stay_within_the_current_section() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: x", "Work: b", "plain", "Work: c"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     for (keys, expected) in [
         ("j", 2),
@@ -1522,7 +1530,7 @@ fn navigation_and_jumps_stay_within_the_current_section() {
 fn reordering_in_a_section_moves_past_its_own_tasks_as_one_change() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: x", "Work: b", "Home: y", "Work: c"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     press(&mut app, &fixture, KeyCode::Char('J'));
 
@@ -1555,7 +1563,7 @@ fn reordering_in_a_section_moves_past_its_own_tasks_as_one_change() {
 fn deleting_in_a_section_selects_a_neighbor_there_and_an_emptied_tab_shows_all() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: x", "Work: b"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     press(&mut app, &fixture, KeyCode::Char('d'));
 
@@ -1574,7 +1582,7 @@ fn deleting_in_a_section_selects_a_neighbor_there_and_an_emptied_tab_shows_all()
 fn changes_that_move_the_selection_out_of_a_tab_follow_it_to_its_section() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: x", "Work: b"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     press(&mut app, &fixture, KeyCode::Char('e'));
     press(&mut app, &fixture, KeyCode::Home);
@@ -1599,7 +1607,7 @@ fn changes_that_move_the_selection_out_of_a_tab_follow_it_to_its_section() {
 fn search_in_a_section_matches_only_its_tasks_and_ignores_the_prefix() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: fix", "Home: fix", "Work: other"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
     app.list.select(Some(2));
 
     press(&mut app, &fixture, KeyCode::Char('/'));
@@ -1615,7 +1623,7 @@ fn search_in_a_section_matches_only_its_tasks_and_ignores_the_prefix() {
     assert_eq!(app.list.selected(), None);
 
     press(&mut app, &fixture, KeyCode::Esc);
-    app.show_section(SectionView::All);
+    app.select_tab(SectionView::All);
     press(&mut app, &fixture, KeyCode::Char('/'));
     app.paste("work");
     assert_eq!(app.list.selected(), Some(0));
@@ -1628,7 +1636,7 @@ fn clearing_completed_in_a_section_affects_only_that_section() {
     for index in [0, 1, 3] {
         app.tasks[index].status = TaskStatus::Completed;
     }
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     press(&mut app, &fixture, KeyCode::Char('X'));
 
@@ -1644,7 +1652,7 @@ fn clearing_completed_in_a_section_affects_only_that_section() {
     assert_eq!(notice(&app), Some("Undid: clear 2 completed Work tasks"));
     assert_eq!(app.tasks.len(), 4);
 
-    app.show_section(SectionView::All);
+    app.select_tab(SectionView::All);
     press(&mut app, &fixture, KeyCode::Char('X'));
     assert_eq!(texts(&app), ["Work: c"]);
     assert_eq!(notice(&app), Some("Cleared 3 completed tasks"));
@@ -1655,7 +1663,7 @@ fn clearing_except_carried_in_a_section_keeps_other_sections_and_carried_tasks()
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c", "Work: d"]);
     app.tasks[2].status = TaskStatus::Carried;
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
     app.list.select(Some(3));
 
     press(&mut app, &fixture, KeyCode::Char('D'));
@@ -1671,7 +1679,7 @@ fn clearing_except_carried_in_a_section_keeps_other_sections_and_carried_tasks()
     assert_eq!(app.mode, Mode::Normal);
 
     let mut app = app_with_texts(&["Work: a", "Home: b"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     press(&mut app, &fixture, KeyCode::Char('D'));
     press(&mut app, &fixture, KeyCode::Enter);
@@ -1691,7 +1699,7 @@ fn copying_in_a_tab_copies_only_its_tasks_with_full_text() {
         (SectionView::Unsectioned, vec![1]),
         (SectionView::All, vec![0, 1, 2]),
     ] {
-        app.show_section(view);
+        app.select_tab(view);
         let mut output = Vec::new();
         app.copy_markdown(&mut output);
 
@@ -1719,7 +1727,7 @@ fn input_text(app: &App) -> &str {
 fn adding_on_a_section_tab_suggests_that_section_and_typing_accepts_it() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["work: a", "Home: b"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     press(&mut app, &fixture, KeyCode::Char('a'));
     assert_eq!(input_text(&app), "");
@@ -1735,7 +1743,7 @@ fn adding_on_a_section_tab_suggests_that_section_and_typing_accepts_it() {
     assert_eq!(app.view, SectionView::Named("work".into()));
     assert_eq!(app.list.selected(), Some(2));
 
-    app.show_section(SectionView::All);
+    app.select_tab(SectionView::All);
     press(&mut app, &fixture, KeyCode::Char('a'));
     assert_eq!(app.completion_ghost(), None);
 }
@@ -1744,7 +1752,7 @@ fn adding_on_a_section_tab_suggests_that_section_and_typing_accepts_it() {
 fn space_or_enter_accept_a_suggestion_and_backspace_dismisses_it() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     for accept in [KeyCode::Char(' '), KeyCode::Enter] {
         press(&mut app, &fixture, KeyCode::Char('o'));
@@ -1783,7 +1791,7 @@ fn space_or_enter_accept_a_suggestion_and_backspace_dismisses_it() {
 fn esc_and_ctrl_g_cancel_an_add_or_edit_even_while_a_suggestion_shows() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
     let tasks = app.tasks.clone();
     let selected = app.list.selected();
 
@@ -1903,7 +1911,7 @@ fn tab_cycles_matching_sections_on_empty_or_partial_input() {
 fn editing_an_erased_task_can_move_it_to_another_section() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     press(&mut app, &fixture, KeyCode::Char('e'));
     assert_eq!(input_text(&app), "Work: a");
@@ -1945,7 +1953,7 @@ fn bare_modifier(code: ModifierKeyCode, modifiers: KeyModifiers) -> KeyEvent {
 fn bare_modifier_and_lock_keys_keep_a_section_suggestion() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["work: a", "Home: b", "Errands: c"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     press(&mut app, &fixture, KeyCode::Char('a'));
 
@@ -1980,7 +1988,7 @@ fn bare_modifier_and_lock_keys_keep_a_section_suggestion() {
 fn shift_tab_and_ctrl_n_step_from_a_prefilled_suggestion_after_a_bare_modifier() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b", "Errands: c"]);
-    app.show_section(SectionView::Named("home".into()));
+    app.select_tab(SectionView::Named("home".into()));
 
     press(&mut app, &fixture, KeyCode::Char('a'));
     assert_eq!(app.completion_ghost().as_deref(), Some("Home: "));
@@ -2014,7 +2022,7 @@ fn shift_tab_and_ctrl_n_step_from_a_prefilled_suggestion_after_a_bare_modifier()
 fn only_keys_that_edit_or_move_the_cursor_drop_a_suggestion() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     press(&mut app, &fixture, KeyCode::Char('a'));
 
@@ -2087,7 +2095,7 @@ fn type_rename(app: &mut App, fixture: &Fixture, name: &str) {
 fn renaming_a_section_updates_every_task_in_it_and_follows_the_new_tab() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b", "work: c"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     press(&mut app, &fixture, KeyCode::Char('E'));
     assert_eq!(input_text(&app), "Work");
@@ -2100,16 +2108,16 @@ fn renaming_a_section_updates_every_task_in_it_and_follows_the_new_tab() {
     assert_eq!(app.view, SectionView::Named("job".into()));
     assert_eq!(notice(&app), Some("Renamed Work to Job (2 tasks)"));
 
-    let saved = fixture.storage.load_document().unwrap();
+    let saved = fixture.storage.load_checklist().unwrap();
     assert_eq!(saved.tasks, app.tasks);
-    assert_eq!(saved.section.as_deref(), Some("job"));
+    assert_eq!(saved.active_view.as_deref(), Some("job"));
 }
 
 #[test]
 fn renaming_to_a_taken_or_invalid_name_is_blocked_and_explained() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
     let original = app.tasks.clone();
     press(&mut app, &fixture, KeyCode::Char('E'));
 
@@ -2137,7 +2145,7 @@ fn the_rename_problem_is_shown_even_with_status_messages_off() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b"]);
     app.status_messages = false;
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
     press(&mut app, &fixture, KeyCode::Char('E'));
 
     type_rename(&mut app, &fixture, "Home");
@@ -2149,7 +2157,7 @@ fn the_rename_problem_is_shown_even_with_status_messages_off() {
 fn renaming_only_the_case_is_allowed_and_unifies_spellings() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["work: a", "Work: b"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
     press(&mut app, &fixture, KeyCode::Char('E'));
 
     type_rename(&mut app, &fixture, "WORK");
@@ -2164,7 +2172,7 @@ fn renaming_only_the_case_is_allowed_and_unifies_spellings() {
 fn confirming_an_unchanged_name_closes_the_input_without_a_change() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     press(&mut app, &fixture, KeyCode::Char('E'));
     press(&mut app, &fixture, KeyCode::Enter);
@@ -2178,7 +2186,7 @@ fn confirming_an_unchanged_name_closes_the_input_without_a_change() {
 fn escape_cancels_a_rename_without_changes() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
     press(&mut app, &fixture, KeyCode::Char('E'));
     type_rename(&mut app, &fixture, "Job");
 
@@ -2193,7 +2201,7 @@ fn escape_cancels_a_rename_without_changes() {
 fn a_rename_is_one_undo_step_and_undo_returns_to_the_old_tab() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
     press(&mut app, &fixture, KeyCode::Char('E'));
     type_rename(&mut app, &fixture, "Job");
     press(&mut app, &fixture, KeyCode::Enter);
@@ -2227,7 +2235,7 @@ fn the_rename_key_outside_a_named_tab_only_explains() {
         ),
     ] {
         let mut app = app_with_texts(&texts);
-        app.show_section(view);
+        app.select_tab(view);
 
         press(&mut app, &fixture, KeyCode::Char('E'));
 
@@ -2241,7 +2249,7 @@ fn a_failed_rename_save_keeps_the_tasks_tab_history_and_input() {
     let fixture = Fixture::new();
     std::fs::write(fixture.directory.join("data"), "blocking file").unwrap();
     let mut app = app_with_texts(&["Work: a"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
     let original = app.tasks.clone();
     press(&mut app, &fixture, KeyCode::Char('E'));
     type_rename(&mut app, &fixture, "Job");
@@ -2263,31 +2271,73 @@ fn the_section_tab_is_saved_and_restored_and_unknown_sections_fall_back_to_all()
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "plain"]);
     fixture.storage.save(&app.tasks).unwrap();
-    // In [*] the document has no active-tab `section` key (tasks still store theirs).
+    // In [*] the document has no `active_view` (tasks still store their own `section`).
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(fixture.task_path()).unwrap()).unwrap();
-    assert!(saved.get("section").is_none());
+    assert!(saved.get("active_view").is_none() && saved.get("section").is_none());
     assert_eq!(saved["tasks"][0]["section"], "Work");
 
     for (view, saved) in [
-        (SectionView::Named("work".into()), "\"section\": \"work\""),
-        (SectionView::Unsectioned, "\"section\": \"\""),
+        (
+            SectionView::Named("work".into()),
+            "\"active_view\": \"work\"",
+        ),
+        (SectionView::Unsectioned, "\"active_view\": \"\""),
     ] {
-        app.show_section(view.clone());
-        app.save_selection(&fixture.storage).unwrap();
+        app.select_tab(view.clone());
+        app.persist_navigation_if_needed(&fixture.storage).unwrap();
 
         let file = std::fs::read_to_string(fixture.task_path()).unwrap();
         assert!(file.contains(saved), "{file}");
 
-        let restored = App::from_document(fixture.storage.load_document().unwrap());
+        let restored = App::from_checklist_document(fixture.storage.load_checklist().unwrap());
         assert_eq!(restored.view, view);
     }
 
     let file = std::fs::read_to_string(fixture.task_path()).unwrap();
     std::fs::write(fixture.task_path(), file.replace("\"\"", "\"missing\"")).unwrap();
-    let restored = App::from_document(fixture.storage.load_document().unwrap());
+    let restored = App::from_checklist_document(fixture.storage.load_checklist().unwrap());
 
     assert_eq!(restored.view, SectionView::All);
+}
+
+#[test]
+fn a_version_5_active_tab_is_restored_and_a_clean_exit_saves_it_as_active_view() {
+    let fixture = Fixture::new();
+    let version_5 = serde_json::json!({
+        "schema_version": 5,
+        "tasks": app_with_texts(&["plain", "Work: a"]).tasks,
+        "selected": 1,
+        "section": "work",
+        "section_order": ["work"],
+    });
+    std::fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+    std::fs::write(fixture.task_path(), version_5.to_string()).unwrap();
+
+    let mut app = App::from_checklist_document(fixture.storage.load_checklist().unwrap());
+
+    assert_eq!(app.view, SectionView::Named("work".into()));
+    assert_eq!(app.list.selected(), Some(1));
+
+    // Nothing changed since loading, but the file is still upgraded on exit.
+    app.persist_navigation_if_needed(&fixture.storage).unwrap();
+
+    let mut expected = version_5;
+    let fields = expected.as_object_mut().unwrap();
+    let active_view = fields.remove("section").unwrap();
+    fields.insert("active_view".to_owned(), active_view);
+    fields.insert("schema_version".to_owned(), 6.into());
+
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture.task_path()).unwrap()).unwrap();
+    assert_eq!(saved, expected);
+
+    let reloaded = fixture.storage.load_checklist().unwrap();
+    assert!(!reloaded.needs_migration);
+    assert_eq!(
+        App::from_checklist_document(reloaded).view,
+        SectionView::Named("work".into())
+    );
 }
 
 #[test]
@@ -2353,9 +2403,9 @@ fn control_p_n_match_arrow_navigation_and_preserve_task_state() {
 
                 if let Some(index) = actual.list.selected() {
                     assert!(
-                        actual.viewport.row_tasks[actual.viewport.scroll
+                        actual.viewport.task_index_by_row[actual.viewport.scroll
                             ..(actual.viewport.scroll + usize::from(rows.height))
-                                .min(actual.viewport.row_tasks.len())]
+                                .min(actual.viewport.task_index_by_row.len())]
                             .contains(&Some(index))
                     );
                 }
@@ -2761,13 +2811,13 @@ const TAB_EMPTYING_KEYS: [&[KeyCode]; 3] = [
 fn app_on_a_tab_with_one_completed_task() -> App {
     let mut app = app_with_texts(&["Home: a", "Work: b"]);
     app.tasks[1].status = TaskStatus::Completed;
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     app
 }
 
 fn saved_view(fixture: &Fixture) -> SectionView {
-    App::from_document(fixture.storage.load_document().unwrap()).view
+    App::from_checklist_document(fixture.storage.load_checklist().unwrap()).view
 }
 
 #[test]
@@ -2851,13 +2901,13 @@ fn undo_and_redo_of_a_rename_follow_the_section_between_its_names() {
 fn undo_keeps_a_tab_chosen_manually_after_the_change() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Work: b", "Home: c"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     press(&mut app, &fixture, KeyCode::Char('d'));
     assert_eq!(app.view, SectionView::Named("work".into()));
 
     // The restored task is visible in [*], so nothing pulls the view back to Work.
-    app.show_section(SectionView::All);
+    app.select_tab(SectionView::All);
     press(&mut app, &fixture, KeyCode::Char('u'));
 
     assert_eq!(app.tasks.len(), 3);
@@ -2890,7 +2940,7 @@ fn a_failed_undo_keeps_the_view_tasks_and_both_histories() {
 
 fn app_on_work_with_three_sections() -> App {
     let mut app = app_with_texts(&["Work: a", "Home: b", "Personal: c"]);
-    app.show_section(SectionView::Named("work".into()));
+    app.select_tab(SectionView::Named("work".into()));
 
     app
 }
@@ -2903,7 +2953,7 @@ fn undo_keeps_a_manually_chosen_section_tab_and_selects_a_task_in_it() {
     press(&mut app, &fixture, KeyCode::Char('d'));
     assert_eq!(app.view, SectionView::All);
 
-    app.show_section(SectionView::Named("personal".into()));
+    app.select_tab(SectionView::Named("personal".into()));
     press(&mut app, &fixture, KeyCode::Char('u'));
 
     assert_eq!(texts(&app), ["Work: a", "Home: b", "Personal: c"]);
@@ -2922,7 +2972,7 @@ fn redo_keeps_a_section_tab_chosen_between_undo_and_redo() {
     press(&mut app, &fixture, KeyCode::Char('u'));
     assert_eq!(app.view, SectionView::Named("work".into()));
 
-    app.show_section(SectionView::Named("personal".into()));
+    app.select_tab(SectionView::Named("personal".into()));
     press(
         &mut app,
         &fixture,
@@ -3085,7 +3135,7 @@ fn carryover_completion_and_runtime_history_are_coherent() {
         assert!(app.can_redo());
 
         if action == KeyCode::Null {
-            app.viewport.row_tasks = vec![Some(0), Some(1)];
+            app.viewport.task_index_by_row = vec![Some(0), Some(1)];
             app.mouse(
                 MouseEvent {
                     kind: MouseEventKind::Down(MouseButton::Left),
@@ -4132,7 +4182,7 @@ fn page_keys_are_safe_at_boundaries_and_in_input_modes() {
 
     for count in [0, 1, 3] {
         let mut app = app_with_tasks(count);
-        app.viewport.row_tasks = (0..count).map(Some).collect();
+        app.viewport.task_index_by_row = (0..count).map(Some).collect();
         app.viewport.height = 2;
         let original = app.tasks.clone();
 
@@ -4328,8 +4378,10 @@ fn a_current_file_is_not_rewritten_without_changes() {
     fixture.storage.save(&app.tasks).unwrap();
     let saved = std::fs::read(fixture.task_path()).unwrap();
 
-    let mut loaded = App::from_document(fixture.storage.load_document().unwrap());
-    loaded.save_selection(&fixture.storage).unwrap();
+    let mut loaded = App::from_checklist_document(fixture.storage.load_checklist().unwrap());
+    loaded
+        .persist_navigation_if_needed(&fixture.storage)
+        .unwrap();
 
     assert_eq!(loaded.tasks, app.tasks);
     assert_eq!(std::fs::read(fixture.task_path()).unwrap(), saved);
@@ -4374,7 +4426,7 @@ fn typed_prefixes_set_the_section_field_and_edits_or_pastes_keep_it_consistent()
     }
 
     // Yank and paste carry the section through the typed form.
-    app.show_section(SectionView::All);
+    app.select_tab(SectionView::All);
     type_keys(&mut app, &fixture, "yp");
     assert_eq!(app.tasks[1].section.as_deref(), Some("Work"));
     assert_ne!(app.tasks[1].id, id);
@@ -4984,7 +5036,7 @@ fn undo_restores_list_and_selection_for_every_modification() {
         assert_ne!(app.tasks, original);
 
         let modified = app.tasks.clone();
-        app.navigate(true, None);
+        app.move_task_selection(true, None);
         let selected_before_undo = app.list.selected();
         press(&mut app, &fixture, Char('u'));
 
@@ -5386,9 +5438,11 @@ fn mixed_mutations_undo_in_order_and_reveal_restored_wrapped_selection() {
             .unwrap();
 
         if let Some(selected) = selected {
-            let end =
-                (app.viewport.scroll + usize::from(rows.height)).min(app.viewport.row_tasks.len());
-            assert!(app.viewport.row_tasks[app.viewport.scroll..end].contains(&Some(selected)));
+            let end = (app.viewport.scroll + usize::from(rows.height))
+                .min(app.viewport.task_index_by_row.len());
+            assert!(
+                app.viewport.task_index_by_row[app.viewport.scroll..end].contains(&Some(selected))
+            );
         }
     }
 
@@ -5795,7 +5849,7 @@ fn positional_insertions_preserve_order_selection_and_history() {
                 .unwrap();
 
             assert_eq!(
-                app.viewport.row_tasks[app.viewport.scroll],
+                app.viewport.task_index_by_row[app.viewport.scroll],
                 Some(expected_index)
             );
 
@@ -5974,7 +6028,7 @@ fn only_enter_confirms_clear() {
 fn mouse_toggle_undo_restores_the_selection_before_the_click() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(3);
-    app.viewport.row_tasks = vec![Some(0), Some(1), Some(2)];
+    app.viewport.task_index_by_row = vec![Some(0), Some(1), Some(2)];
     let original = app.tasks.clone();
 
     let click = MouseEvent {
@@ -6002,7 +6056,7 @@ fn mouse_toggle_failure_preserves_selection_and_existing_undo() {
     for has_previous in [false, true] {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(3);
-        app.viewport.row_tasks = vec![Some(0), Some(1), Some(2)];
+        app.viewport.task_index_by_row = vec![Some(0), Some(1), Some(2)];
         let original = app.tasks.clone();
 
         if has_previous {
@@ -6057,7 +6111,7 @@ fn mouse_uses_visible_rows_and_ignores_borders_and_modal_input() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(10);
     app.viewport.scroll = 5;
-    app.viewport.row_tasks = (0..10).map(Some).collect();
+    app.viewport.task_index_by_row = (0..10).map(Some).collect();
     let rows = Rect::new(1, 1, 30, 3);
 
     let click = |column, row| MouseEvent {
@@ -6152,9 +6206,9 @@ fn emacs_aliases_match_their_normal_mode_keys() {
         ];
 
         for app in &mut apps {
-            app.show_section(SectionView::Named("work".into()));
+            app.select_tab(SectionView::Named("work".into()));
             app.list.select(Some(1));
-            app.viewport.row_tasks = (0..5).map(Some).collect();
+            app.viewport.task_index_by_row = (0..5).map(Some).collect();
             app.viewport.height = 2;
         }
 
@@ -6188,7 +6242,7 @@ fn emacs_aliases_leave_text_inputs_unchanged() {
 
     for start in [KeyCode::Char('a'), KeyCode::Char('e'), KeyCode::Char('/')] {
         let mut app = app_with_tasks(3);
-        app.viewport.row_tasks = (0..3).map(Some).collect();
+        app.viewport.task_index_by_row = (0..3).map(Some).collect();
         app.viewport.height = 1;
         press(&mut app, &fixture, start);
         let selected = app.list.selected();
@@ -6217,7 +6271,7 @@ fn emacs_aliases_leave_text_inputs_unchanged() {
 fn page_aliases_repeat_while_mode_changing_aliases_fire_once() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(6);
-    app.viewport.row_tasks = (0..6).map(Some).collect();
+    app.viewport.task_index_by_row = (0..6).map(Some).collect();
     app.viewport.height = 2;
     app.list.select(Some(0));
 
@@ -6293,7 +6347,7 @@ fn ctrl_s_starts_a_search_like_slash_and_ctrl_f() {
 fn ctrl_d_and_ctrl_u_move_half_a_page_and_stop_at_the_ends() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(10);
-    app.viewport.row_tasks = (0..10).map(Some).collect();
+    app.viewport.task_index_by_row = (0..10).map(Some).collect();
     app.viewport.height = 4;
     app.list.select(Some(0));
     let original = app.tasks.clone();
@@ -6329,7 +6383,7 @@ fn half_pages_move_at_least_one_row_in_tiny_or_undrawn_viewports() {
 
     for height in [0, 1] {
         let mut app = app_with_tasks(3);
-        app.viewport.row_tasks = (0..3).map(Some).collect();
+        app.viewport.task_index_by_row = (0..3).map(Some).collect();
         app.viewport.height = height;
         app.list.select(Some(0));
 
@@ -6361,7 +6415,7 @@ fn half_pages_move_at_least_one_row_in_tiny_or_undrawn_viewports() {
 fn held_ctrl_d_and_ctrl_u_keep_moving() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(6);
-    app.viewport.row_tasks = (0..6).map(Some).collect();
+    app.viewport.task_index_by_row = (0..6).map(Some).collect();
     app.viewport.height = 4;
     app.list.select(Some(0));
 
@@ -6436,7 +6490,7 @@ fn ctrl_k_deletes_to_the_end_in_every_text_input() {
         KeyCode::Char('`'),
     ] {
         let mut app = app_with_texts(&["Work: alpha", "Work: beta"]);
-        app.show_section(SectionView::Named("work".into()));
+        app.select_tab(SectionView::Named("work".into()));
         press(&mut app, &fixture, start);
         app.paste("xyz");
         press(&mut app, &fixture, KeyCode::Home);
@@ -6520,7 +6574,7 @@ fn question_mark_esc_and_ctrl_g_each_close_the_reference_without_changing_anythi
         KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
     ] {
         let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c"]);
-        app.show_section(SectionView::Named("work".into()));
+        app.select_tab(SectionView::Named("work".into()));
         press(&mut app, &fixture, KeyCode::Char('j'));
         app.viewport.scroll = 1;
         app.viewport.reveal_selection = false;
@@ -6669,7 +6723,7 @@ fn question_mark_is_text_in_every_input_mode() {
         KeyEvent::from(KeyCode::Char('`')),
     ] {
         let mut app = app_with_texts(&["Work: a"]);
-        app.show_section(SectionView::Named("work".into()));
+        app.select_tab(SectionView::Named("work".into()));
         press(&mut app, &fixture, start);
         press(&mut app, &fixture, KeyCode::Char('?'));
         press(
@@ -6695,7 +6749,7 @@ fn question_mark_is_text_in_every_input_mode() {
 fn mouse_clicks_are_ignored_and_the_wheel_scrolls_while_the_reference_is_open() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "b"]);
-    app.viewport.row_tasks = vec![Some(0), Some(1)];
+    app.viewport.task_index_by_row = vec![Some(0), Some(1)];
     app.viewport.tab_targets = vec![(Rect::new(1, 0, 5, 1), SectionView::Named("work".into()))];
     let before = task_state(&app);
     let rows = Rect::new(1, 1, 20, 2);

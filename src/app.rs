@@ -13,9 +13,9 @@ use crate::Result;
 use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
 use crate::model::{
-    SectionView, Task, TaskStatus, invalid_section_name, section_body, section_tabs_of,
-    settled_section_order, settled_view, single_line_character, split_section, task_prefix,
-    view_shows,
+    SectionView, Task, TaskStatus, input_section_name, input_task_body, invalid_section_name,
+    parse_task_input, reconcile_active_view, reconcile_section_order, section_tabs_of,
+    single_line_character, view_includes_task,
 };
 use crate::status_message::StatusMessage;
 use crate::storage::Storage;
@@ -37,7 +37,8 @@ fn task_noun(count: usize) -> &'static str {
 // chosen section with nothing after it.
 fn submitted_task_text(input: &TextInput) -> Option<String> {
     let text = input.text().trim();
-    let bare_section = task_prefix(input.text()).is_some() && section_body(input.text()).is_empty();
+    let bare_section =
+        input_section_name(input.text()).is_some() && input_task_body(input.text()).is_empty();
 
     (!text.is_empty() && !bare_section).then(|| text.to_owned())
 }
@@ -167,7 +168,7 @@ impl Persisted {
         selected: Option<usize>,
         view: &SectionView,
     ) -> Result<()> {
-        storage.save_view(tasks, section_order, selected, view.saved_key())?;
+        storage.save_checklist(tasks, section_order, selected, view.saved_key())?;
 
         self.selected = crate::storage::valid_selection(tasks, selected);
         self.view = view.clone();
@@ -186,8 +187,9 @@ impl Persisted {
 pub(crate) struct ViewportState {
     pub(crate) scroll: usize,
     pub(crate) reveal_selection: bool,
-    // The task on each list row, for paging and clicks; an inline add row has none.
-    pub(crate) row_tasks: Vec<Option<usize>>,
+    // The task index on each visual row of the task list, for paging and clicks; an inline
+    // add row has none.
+    pub(crate) task_index_by_row: Vec<Option<usize>>,
     // The list rows that fit, for paging.
     pub(crate) height: u16,
     // Clickable tab regions.
@@ -198,7 +200,7 @@ pub(crate) struct ViewportState {
 
 pub struct App {
     pub tasks: Vec<Task>,
-    // Lowercase keys of the named section tabs in display order; see `settled_section_order`.
+    // Lowercase keys of the named section tabs in display order; see `reconcile_section_order`.
     pub section_order: Vec<String>,
     pub list: ListState,
     pub mode: Mode,
@@ -235,7 +237,7 @@ impl App {
         let selected = (!tasks.is_empty()).then_some(0);
         // Without a saved order, tabs start alphabetically, as they were before orders were
         // saved.
-        let mut section_order = settled_section_order(&[], &tasks);
+        let mut section_order = reconcile_section_order(&[], &tasks);
         section_order.sort();
 
         Self {
@@ -255,7 +257,7 @@ impl App {
             viewport: ViewportState {
                 scroll: 0,
                 reveal_selection: true,
-                row_tasks: Vec::new(),
+                task_index_by_row: Vec::new(),
                 height: 0,
                 tab_targets: Vec::new(),
                 tab_scroll: 0,
@@ -275,11 +277,11 @@ impl App {
         }
     }
 
-    pub fn from_document(document: crate::storage::TaskDocument) -> Self {
+    pub fn from_checklist_document(document: crate::storage::ChecklistDocument) -> Self {
         let mut app = Self::new(document.tasks);
         app.section_order = document.section_order;
         app.list.select(document.selected);
-        app.view = SectionView::from_saved_key(document.section);
+        app.view = SectionView::from_saved_key(document.active_view);
         app.persisted = Persisted {
             selected: document.selected,
             view: app.view.clone(),
@@ -290,12 +292,15 @@ impl App {
             app.view = SectionView::All;
         }
 
-        app.settle_view();
+        app.reconcile_active_view();
 
         app
     }
 
-    pub fn save_selection(&mut self, storage: &Storage) -> Result<()> {
+    // Writes the complete checklist when the selection or active view differs from what
+    // tasks.json holds, or when the file was loaded from an older schema. Mutations save
+    // themselves; this catches navigation and migration on a clean exit.
+    pub fn persist_navigation_if_needed(&mut self, storage: &Storage) -> Result<()> {
         // Temporary search and section-picker focus is never saved.
         let (selected, view) = match &self.mode {
             Mode::Searching { original, .. } => (*original, self.view.clone()),
@@ -320,13 +325,15 @@ impl App {
         section_tabs_of(&self.tasks, &self.section_order)
     }
 
-    pub fn is_visible(&self, index: usize) -> bool {
-        view_shows(&self.view, &self.tasks[index])
+    // Whether the task at `index` belongs to the active view, whether or not it is on screen.
+    pub fn task_in_active_view(&self, index: usize) -> bool {
+        view_includes_task(&self.view, &self.tasks[index])
     }
 
-    fn visible_indices(&self) -> Vec<usize> {
+    // Indices into `tasks` of the tasks in the active view, in list order.
+    fn active_view_task_indices(&self) -> Vec<usize> {
         (0..self.tasks.len())
-            .filter(|&index| self.is_visible(index))
+            .filter(|&index| self.task_in_active_view(index))
             .collect()
     }
 
@@ -336,13 +343,13 @@ impl App {
 
         match self.view {
             SectionView::Named(_) => task.text.as_str().into(),
-            _ => task.display_text().into(),
+            _ => task.full_text().into(),
         }
     }
 
-    // Keep a loaded view valid; see `settled_view`.
-    fn settle_view(&mut self) {
-        self.view = settled_view(
+    // Keep a loaded view valid; see `model::reconcile_active_view`.
+    fn reconcile_active_view(&mut self) {
+        self.view = crate::model::reconcile_active_view(
             &self.tasks,
             &self.section_order,
             &self.view,
@@ -384,13 +391,13 @@ impl App {
         }
 
         let from = self.position();
-        self.show_section(target.view);
+        self.select_tab(target.view);
 
-        // A task deleted or moved out of the tab since leaves `show_section`'s choice.
+        // A task deleted or moved out of the tab since leaves `select_tab`'s choice.
         if let Some(index) = target
             .task
             .and_then(|id| self.tasks.iter().position(|task| task.id == id))
-            && self.is_visible(index)
+            && self.task_in_active_view(index)
         {
             self.list.select(Some(index));
         }
@@ -398,23 +405,26 @@ impl App {
         self.previous_position = Some(from);
     }
 
-    // Previews in the section picker call this too, so it does not record a jump itself.
-    pub fn show_section(&mut self, view: SectionView) {
+    // Shows the tab for `view`. The selection stays when its task is in that tab and otherwise
+    // moves to the tab's first task. Previews in the section picker call this too, so it does
+    // not record a jump itself.
+    pub fn select_tab(&mut self, view: SectionView) {
         self.view = view;
 
-        let selection_visible = self
+        let selection_in_view = self
             .list
             .selected()
-            .is_some_and(|index| index < self.tasks.len() && self.is_visible(index));
+            .is_some_and(|index| index < self.tasks.len() && self.task_in_active_view(index));
 
-        if !selection_visible {
-            self.list.select(self.visible_indices().first().copied());
+        if !selection_in_view {
+            self.list
+                .select(self.active_view_task_indices().first().copied());
         }
 
         self.viewport.reveal_selection = true;
     }
 
-    fn cycle_section(&mut self, forward: bool, count: Option<usize>) {
+    fn cycle_tab(&mut self, forward: bool, count: Option<usize>) {
         let tabs = self.section_tabs();
 
         if tabs.is_empty() {
@@ -428,7 +438,8 @@ impl App {
             .position(|(view, _)| *view == self.view)
             .unwrap_or(0);
 
-        // Like `navigate`, a counted motion stops at the ends; a plain motion wraps around.
+        // Like `move_task_selection`, a counted motion stops at the ends; a plain motion wraps
+        // around.
         let last = tabs.len() - 1;
         let next = match (count, forward) {
             (Some(count), true) => current.saturating_add(count).min(last),
@@ -440,12 +451,12 @@ impl App {
         };
 
         let from = self.position();
-        self.show_section(tabs[next].0.clone());
+        self.select_tab(tabs[next].0.clone());
         self.record_jump(from);
     }
 
     // `s1` through `s9` pick the first nine tabs in display order and `s0` the tenth.
-    fn jump_to_section(&mut self, digit: char) {
+    fn jump_to_tab(&mut self, digit: char) {
         let position = match digit.to_digit(10) {
             Some(0) => 9,
             Some(number) => number as usize - 1,
@@ -454,14 +465,14 @@ impl App {
 
         if let Some((view, _)) = self.section_tabs().get(position) {
             let from = self.position();
-            self.show_section(view.clone());
+            self.select_tab(view.clone());
             self.record_jump(from);
         }
     }
 
     // Section tabs whose names fuzzy-match `query`, best first. Equal scores, and an empty
     // query, keep the tab order. [-] is found as "unsectioned", and [*] is never a match.
-    fn section_matches(&self, query: &str) -> Vec<SectionView> {
+    fn matching_section_tabs(&self, query: &str) -> Vec<SectionView> {
         let candidates: Vec<(SectionView, String)> = self
             .section_tabs()
             .into_iter()
@@ -519,7 +530,7 @@ impl App {
 
         self.mode = Mode::FuzzySection {
             input: TextInput::default(),
-            matches: self.section_matches(""),
+            matches: self.matching_section_tabs(""),
             matched_query: String::new(),
             original,
         };
@@ -543,7 +554,7 @@ impl App {
         }
 
         let query = input.text().to_owned();
-        let found = self.section_matches(&query);
+        let found = self.matching_section_tabs(&query);
         let best = found.first().cloned();
 
         if let Mode::FuzzySection {
@@ -557,7 +568,7 @@ impl App {
         }
 
         if let Some(best) = best {
-            self.show_section(best);
+            self.select_tab(best);
         }
     }
 
@@ -583,7 +594,7 @@ impl App {
         };
 
         let view = matches[next].clone();
-        self.show_section(view);
+        self.select_tab(view);
     }
 
     // Accepting keeps the previewed tab, saved on a clean exit like any other navigation.
@@ -610,7 +621,7 @@ impl App {
 
     // Move the current section tab `count` places. [*] and [-] stay where they are, and the
     // ends do not wrap around.
-    fn move_section(&mut self, right: bool, count: usize, storage: &Storage) -> Result<()> {
+    fn move_section_tab(&mut self, right: bool, count: usize, storage: &Storage) -> Result<()> {
         let SectionView::Named(key) = &self.view else {
             return Ok(());
         };
@@ -637,7 +648,7 @@ impl App {
         section_order.insert(target, moved);
 
         // Only the tab order changes; the tasks and their order in [*] stay as they are.
-        self.replace_with(
+        self.commit_checklist_change(
             self.tasks.clone(),
             section_order,
             self.view.clone(),
@@ -735,19 +746,20 @@ impl App {
         Some(format!("{}: ", &label[start..]))
     }
 
-    pub fn navigate(&mut self, forward: bool, count: Option<usize>) {
-        let visible = self.visible_indices();
+    // Moves the selection to the next or previous task in the active view.
+    pub fn move_task_selection(&mut self, forward: bool, count: Option<usize>) {
+        let view_tasks = self.active_view_task_indices();
 
-        if visible.is_empty() {
+        if view_tasks.is_empty() {
             return;
         }
 
-        // Positions within the visible tasks; in [*] they equal task indices.
-        let last = visible.len() - 1;
+        // Positions within the active view's tasks; in [*] they equal task indices.
+        let last = view_tasks.len() - 1;
         let current = self
             .list
             .selected()
-            .and_then(|selected| visible.iter().position(|&index| index == selected))
+            .and_then(|selected| view_tasks.iter().position(|&index| index == selected))
             .unwrap_or(0);
 
         // Like Vim, a counted motion stops at the ends; a plain motion wraps around.
@@ -760,7 +772,7 @@ impl App {
             (None, false) => current - 1,
         };
 
-        self.list.select(Some(visible[next]));
+        self.list.select(Some(view_tasks[next]));
         self.viewport.reveal_selection = true;
     }
 
@@ -786,36 +798,37 @@ impl App {
         let mut tasks = self.tasks.clone();
         tasks.insert(index, Task::new(text));
 
-        self.replace(tasks, Some(index), label, storage)
+        self.commit_task_change(tasks, Some(index), label, storage)
     }
 
     // Moves the selection and the view by `rows` visual rows: a full viewport for Page Up/Down,
     // half of one for Ctrl+U/D.
-    fn page(&mut self, forward: bool, rows: usize) {
-        let visible = self.visible_indices();
+    fn move_selection_by_rows(&mut self, forward: bool, rows: usize) {
+        let view_tasks = self.active_view_task_indices();
 
-        if visible.is_empty() {
+        if view_tasks.is_empty() {
             return;
         }
 
-        let position = |task: usize| visible.iter().position(|&index| index == task);
-        let last = visible.len() - 1;
-        let current = self.list.selected().unwrap_or(visible[0]);
+        let position = |task: usize| view_tasks.iter().position(|&index| index == task);
+        let last = view_tasks.len() - 1;
+        let current = self.list.selected().unwrap_or(view_tasks[0]);
         let current_position = position(current).unwrap_or(0);
 
         let start = self
             .viewport
-            .row_tasks
+            .task_index_by_row
             .iter()
             .position(|&task| task == Some(current))
             .unwrap_or(0);
 
         // Anchor within a tall task when its beginning has scrolled offscreen.
-        let anchor = if self.viewport.row_tasks.get(self.viewport.scroll) == Some(&Some(current)) {
-            self.viewport.scroll
-        } else {
-            start
-        };
+        let anchor =
+            if self.viewport.task_index_by_row.get(self.viewport.scroll) == Some(&Some(current)) {
+                self.viewport.scroll
+            } else {
+                start
+            };
 
         // A very short (or not yet drawn) viewport still moves by at least one row.
         let rows = rows.max(1);
@@ -828,8 +841,8 @@ impl App {
 
         let candidate = self
             .viewport
-            .row_tasks
-            .get(target.min(self.viewport.row_tasks.len().saturating_sub(1)))
+            .task_index_by_row
+            .get(target.min(self.viewport.task_index_by_row.len().saturating_sub(1)))
             .copied()
             .flatten()
             .and_then(position)
@@ -844,7 +857,7 @@ impl App {
         };
 
         if next != current_position {
-            self.list.select(Some(visible[next]));
+            self.list.select(Some(view_tasks[next]));
             self.viewport.scroll = if forward {
                 self.viewport.scroll.saturating_add(rows)
             } else {
@@ -854,7 +867,9 @@ impl App {
         }
     }
 
-    fn replace(
+    // Commits a change to the tasks that keeps the current section order and tab as proposed;
+    // see `commit_checklist_change`.
+    fn commit_task_change(
         &mut self,
         tasks: Vec<Task>,
         selected: Option<usize>,
@@ -864,15 +879,17 @@ impl App {
         let section_order = self.section_order.clone();
         let view = self.view.clone();
 
-        self.replace_with(tasks, section_order, view, selected, label, storage)
+        self.commit_checklist_change(tasks, section_order, view, selected, label, storage)
     }
 
-    // Update memory only after a successful save. Any save error exits the event loop;
-    // after a post-replacement error, the next run reloads the file already on disk.
-    // `view` is the tab the change switches to (e.g. [*] once a tab empties); it is saved
-    // with the tasks and, like them, only takes effect once the save succeeds.
-    // `section_order` is settled against `tasks`, so new sections join at the end.
-    fn replace_with(
+    // Saves a proposed checklist, then makes it current and records one undo step. The section
+    // order and view are reconciled with `tasks` first, so new sections join at the end and the
+    // saved tab is the one shown. `view` is the tab the change switches to (e.g. [*] once a tab
+    // empties).
+    //
+    // Memory changes only after a successful save. Any save error exits the event loop; after
+    // a post-replacement error, the next run reloads the file already on disk.
+    fn commit_checklist_change(
         &mut self,
         tasks: Vec<Task>,
         section_order: Vec<String>,
@@ -881,8 +898,8 @@ impl App {
         label: impl Into<String>,
         storage: &Storage,
     ) -> Result<()> {
-        let section_order = settled_section_order(&section_order, &tasks);
-        let view = settled_view(&tasks, &section_order, &view, selected);
+        let section_order = reconcile_section_order(&section_order, &tasks);
+        let view = reconcile_active_view(&tasks, &section_order, &view, selected);
 
         self.persisted
             .save(storage, &tasks, &section_order, selected, &view)?;
@@ -968,7 +985,8 @@ impl App {
 
         let anchor = original.unwrap_or(0).min(self.tasks.len());
         let selected = (anchor..self.tasks.len()).chain(0..anchor).find(|&index| {
-            self.is_visible(index) && crate::search::matches(&self.search_text(index), input.text())
+            self.task_in_active_view(index)
+                && crate::search::matches(&self.search_text(index), input.text())
         });
         self.list.select(selected);
         self.viewport.reveal_selection = true;
@@ -977,7 +995,8 @@ impl App {
     fn find_search_result(&self, query: &str, forward: bool) -> Option<usize> {
         let len = self.tasks.len();
         let matches = |&index: &usize| {
-            self.is_visible(index) && crate::search::matches(&self.search_text(index), query)
+            self.task_in_active_view(index)
+                && crate::search::matches(&self.search_text(index), query)
         };
 
         if forward {
@@ -1051,7 +1070,7 @@ impl App {
         // since the change. Otherwise keep their tab ([*] if it no longer exists) and move
         // the selection into it, so a task from another tab cannot pull the view away.
         let (view, selected) = if self.view == previous.left_view {
-            let view = settled_view(
+            let view = reconcile_active_view(
                 &previous.tasks,
                 &previous.section_order,
                 &previous.view,
@@ -1060,15 +1079,16 @@ impl App {
 
             (view, selected)
         } else {
-            let view = settled_view(&previous.tasks, &previous.section_order, &self.view, None);
+            let view =
+                reconcile_active_view(&previous.tasks, &previous.section_order, &self.view, None);
 
             let selected = selected
-                .filter(|&index| view_shows(&view, &previous.tasks[index]))
+                .filter(|&index| view_includes_task(&view, &previous.tasks[index]))
                 .or_else(|| {
                     previous
                         .tasks
                         .iter()
-                        .position(|task| view_shows(&view, task))
+                        .position(|task| view_includes_task(&view, task))
                 });
 
             (view, selected)
@@ -1130,7 +1150,7 @@ impl App {
         tasks[index].status = status;
 
         // The task stays in place, so do not force the viewport to scroll to it.
-        self.replace(tasks, Some(index), label, storage)?;
+        self.commit_task_change(tasks, Some(index), label, storage)?;
         self.viewport.reveal_selection = false;
 
         Ok(())
@@ -1154,7 +1174,7 @@ impl App {
         let mut tasks = self.tasks.clone();
         tasks[index].status = status;
 
-        self.replace(tasks, Some(index), label, storage)
+        self.commit_task_change(tasks, Some(index), label, storage)
     }
 
     fn clear_non_carried(&mut self, storage: &Storage) -> Result<()> {
@@ -1162,7 +1182,7 @@ impl App {
         // tabs are untouched.
         let survivors: Vec<usize> = (0..self.tasks.len())
             .filter(|&index| {
-                !self.is_visible(index) || self.tasks[index].status == TaskStatus::Carried
+                !self.task_in_active_view(index) || self.tasks[index].status == TaskStatus::Carried
             })
             .collect();
         let removed = self.tasks.len() - survivors.len();
@@ -1182,7 +1202,7 @@ impl App {
         let visible_survivors: Vec<usize> = survivors
             .iter()
             .copied()
-            .filter(|&index| self.is_visible(index))
+            .filter(|&index| self.task_in_active_view(index))
             .collect();
         let kept = visible_survivors.len();
         let chosen = closest(&visible_survivors).or_else(|| closest(&survivors));
@@ -1203,7 +1223,7 @@ impl App {
 
         let section_order = self.section_order.clone();
         let label = format!("clear {cleared}");
-        self.replace_with(tasks, section_order, view, selected, label, storage)?;
+        self.commit_checklist_change(tasks, section_order, view, selected, label, storage)?;
 
         if kept == 0 {
             self.show_status_message(format!("Cleared {cleared}"));
@@ -1219,8 +1239,8 @@ impl App {
             return Ok(());
         };
 
-        // Count positions among the visible tasks, then move to the passed task's slot.
-        let visible = self.visible_indices();
+        // Count positions among the active view's tasks, then move to the passed task's slot.
+        let visible = self.active_view_task_indices();
 
         let Some(position) = visible.iter().position(|&visible| visible == index) else {
             return Ok(());
@@ -1243,14 +1263,15 @@ impl App {
         let task = tasks.remove(index);
         tasks.insert(target, task);
 
-        self.replace(tasks, Some(target), "move task", storage)
+        self.commit_task_change(tasks, Some(target), "move task", storage)
     }
 
     fn clear_completed(&mut self, storage: &Storage) -> Result<()> {
         // Only the current tab's completed tasks are cleared; other tabs are untouched.
         let survivors: Vec<usize> = (0..self.tasks.len())
             .filter(|&index| {
-                !self.is_visible(index) || self.tasks[index].status != TaskStatus::Completed
+                !self.task_in_active_view(index)
+                    || self.tasks[index].status != TaskStatus::Completed
             })
             .collect();
         let removed = self.tasks.len() - survivors.len();
@@ -1275,7 +1296,7 @@ impl App {
         let visible_survivors: Vec<usize> = survivors
             .iter()
             .copied()
-            .filter(|&index| self.is_visible(index))
+            .filter(|&index| self.task_in_active_view(index))
             .collect();
         let chosen = pick(&visible_survivors).or_else(|| pick(&survivors));
         let selected = chosen.and_then(|old| survivors.iter().position(|&index| index == old));
@@ -1295,7 +1316,7 @@ impl App {
 
         let section_order = self.section_order.clone();
         let label = format!("clear {cleared}");
-        self.replace_with(tasks, section_order, view, selected, label, storage)?;
+        self.commit_checklist_change(tasks, section_order, view, selected, label, storage)?;
         self.show_status_message(format!("Cleared {cleared}"));
 
         Ok(())
@@ -1409,7 +1430,7 @@ impl App {
         }
 
         // The new tab is saved with the renamed tasks; a failed save keeps the old one.
-        self.replace_with(
+        self.commit_checklist_change(
             tasks,
             section_order,
             SectionView::Named(new_key),
@@ -1434,18 +1455,18 @@ impl App {
 
     fn yank_task(&mut self) {
         if let Some(task) = self.list.selected().and_then(|index| self.tasks.get(index)) {
-            self.task_register = Some(task.display_text());
+            self.task_register = Some(task.full_text());
             self.show_status_message("Copied task");
         }
     }
 
     fn delete_task(&mut self, index: usize, label: &str, storage: &Storage) -> Result<()> {
-        let visible = self.visible_indices();
+        let visible = self.active_view_task_indices();
         let position = visible.iter().position(|&visible| visible == index);
         let mut tasks = self.tasks.clone();
         tasks.remove(index);
 
-        // Prefer the next visible task, then the previous one. Later indices
+        // Prefer the next task in the active view, then the previous one. Later indices
         // shift down by one after the removal.
         let next = position.and_then(|position| visible.get(position + 1));
         let previous = position
@@ -1465,7 +1486,7 @@ impl App {
             visible_neighbor.or_else(|| (!tasks.is_empty()).then(|| index.min(tasks.len() - 1)));
 
         let section_order = self.section_order.clone();
-        self.replace_with(tasks, section_order, view, selected, label, storage)
+        self.commit_checklist_change(tasks, section_order, view, selected, label, storage)
     }
 
     fn paste_task(&mut self, placement: AddPlacement, storage: &Storage) -> Result<()> {
@@ -1481,7 +1502,7 @@ impl App {
     pub fn copy_markdown(&mut self, output: &mut impl std::io::Write) {
         // Inside a tab, copy only what that tab shows.
         let visible: Vec<Task> = self
-            .visible_indices()
+            .active_view_task_indices()
             .into_iter()
             .map(|index| self.tasks[index].clone())
             .collect();
@@ -1544,7 +1565,7 @@ impl App {
             if let KeyCode::Char(digit @ '0'..='9') = key.code
                 && key.modifiers.is_empty()
             {
-                self.jump_to_section(digit);
+                self.jump_to_tab(digit);
             }
 
             return Ok(false);
@@ -1734,13 +1755,13 @@ impl App {
             // Ctrl+D/U delete text instead of moving half a page.
             match (key.modifiers, key.code) {
                 (KeyModifiers::ALT, KeyCode::Char('w' | 'W')) => self.yank_task(),
-                (KeyModifiers::ALT, KeyCode::Char('b' | 'B')) => self.cycle_section(false, None),
-                (KeyModifiers::ALT, KeyCode::Char('f' | 'F')) => self.cycle_section(true, None),
+                (KeyModifiers::ALT, KeyCode::Char('b' | 'B')) => self.cycle_tab(false, None),
+                (KeyModifiers::ALT, KeyCode::Char('f' | 'F')) => self.cycle_tab(true, None),
                 (KeyModifiers::ALT, KeyCode::Char('p' | 'P')) => {
-                    self.move_section(false, 1, storage)?
+                    self.move_section_tab(false, 1, storage)?
                 }
                 (KeyModifiers::ALT, KeyCode::Char('n' | 'N')) => {
-                    self.move_section(true, 1, storage)?
+                    self.move_section_tab(true, 1, storage)?
                 }
                 (KeyModifiers::ALT, KeyCode::Char('s' | 'S')) => {
                     self.pending_section_jump = Some(Instant::now())
@@ -1753,8 +1774,12 @@ impl App {
                 (KeyModifiers::CONTROL, KeyCode::Char('f' | 'F' | 's' | 'S')) => {
                     self.start_search()
                 }
-                (KeyModifiers::CONTROL, KeyCode::Char('d' | 'D')) => self.page(true, half_page),
-                (KeyModifiers::CONTROL, KeyCode::Char('u' | 'U')) => self.page(false, half_page),
+                (KeyModifiers::CONTROL, KeyCode::Char('d' | 'D')) => {
+                    self.move_selection_by_rows(true, half_page)
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('u' | 'U')) => {
+                    self.move_selection_by_rows(false, half_page)
+                }
                 _ => {}
             }
 
@@ -1929,13 +1954,13 @@ impl App {
 
                 // Editing re-reads the "Name: " syntax, so it can change the section.
                 if let Some(text) = submitted_task_text(input) {
-                    let (section, body) = split_section(&text);
+                    let (section, body) = parse_task_input(&text);
 
                     if self.tasks[index].section != section || self.tasks[index].text != body {
                         let mut tasks = self.tasks.clone();
                         tasks[index].section = section;
                         tasks[index].text = body;
-                        self.replace(tasks, Some(index), "edit task", storage)?;
+                        self.commit_task_change(tasks, Some(index), "edit task", storage)?;
                     }
                 }
             }
@@ -2081,27 +2106,31 @@ impl App {
             KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.move_selected(false, count.unwrap_or(1), storage)?;
             }
-            KeyCode::Char('j') | KeyCode::Down => self.navigate(true, count),
-            KeyCode::Char('k') | KeyCode::Up => self.navigate(false, count),
-            KeyCode::Char('H') => self.move_section(false, count.unwrap_or(1), storage)?,
-            KeyCode::Char('L') => self.move_section(true, count.unwrap_or(1), storage)?,
+            KeyCode::Char('j') | KeyCode::Down => self.move_task_selection(true, count),
+            KeyCode::Char('k') | KeyCode::Up => self.move_task_selection(false, count),
+            KeyCode::Char('H') => self.move_section_tab(false, count.unwrap_or(1), storage)?,
+            KeyCode::Char('L') => self.move_section_tab(true, count.unwrap_or(1), storage)?,
             KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.move_section(false, count.unwrap_or(1), storage)?;
+                self.move_section_tab(false, count.unwrap_or(1), storage)?;
             }
             KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.move_section(true, count.unwrap_or(1), storage)?;
+                self.move_section_tab(true, count.unwrap_or(1), storage)?;
             }
-            KeyCode::Char('h') => self.cycle_section(false, count),
-            KeyCode::Char('l') => self.cycle_section(true, count),
+            KeyCode::Char('h') => self.cycle_tab(false, count),
+            KeyCode::Char('l') => self.cycle_tab(true, count),
             KeyCode::Char('s') => self.pending_section_jump = Some(Instant::now()),
-            KeyCode::Tab | KeyCode::BackTab => self.cycle_section(key.code == KeyCode::Tab, None),
-            KeyCode::PageUp => self.page(false, usize::from(self.viewport.height)),
-            KeyCode::PageDown => self.page(true, usize::from(self.viewport.height)),
+            KeyCode::Tab | KeyCode::BackTab => self.cycle_tab(key.code == KeyCode::Tab, None),
+            KeyCode::PageUp => {
+                self.move_selection_by_rows(false, usize::from(self.viewport.height))
+            }
+            KeyCode::PageDown => {
+                self.move_selection_by_rows(true, usize::from(self.viewport.height))
+            }
             KeyCode::Char('g' | 'G') | KeyCode::Home | KeyCode::End if !self.tasks.is_empty() => {
                 let first = key.code == KeyCode::Home
                     || (key.code == KeyCode::Char('g')
                         && !key.modifiers.contains(KeyModifiers::SHIFT));
-                let visible = self.visible_indices();
+                let visible = self.active_view_task_indices();
                 let index = if first {
                     visible.first()
                 } else {
@@ -2142,7 +2171,7 @@ impl App {
                 if let Some(index) = self.list.selected() {
                     self.mode = Mode::Editing {
                         index,
-                        input: self.tasks[index].display_text().into(),
+                        input: self.tasks[index].full_text().into(),
                     };
                 }
             }
@@ -2155,7 +2184,8 @@ impl App {
             }
             KeyCode::Char('D')
                 if (0..self.tasks.len()).any(|index| {
-                    self.is_visible(index) && self.tasks[index].status != TaskStatus::Carried
+                    self.task_in_active_view(index)
+                        && self.tasks[index].status != TaskStatus::Carried
                 }) =>
             {
                 self.mode = Mode::ConfirmClearNonCarried
@@ -2214,7 +2244,7 @@ impl App {
                 .find(|(area, _)| area.contains((event.column, event.row).into()))
         {
             let from = self.position();
-            self.show_section(view.clone());
+            self.select_tab(view.clone());
             self.record_jump(from);
 
             return Ok(());
@@ -2228,7 +2258,7 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(index) = self
                     .viewport
-                    .row_tasks
+                    .task_index_by_row
                     .get(self.viewport.scroll + usize::from(event.row - rows.y))
                     .copied()
                     .flatten()
@@ -2238,23 +2268,24 @@ impl App {
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                 let height = usize::from(rows.height);
+                let total_rows = self.viewport.task_index_by_row.len();
                 self.viewport.scroll = if event.kind == MouseEventKind::ScrollDown {
                     self.viewport.scroll.saturating_add(1)
                 } else {
                     self.viewport.scroll.saturating_sub(1)
                 }
-                .min(self.viewport.row_tasks.len().saturating_sub(height));
-                let end = (self.viewport.scroll + height).min(self.viewport.row_tasks.len());
-                let visible = &self.viewport.row_tasks[self.viewport.scroll..end];
+                .min(total_rows.saturating_sub(height));
+                let end = (self.viewport.scroll + height).min(total_rows);
+                let visible_rows = &self.viewport.task_index_by_row[self.viewport.scroll..end];
 
                 if let Some(selected) = self.list.selected()
-                    && !visible.contains(&Some(selected))
+                    && !visible_rows.contains(&Some(selected))
                 {
                     self.list
                         .select(if event.kind == MouseEventKind::ScrollDown {
-                            visible.iter().rev().find_map(|&task| task)
+                            visible_rows.iter().rev().find_map(|&task| task)
                         } else {
-                            visible.iter().find_map(|&task| task)
+                            visible_rows.iter().find_map(|&task| task)
                         });
                 }
 

@@ -334,7 +334,7 @@ fn run() -> Result<()> {
     let storage = Storage::discover(data_dir)?;
     let _instance_lock = storage.lock()?;
 
-    let mut app = App::from_document(storage.load_document()?);
+    let mut app = App::from_checklist_document(storage.load_checklist()?);
     app.wrap = options.wrap;
     app.status_messages = options.status_messages;
     app.status_message_duration = options.status_message_duration;
@@ -438,7 +438,7 @@ fn run() -> Result<()> {
     let restore_result = modes.restore(&mut io::stdout());
     finish_session(result, restore_result)?;
 
-    app.save_selection(&storage)
+    app.persist_navigation_if_needed(&storage)
 }
 
 fn terminal_setup_error(error: io::Error) -> Box<dyn std::error::Error> {
