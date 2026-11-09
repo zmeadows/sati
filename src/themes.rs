@@ -135,6 +135,8 @@ impl BuiltinTheme {
                 completed: Style::default(),
                 border: Style::default(),
                 accent: Style::default().fg(DEFAULT_ACCENT),
+                heading: Style::default().fg(Color::LightCyan),
+                carried: Style::default().fg(Color::Yellow),
             },
             Self::GruvboxMaterial => {
                 // Each palette role explicitly clears inherited modifiers.
@@ -145,6 +147,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(146, 131, 116)),
                     border: plain.fg(Color::Rgb(90, 82, 76)),
                     accent: plain.fg(Color::Rgb(231, 138, 78)),
+                    heading: plain.fg(Color::Rgb(169, 182, 101)),
+                    carried: plain.fg(Color::Rgb(216, 166, 87)),
                 }
             }
             Self::CatppuccinMocha => {
@@ -155,6 +159,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(108, 112, 134)),
                     border: plain.fg(Color::Rgb(88, 91, 112)),
                     accent: plain.fg(Color::Rgb(203, 166, 247)),
+                    heading: plain.fg(Color::Rgb(148, 226, 213)),
+                    carried: plain.fg(Color::Rgb(250, 179, 135)),
                 }
             }
             Self::TokyoNightStorm => {
@@ -162,9 +168,11 @@ impl BuiltinTheme {
                 Styles {
                     normal: plain.fg(Color::Rgb(192, 202, 245)).bg(Color::Rgb(36, 40, 59)),
                     muted: plain.fg(Color::Rgb(115, 122, 162)),
-                    completed: plain.fg(Color::Rgb(86, 95, 137)),
+                    completed: plain.fg(Color::Rgb(115, 122, 162)),
                     border: plain.fg(Color::Rgb(84, 92, 126)),
                     accent: plain.fg(Color::Rgb(122, 162, 247)),
+                    heading: plain.fg(Color::Rgb(158, 206, 106)),
+                    carried: plain.fg(Color::Rgb(224, 175, 104)),
                 }
             }
             Self::KanagawaWave => {
@@ -175,6 +183,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(114, 113, 105)),
                     border: plain.fg(Color::Rgb(84, 84, 109)),
                     accent: plain.fg(Color::Rgb(126, 156, 216)),
+                    heading: plain.fg(Color::Rgb(152, 187, 108)),
+                    carried: plain.fg(Color::Rgb(230, 195, 132)),
                 }
             }
             Self::RosePine => {
@@ -185,6 +195,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(110, 106, 134)),
                     border: plain.fg(Color::Rgb(82, 79, 103)),
                     accent: plain.fg(Color::Rgb(235, 188, 186)),
+                    heading: plain.fg(Color::Rgb(156, 207, 216)),
+                    carried: plain.fg(Color::Rgb(246, 193, 119)),
                 }
             }
             Self::Nightfox => {
@@ -195,6 +207,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(115, 128, 145)),
                     border: plain.fg(Color::Rgb(57, 80, 109)),
                     accent: plain.fg(Color::Rgb(113, 156, 214)),
+                    heading: plain.fg(Color::Rgb(129, 178, 154)),
+                    carried: plain.fg(Color::Rgb(219, 192, 116)),
                 }
             }
             Self::OneDark => {
@@ -202,9 +216,11 @@ impl BuiltinTheme {
                 Styles {
                     normal: plain.fg(Color::Rgb(171, 178, 191)).bg(Color::Rgb(40, 44, 52)),
                     muted: plain.fg(Color::Rgb(132, 139, 152)),
-                    completed: plain.fg(Color::Rgb(92, 99, 112)),
+                    completed: plain.fg(Color::Rgb(132, 139, 152)),
                     border: plain.fg(Color::Rgb(57, 63, 74)),
                     accent: plain.fg(Color::Rgb(97, 175, 239)),
+                    heading: plain.fg(Color::Rgb(152, 195, 121)),
+                    carried: plain.fg(Color::Rgb(229, 192, 123)),
                 }
             }
             Self::GithubDark => {
@@ -215,6 +231,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(110, 118, 129)),
                     border: plain.fg(Color::Rgb(48, 54, 61)),
                     accent: plain.fg(Color::Rgb(88, 166, 255)),
+                    heading: plain.fg(Color::Rgb(63, 185, 80)),
+                    carried: plain.fg(Color::Rgb(210, 153, 34)),
                 }
             }
             Self::EverforestMedium => {
@@ -225,6 +243,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(122, 132, 120)),
                     border: plain.fg(Color::Rgb(79, 88, 94)),
                     accent: plain.fg(Color::Rgb(167, 192, 128)),
+                    heading: plain.fg(Color::Rgb(127, 187, 179)),
+                    carried: plain.fg(Color::Rgb(219, 188, 127)),
                 }
             }
             Self::CyberdreamMuted => {
@@ -235,6 +255,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(123, 132, 150)),
                     border: plain.fg(Color::Rgb(60, 64, 72)),
                     accent: plain.fg(Color::Rgb(120, 168, 232)),
+                    heading: plain.fg(Color::Rgb(126, 224, 136)),
+                    carried: plain.fg(Color::Rgb(227, 200, 117)),
                 }
             }
             Self::Nord => {
@@ -242,9 +264,11 @@ impl BuiltinTheme {
                 Styles {
                     normal: plain.fg(Color::Rgb(216, 222, 233)).bg(Color::Rgb(46, 52, 64)),
                     muted: plain.fg(Color::Rgb(156, 168, 184)),
-                    completed: plain.fg(Color::Rgb(76, 86, 106)),
+                    completed: plain.fg(Color::Rgb(156, 168, 184)),
                     border: plain.fg(Color::Rgb(67, 76, 94)),
                     accent: plain.fg(Color::Rgb(136, 192, 208)),
+                    heading: plain.fg(Color::Rgb(163, 190, 140)),
+                    carried: plain.fg(Color::Rgb(235, 203, 139)),
                 }
             }
             Self::Dracula => {
@@ -252,9 +276,11 @@ impl BuiltinTheme {
                 Styles {
                     normal: plain.fg(Color::Rgb(248, 248, 242)).bg(Color::Rgb(40, 42, 54)),
                     muted: plain.fg(Color::Rgb(98, 114, 164)),
-                    completed: plain.fg(Color::Rgb(75, 82, 99)),
+                    completed: plain.fg(Color::Rgb(98, 114, 164)),
                     border: plain.fg(Color::Rgb(68, 71, 90)),
                     accent: plain.fg(Color::Rgb(189, 147, 249)),
+                    heading: plain.fg(Color::Rgb(139, 233, 253)),
+                    carried: plain.fg(Color::Rgb(255, 184, 108)),
                 }
             }
             Self::Darcula => {
@@ -262,9 +288,11 @@ impl BuiltinTheme {
                 Styles {
                     normal: plain.fg(Color::Rgb(169, 183, 198)).bg(Color::Rgb(43, 43, 43)),
                     muted: plain.fg(Color::Rgb(128, 128, 128)),
-                    completed: plain.fg(Color::Rgb(96, 99, 102)),
+                    completed: plain.fg(Color::Rgb(128, 128, 128)),
                     border: plain.fg(Color::Rgb(96, 96, 96)),
                     accent: plain.fg(Color::Rgb(255, 198, 109)),
+                    heading: plain.fg(Color::Rgb(104, 151, 187)),
+                    carried: plain.fg(Color::Rgb(204, 120, 50)),
                 }
             }
             Self::Gruvbox => {
@@ -275,6 +303,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(146, 131, 116)),
                     border: plain.fg(Color::Rgb(102, 92, 84)),
                     accent: plain.fg(Color::Rgb(254, 128, 25)),
+                    heading: plain.fg(Color::Rgb(142, 192, 124)),
+                    carried: plain.fg(Color::Rgb(250, 189, 47)),
                 }
             }
             Self::SolarizedDark => {
@@ -282,9 +312,11 @@ impl BuiltinTheme {
                 Styles {
                     normal: plain.fg(Color::Rgb(131, 148, 150)).bg(Color::Rgb(0, 43, 54)),
                     muted: plain.fg(Color::Rgb(101, 123, 131)),
-                    completed: plain.fg(Color::Rgb(88, 110, 117)),
+                    completed: plain.fg(Color::Rgb(101, 123, 131)),
                     border: plain.fg(Color::Rgb(88, 110, 117)),
                     accent: plain.fg(Color::Rgb(38, 139, 210)),
+                    heading: plain.fg(Color::Rgb(42, 161, 152)),
+                    carried: plain.fg(Color::Rgb(181, 137, 0)),
                 }
             }
             Self::SolarizedLight => {
@@ -292,9 +324,11 @@ impl BuiltinTheme {
                 Styles {
                     normal: plain.fg(Color::Rgb(101, 123, 131)).bg(Color::Rgb(253, 246, 227)),
                     muted: plain.fg(Color::Rgb(131, 148, 150)),
-                    completed: plain.fg(Color::Rgb(147, 161, 161)),
+                    completed: plain.fg(Color::Rgb(131, 148, 150)),
                     border: plain.fg(Color::Rgb(147, 161, 161)),
                     accent: plain.fg(Color::Rgb(38, 139, 210)),
+                    heading: plain.fg(Color::Rgb(42, 161, 152)),
+                    carried: plain.fg(Color::Rgb(181, 137, 0)),
                 }
             }
             Self::GruvboxLight => {
@@ -305,6 +339,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(146, 131, 116)),
                     border: plain.fg(Color::Rgb(168, 153, 132)),
                     accent: plain.fg(Color::Rgb(175, 58, 3)),
+                    heading: plain.fg(Color::Rgb(66, 123, 88)),
+                    carried: plain.fg(Color::Rgb(181, 118, 20)),
                 }
             }
             Self::CatppuccinLatte => {
@@ -315,6 +351,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(156, 160, 176)),
                     border: plain.fg(Color::Rgb(172, 176, 190)),
                     accent: plain.fg(Color::Rgb(136, 57, 239)),
+                    heading: plain.fg(Color::Rgb(30, 102, 245)),
+                    carried: plain.fg(Color::Rgb(254, 100, 11)),
                 }
             }
             Self::GithubLight => {
@@ -325,6 +363,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(110, 119, 129)),
                     border: plain.fg(Color::Rgb(208, 215, 222)),
                     accent: plain.fg(Color::Rgb(9, 105, 218)),
+                    heading: plain.fg(Color::Rgb(26, 127, 55)),
+                    carried: plain.fg(Color::Rgb(154, 103, 0)),
                 }
             }
             Self::RosePineDawn => {
@@ -332,9 +372,11 @@ impl BuiltinTheme {
                 Styles {
                     normal: plain.fg(Color::Rgb(70, 66, 97)).bg(Color::Rgb(250, 244, 237)),
                     muted: plain.fg(Color::Rgb(121, 117, 147)),
-                    completed: plain.fg(Color::Rgb(152, 147, 165)),
+                    completed: plain.fg(Color::Rgb(121, 117, 147)),
                     border: plain.fg(Color::Rgb(206, 202, 205)),
-                    accent: plain.fg(Color::Rgb(215, 130, 126)),
+                    accent: plain.fg(Color::Rgb(180, 99, 122)),
+                    heading: plain.fg(Color::Rgb(40, 105, 131)),
+                    carried: plain.fg(Color::Rgb(144, 122, 169)),
                 }
             }
             Self::EverforestLight => {
@@ -342,9 +384,11 @@ impl BuiltinTheme {
                 Styles {
                     normal: plain.fg(Color::Rgb(92, 106, 114)).bg(Color::Rgb(253, 246, 227)),
                     muted: plain.fg(Color::Rgb(130, 145, 129)),
-                    completed: plain.fg(Color::Rgb(166, 176, 160)),
+                    completed: plain.fg(Color::Rgb(130, 145, 129)),
                     border: plain.fg(Color::Rgb(147, 159, 145)),
                     accent: plain.fg(Color::Rgb(141, 161, 1)),
+                    heading: plain.fg(Color::Rgb(53, 167, 124)),
+                    carried: plain.fg(Color::Rgb(245, 125, 38)),
                 }
             }
             Self::ModusOperandi => {
@@ -355,6 +399,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(89, 89, 89)),
                     border: plain.fg(Color::Rgb(159, 159, 159)),
                     accent: plain.fg(Color::Rgb(0, 49, 169)),
+                    heading: plain.fg(Color::Rgb(114, 16, 69)),
+                    carried: plain.fg(Color::Rgb(111, 85, 0)),
                 }
             }
             Self::EfSummer => {
@@ -365,6 +411,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(120, 110, 116)),
                     border: plain.fg(Color::Rgb(198, 187, 198)),
                     accent: plain.fg(Color::Rgb(203, 26, 170)),
+                    heading: plain.fg(Color::Rgb(15, 123, 143)),
+                    carried: plain.fg(Color::Rgb(164, 95, 34)),
                 }
             }
             Self::Monokai => {
@@ -375,6 +423,8 @@ impl BuiltinTheme {
                     completed: plain.fg(Color::Rgb(117, 113, 94)),
                     border: plain.fg(Color::Rgb(100, 100, 94)),
                     accent: plain.fg(Color::Rgb(249, 38, 114)),
+                    heading: plain.fg(Color::Rgb(102, 217, 239)),
+                    carried: plain.fg(Color::Rgb(253, 151, 31)),
                 }
             }
         }
@@ -406,51 +456,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_named_theme_backgrounds_are_exact_and_inherited() {
-        for (name, rgb) in [
-            ("catppuccin-mocha", (30, 30, 46)),
-            ("tokyonight-storm", (36, 40, 59)),
-            ("kanagawa-wave", (31, 31, 40)),
-            ("rose-pine", (25, 23, 36)),
-            ("nightfox", (25, 35, 48)),
-            ("onedark", (40, 44, 52)),
-            ("gruvbox-material", (40, 40, 40)),
-            ("github-dark", (13, 17, 23)),
-            ("everforest-medium", (45, 53, 59)),
-            ("cyberdream-muted", (22, 24, 26)),
-            ("nord", (46, 52, 64)),
-            ("dracula", (40, 42, 54)),
-            ("darcula", (43, 43, 43)),
-            ("gruvbox", (40, 40, 40)),
-            ("solarized-dark", (0, 43, 54)),
-            ("solarized-light", (253, 246, 227)),
-            ("gruvbox-light", (251, 241, 199)),
-            ("catppuccin-latte", (239, 241, 245)),
-            ("github-light", (255, 255, 255)),
-            ("rose-pine-dawn", (250, 244, 237)),
-            ("everforest-light", (253, 246, 227)),
-            ("modus-operandi", (255, 255, 255)),
-            ("ef-summer", (255, 242, 243)),
-            ("monokai", (39, 40, 34)),
-        ] {
-            let styles = Styles::resolve(
-                name.parse().unwrap(),
-                &crate::config::StyleOverrides::default(),
-                None,
-            );
+    fn named_themes_resolve_to_their_exact_palettes() {
+        // In registry order: background, then normal, muted, completed, border, accent,
+        // heading, and carried foregrounds.
+        #[rustfmt::skip]
+        let palettes = [
+            ("gruvbox-material", ["#282828", "#d4be98", "#a89984", "#928374", "#5a524c", "#e78a4e", "#a9b665", "#d8a657"]),
+            ("catppuccin-mocha", ["#1e1e2e", "#cdd6f4", "#a6adc8", "#6c7086", "#585b70", "#cba6f7", "#94e2d5", "#fab387"]),
+            ("tokyonight-storm", ["#24283b", "#c0caf5", "#737aa2", "#737aa2", "#545c7e", "#7aa2f7", "#9ece6a", "#e0af68"]),
+            ("kanagawa-wave", ["#1f1f28", "#dcd7ba", "#c8c093", "#727169", "#54546d", "#7e9cd8", "#98bb6c", "#e6c384"]),
+            ("rose-pine", ["#191724", "#e0def4", "#908caa", "#6e6a86", "#524f67", "#ebbcba", "#9ccfd8", "#f6c177"]),
+            ("nightfox", ["#192330", "#cdcecf", "#aeafb0", "#738091", "#39506d", "#719cd6", "#81b29a", "#dbc074"]),
+            ("onedark", ["#282c34", "#abb2bf", "#848b98", "#848b98", "#393f4a", "#61afef", "#98c379", "#e5c07b"]),
+            ("github-dark", ["#0d1117", "#c9d1d9", "#8b949e", "#6e7681", "#30363d", "#58a6ff", "#3fb950", "#d29922"]),
+            ("everforest-medium", ["#2d353b", "#d3c6aa", "#9da9a0", "#7a8478", "#4f585e", "#a7c080", "#7fbbb3", "#dbbc7f"]),
+            ("cyberdream-muted", ["#16181a", "#ffffff", "#9ba3b2", "#7b8496", "#3c4048", "#78a8e8", "#7ee088", "#e3c875"]),
+            ("nord", ["#2e3440", "#d8dee9", "#9ca8b8", "#9ca8b8", "#434c5e", "#88c0d0", "#a3be8c", "#ebcb8b"]),
+            ("dracula", ["#282a36", "#f8f8f2", "#6272a4", "#6272a4", "#44475a", "#bd93f9", "#8be9fd", "#ffb86c"]),
+            ("darcula", ["#2b2b2b", "#a9b7c6", "#808080", "#808080", "#606060", "#ffc66d", "#6897bb", "#cc7832"]),
+            ("gruvbox", ["#282828", "#ebdbb2", "#a89984", "#928374", "#665c54", "#fe8019", "#8ec07c", "#fabd2f"]),
+            ("solarized-dark", ["#002b36", "#839496", "#657b83", "#657b83", "#586e75", "#268bd2", "#2aa198", "#b58900"]),
+            ("solarized-light", ["#fdf6e3", "#657b83", "#839496", "#839496", "#93a1a1", "#268bd2", "#2aa198", "#b58900"]),
+            ("gruvbox-light", ["#fbf1c7", "#3c3836", "#7c6f64", "#928374", "#a89984", "#af3a03", "#427b58", "#b57614"]),
+            ("catppuccin-latte", ["#eff1f5", "#4c4f69", "#6c6f85", "#9ca0b0", "#acb0be", "#8839ef", "#1e66f5", "#fe640b"]),
+            ("github-light", ["#ffffff", "#24292f", "#57606a", "#6e7781", "#d0d7de", "#0969da", "#1a7f37", "#9a6700"]),
+            ("rose-pine-dawn", ["#faf4ed", "#464261", "#797593", "#797593", "#cecacd", "#b4637a", "#286983", "#907aa9"]),
+            ("everforest-light", ["#fdf6e3", "#5c6a72", "#829181", "#829181", "#939f91", "#8da101", "#35a77c", "#f57d26"]),
+            ("modus-operandi", ["#ffffff", "#000000", "#595959", "#595959", "#9f9f9f", "#0031a9", "#721045", "#6f5500"]),
+            ("ef-summer", ["#fff2f3", "#4f4073", "#786e74", "#786e74", "#c6bbc6", "#cb1aaa", "#0f7b8f", "#a45f22"]),
+            ("monokai", ["#272822", "#f8f8f2", "#90908a", "#75715e", "#64645e", "#f92672", "#66d9ef", "#fd971f"]),
+        ];
 
-            for role in [
-                styles.normal,
-                styles.muted,
-                styles.completed,
-                styles.border,
-                styles.accent,
+        assert_eq!(palettes.len(), BuiltinTheme::ALL.len() - 1);
+
+        for ((name, colors), (theme, id, _)) in palettes.iter().zip(&BuiltinTheme::ALL[1..]) {
+            assert_eq!(name, id);
+
+            let [
+                background,
+                normal,
+                muted,
+                completed,
+                border,
+                accent,
+                heading,
+                carried,
+            ] = colors.map(|hex| hex.parse::<Color>().unwrap());
+            let styles = Styles::resolve(*theme, &crate::config::StyleOverrides::default(), None);
+
+            for (role, color) in [
+                (styles.normal, normal),
+                (styles.muted, muted),
+                (styles.completed, completed),
+                (styles.border, border),
+                (styles.accent, accent),
+                (styles.heading, heading),
+                (styles.carried, carried),
             ] {
-                assert_eq!(role.bg, Some(Color::Rgb(rgb.0, rgb.1, rgb.2)), "{name}");
+                assert!(matches!(color, Color::Rgb(..)), "{name}");
+                assert_eq!(role.fg, Some(color), "{name}");
+                assert_eq!(role.bg, Some(background), "{name}");
+                assert!(role.add_modifier.is_empty(), "{name}");
+                assert_eq!(role.sub_modifier, Modifier::all(), "{name}");
             }
         }
-
-        assert_eq!(Styles::default().normal.bg, None);
     }
 
     #[test]
@@ -485,81 +554,32 @@ mod tests {
             assert_eq!(config.theme, theme);
             assert!(name.to_uppercase().parse::<BuiltinTheme>().is_err());
 
-            let resolved = Styles::resolve(theme, &config.styles, None);
+            let defaults = Styles::resolve(theme, &config.styles, None);
 
-            if theme != BuiltinTheme::Default {
-                for role in [
-                    resolved.normal,
-                    resolved.muted,
-                    resolved.completed,
-                    resolved.border,
-                    resolved.accent,
-                ] {
-                    assert!(matches!(role.fg, Some(Color::Rgb(_, _, _))));
-                    assert_eq!(role.bg, resolved.normal.bg);
-                    assert!(role.add_modifier.is_empty());
-                    assert_eq!(role.sub_modifier, Modifier::all());
-                }
-            }
-
-            let config: crate::config::Config = toml::from_str(&format!("theme='{name}'\n[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers=['italic']\n[styles.accent]\nfg='red'\nmodifiers=['bold']")).unwrap();
+            let config: crate::config::Config = toml::from_str(&format!("theme='{name}'\n[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers=['italic']\n[styles.accent]\nfg='red'\nmodifiers=['bold']\n[styles.heading]\nfg='cyan'\n[styles.carried]\nmodifiers=['underlined']")).unwrap();
             let resolved = Styles::resolve(config.theme, &config.styles, Some(Color::Blue));
             assert_eq!(resolved.normal.add_modifier, Modifier::BOLD);
             assert_eq!(resolved.muted.fg, Some(Color::Green));
             assert_eq!(resolved.muted.add_modifier, Modifier::ITALIC);
             assert_eq!(resolved.accent.fg, Some(Color::Blue));
             assert_eq!(resolved.accent.add_modifier, Modifier::BOLD);
+            assert_eq!(resolved.heading.fg, Some(Color::Cyan));
+            assert_eq!(resolved.carried.fg, defaults.carried.fg);
+            assert_eq!(resolved.carried.add_modifier, Modifier::UNDERLINED);
 
-            if theme != BuiltinTheme::Default {
+            // The default theme inherits normal's modifiers; named themes clear them.
+            if theme == BuiltinTheme::Default {
+                assert_eq!(resolved.heading.add_modifier, Modifier::BOLD);
+            } else {
                 assert!(resolved.completed.add_modifier.is_empty());
                 assert!(resolved.border.add_modifier.is_empty());
+                assert!(resolved.heading.add_modifier.is_empty());
             }
         }
     }
 
     #[test]
-    fn light_and_monokai_themes_have_exact_palettes() {
-        #[rustfmt::skip]
-        let palettes = [
-            ("solarized-light", [(253, 246, 227), (101, 123, 131), (131, 148, 150), (147, 161, 161), (147, 161, 161), (38, 139, 210)]),
-            ("gruvbox-light", [(251, 241, 199), (60, 56, 54), (124, 111, 100), (146, 131, 116), (168, 153, 132), (175, 58, 3)]),
-            ("catppuccin-latte", [(239, 241, 245), (76, 79, 105), (108, 111, 133), (156, 160, 176), (172, 176, 190), (136, 57, 239)]),
-            ("github-light", [(255, 255, 255), (36, 41, 47), (87, 96, 106), (110, 119, 129), (208, 215, 222), (9, 105, 218)]),
-            ("rose-pine-dawn", [(250, 244, 237), (70, 66, 97), (121, 117, 147), (152, 147, 165), (206, 202, 205), (215, 130, 126)]),
-            ("everforest-light", [(253, 246, 227), (92, 106, 114), (130, 145, 129), (166, 176, 160), (147, 159, 145), (141, 161, 1)]),
-            ("modus-operandi", [(255, 255, 255), (0, 0, 0), (89, 89, 89), (89, 89, 89), (159, 159, 159), (0, 49, 169)]),
-            ("ef-summer", [(255, 242, 243), (79, 64, 115), (120, 110, 116), (120, 110, 116), (198, 187, 198), (203, 26, 170)]),
-            ("monokai", [(39, 40, 34), (248, 248, 242), (144, 144, 138), (117, 113, 94), (100, 100, 94), (249, 38, 114)]),
-        ];
-
-        for (name, [background, normal, muted, completed, border, accent]) in palettes {
-            let styles = Styles::resolve(
-                name.parse().unwrap(),
-                &crate::config::StyleOverrides::default(),
-                None,
-            );
-
-            for (role, (r, g, b)) in [
-                (styles.normal, normal),
-                (styles.muted, muted),
-                (styles.completed, completed),
-                (styles.border, border),
-                (styles.accent, accent),
-            ] {
-                assert_eq!(role.fg, Some(Color::Rgb(r, g, b)), "{name}");
-                assert_eq!(
-                    role.bg,
-                    Some(Color::Rgb(background.0, background.1, background.2)),
-                    "{name}"
-                );
-                assert!(role.add_modifier.is_empty(), "{name}");
-                assert_eq!(role.sub_modifier, Modifier::all(), "{name}");
-            }
-        }
-    }
-
-    #[test]
-    fn gruvbox_material_has_exact_palette_and_clears_inherited_modifiers() {
+    fn gruvbox_material_clears_inherited_modifiers_and_keeps_overrides() {
         let config: crate::config::Config = toml::from_str("theme='gruvbox-material'").unwrap();
         assert_eq!(config.theme, BuiltinTheme::GruvboxMaterial);
         assert_eq!(
@@ -567,21 +587,6 @@ mod tests {
             config.theme
         );
         assert!("Gruvbox-Material".parse::<BuiltinTheme>().is_err());
-
-        let styles = Styles::resolve(config.theme, &config.styles, None);
-
-        for (role, color) in [
-            (styles.normal, Color::Rgb(212, 190, 152)),
-            (styles.muted, Color::Rgb(168, 153, 132)),
-            (styles.completed, Color::Rgb(146, 131, 116)),
-            (styles.border, Color::Rgb(90, 82, 76)),
-            (styles.accent, Color::Rgb(231, 138, 78)),
-        ] {
-            assert_eq!(role.fg, Some(color));
-            assert_eq!(role.bg, Some(Color::Rgb(40, 40, 40)));
-            assert!(role.add_modifier.is_empty());
-            assert_eq!(role.sub_modifier, Modifier::all());
-        }
 
         let inherited: crate::config::Config =
             toml::from_str("theme='gruvbox-material'\n[styles.normal]\nmodifiers=['bold']")
@@ -595,11 +600,13 @@ mod tests {
             inherited.completed,
             inherited.border,
             inherited.accent,
+            inherited.heading,
+            inherited.carried,
         ] {
             assert!(role.add_modifier.is_empty());
         }
 
-        let config: crate::config::Config = toml::from_str("theme='gruvbox-material'\n[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers=['italic']\n[styles.completed]\nmodifiers=['dim']\n[styles.border]\nmodifiers=[]\n[styles.accent]\nfg='blue'\nmodifiers=['bold']").unwrap();
+        let config: crate::config::Config = toml::from_str("theme='gruvbox-material'\n[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers=['italic']\n[styles.completed]\nmodifiers=['dim']\n[styles.border]\nmodifiers=[]\n[styles.accent]\nfg='blue'\nmodifiers=['bold']\n[styles.heading]\nbg='#102030'\nmodifiers=['italic']\n[styles.carried]\nfg='reset'").unwrap();
         let styles = Styles::resolve(config.theme, &config.styles, Some(Color::Red));
         assert_eq!(styles.normal.add_modifier, Modifier::BOLD);
         assert_eq!(styles.muted.fg, Some(Color::Green));
@@ -608,6 +615,12 @@ mod tests {
         assert!(styles.border.add_modifier.is_empty());
         assert_eq!(styles.accent.fg, Some(Color::Red));
         assert_eq!(styles.accent.add_modifier, Modifier::BOLD);
+        assert_eq!(styles.heading.fg, Some(Color::Rgb(169, 182, 101)));
+        assert_eq!(styles.heading.bg, Some(Color::Rgb(16, 32, 48)));
+        assert_eq!(styles.heading.add_modifier, Modifier::ITALIC);
+        assert_eq!(styles.carried.fg, Some(Color::Reset));
+        assert_eq!(styles.carried.bg, Some(Color::Rgb(40, 40, 40)));
+        assert!(styles.carried.add_modifier.is_empty());
     }
 
     #[test]
@@ -632,6 +645,7 @@ mod tests {
             .remove_modifier(Modifier::all());
         let muted = normal.add_modifier(Modifier::DIM);
 
+        // Terminal palette colors and no background, so the terminal's own scheme shows.
         assert_eq!(
             actual,
             Styles {
@@ -639,9 +653,12 @@ mod tests {
                 muted,
                 completed: muted,
                 border: muted,
-                accent: normal.fg(Color::LightYellow)
+                accent: normal.fg(Color::LightYellow),
+                heading: normal.fg(Color::LightCyan),
+                carried: normal.fg(Color::Yellow),
             }
         );
+        assert_eq!(normal.bg, None);
 
         for text in ["theme='Default'", "theme='unknown'", "theme=1", "theme=[]"] {
             assert!(toml::from_str::<crate::config::Config>(text).is_err());

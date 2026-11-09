@@ -70,6 +70,8 @@ pub struct StyleOverrides {
     pub border: StyleOverride,
     #[serde(deserialize_with = "accent_style")]
     pub accent: StyleOverride,
+    pub heading: StyleOverride,
+    pub carried: StyleOverride,
 }
 
 #[derive(Debug, Default, PartialEq, Deserialize)]
@@ -215,7 +217,15 @@ mod tests {
 
     #[test]
     fn backgrounds_accept_exact_rgb_or_reset_on_every_role() {
-        for role in ["normal", "muted", "completed", "border", "accent"] {
+        for role in [
+            "normal",
+            "muted",
+            "completed",
+            "border",
+            "accent",
+            "heading",
+            "carried",
+        ] {
             for value in ["'#123456'", "'reset'"] {
                 assert!(toml::from_str::<Config>(&format!("[styles.{role}]\nbg={value}")).is_ok());
             }
@@ -228,7 +238,15 @@ mod tests {
 
     #[test]
     fn style_fields_are_strict_and_colors_use_ratatui_parsing() {
-        for role in ["normal", "muted", "completed", "border", "accent"] {
+        for role in [
+            "normal",
+            "muted",
+            "completed",
+            "border",
+            "accent",
+            "heading",
+            "carried",
+        ] {
             for value in ["yellow", "lightyellow", "darkgray", "3", "#e78a4e"] {
                 assert!(
                     toml::from_str::<Config>(&format!("[styles.{role}]\nfg='{value}'")).is_ok()
@@ -251,8 +269,45 @@ mod tests {
         }
 
         assert!(toml::from_str::<Config>("[styles.accent]\nfg='reset'").is_err());
-        assert!(toml::from_str::<Config>("[styles.normal]\nfg='reset'").is_ok());
+
+        for role in [
+            "normal",
+            "muted",
+            "completed",
+            "border",
+            "heading",
+            "carried",
+        ] {
+            assert!(toml::from_str::<Config>(&format!("[styles.{role}]\nfg='reset'")).is_ok());
+        }
+
         assert!(toml::from_str::<Config>("[styles.unknown]").is_err());
+    }
+
+    #[test]
+    fn heading_and_carried_overrides_parse_like_the_other_roles() {
+        let config: Config = toml::from_str(
+            "[styles.heading]\nfg = '#a9b665'\nmodifiers = []\n\n[styles.carried]\nfg = '#d8a657'\nmodifiers = []",
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.styles.heading,
+            StyleOverride {
+                fg: Some(Color::Rgb(169, 182, 101)),
+                bg: None,
+                modifiers: Some(Modifier::empty()),
+            }
+        );
+        assert_eq!(
+            config.styles.carried,
+            StyleOverride {
+                fg: Some(Color::Rgb(216, 166, 87)),
+                bg: None,
+                modifiers: Some(Modifier::empty()),
+            }
+        );
+        assert_eq!(config.styles.accent, StyleOverride::default());
     }
 
     #[test]

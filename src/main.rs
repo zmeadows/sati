@@ -964,6 +964,14 @@ mod tests {
         assert_eq!(styles.border, styles.muted);
         assert_eq!(styles.accent.fg, Some(ratatui::style::Color::Blue));
         assert_eq!(styles.accent.add_modifier, ratatui::style::Modifier::BOLD);
+        assert_eq!(
+            styles.heading,
+            styles.normal.fg(ratatui::style::Color::LightCyan)
+        );
+        assert_eq!(
+            styles.carried,
+            styles.normal.fg(ratatui::style::Color::Yellow)
+        );
 
         // Clap lists the available themes whenever a name is missing or unknown.
         for args in [

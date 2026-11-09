@@ -526,7 +526,8 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
             .map(|c| if c.is_control() { ' ' } else { c })
             .collect();
 
-        // Bold the "Work:" part of the composed text; the section comes from its field.
+        // Draw the "Work:" part of the composed text as a bold heading; the section comes
+        // from its field.
         let section_prefix = if in_section {
             None
         } else {
@@ -554,10 +555,12 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
 
         let completed = task.status == TaskStatus::Completed;
 
-        let text_style = if completed {
-            app.styles.completed.add_modifier(Modifier::CROSSED_OUT)
+        // A completed task is struck through in one color, section prefix included.
+        let (text_style, heading_style) = if completed {
+            let style = app.styles.completed.add_modifier(Modifier::CROSSED_OUT);
+            (style, style)
         } else {
-            app.styles.normal
+            (app.styles.normal, app.styles.heading)
         };
 
         // Matches are reversed, so the focused result's accent becomes their background and
@@ -597,17 +600,32 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
                 app.styles.normal
             };
 
-            let mut line = Line::from(vec![
-                Span::styled(
-                    if row == 0 && selected == Some(index) {
-                        focus_marker(app.marker_style)
-                    } else {
-                        " "
-                    },
-                    app.styles.accent.add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(prefix, marker_style),
-            ]);
+            let mut line = Line::from(vec![Span::styled(
+                if row == 0 && selected == Some(index) {
+                    focus_marker(app.marker_style)
+                } else {
+                    " "
+                },
+                app.styles.accent.add_modifier(Modifier::BOLD),
+            )]);
+
+            // Only the arrow of a carried checkbox takes the carried color, so its brackets
+            // still show selection like any other checkbox. Search markers replace it.
+            let carried_arrow = if row == 0 && !searching && task.status == TaskStatus::Carried {
+                prefix
+                    .strip_prefix(" [")
+                    .and_then(|rest| rest.strip_suffix("] "))
+            } else {
+                None
+            };
+
+            if let Some(arrow) = carried_arrow {
+                line.push_span(Span::styled(" [", marker_style));
+                line.push_span(Span::styled(arrow, app.styles.carried));
+                line.push_span(Span::styled("] ", marker_style));
+            } else {
+                line.push_span(Span::styled(prefix, marker_style));
+            }
 
             line.spans.extend(task_spans(
                 text,
@@ -615,6 +633,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
                 tag_end,
                 &matches,
                 text_style,
+                heading_style,
                 match_color,
             ));
             lines.push(line);
@@ -812,8 +831,11 @@ fn task_spans(
     tag_end: usize,
     matches: &[Range<usize>],
     base: Style,
+    heading: Style,
     match_color: Color,
 ) -> Vec<Span<'static>> {
+    // Matches derive from the base style rather than the heading, so a match in the section
+    // prefix looks like any other match.
     let highlight = base
         .fg(match_color)
         .bg(base.bg.unwrap_or(Color::Reset))
@@ -832,16 +854,20 @@ fn task_spans(
             matching += 1;
         }
 
-        let mut next = if matches
+        let in_match = matches
             .get(matching)
-            .is_some_and(|range| range.contains(&source))
-        {
+            .is_some_and(|range| range.contains(&source));
+        let in_heading = source < tag_end;
+
+        let mut next = if in_match {
             highlight
+        } else if in_heading {
+            heading
         } else {
             base
         };
 
-        if source < tag_end {
+        if in_heading {
             next = next.add_modifier(Modifier::BOLD);
         }
 
@@ -927,8 +953,9 @@ fn draw_input_line(
         end += grapheme.len();
     }
 
-    // A task input bolds a complete "Work: " prefix, as task rows bold their section. The
-    // prefix ends at a grapheme boundary so a mark joined to its space stays with it.
+    // A task input draws a complete "Work: " prefix as a bold heading, as task rows draw their
+    // section. The prefix ends at a grapheme boundary so a mark joined to its space stays
+    // with it.
     let prefix_end = if bold_section_prefix {
         task_prefix(text).map_or(0, |prefix| {
             let space = prefix.len() + 1;
@@ -943,7 +970,7 @@ fn draw_input_line(
     let bold_end = prefix_end.clamp(start, end);
     line.push_span(Span::styled(
         &text[start..bold_end],
-        styles.normal.add_modifier(Modifier::BOLD),
+        styles.heading.add_modifier(Modifier::BOLD),
     ));
     line.push_span(Span::styled(&text[bold_end..end], styles.normal));
 
@@ -1185,7 +1212,7 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
             lines.push(Line::default());
         }
 
-        lines.push(Line::styled(format!("{padding}{heading}"), styles.accent));
+        lines.push(Line::styled(format!("{padding}{heading}"), styles.heading));
 
         for (action, keys, alternative) in rows.iter() {
             if wide {
@@ -1241,7 +1268,7 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
         .border_style(styles.border)
         .title(Line::from(vec![
             Span::styled("─ ", styles.border),
-            Span::styled(HELP_TITLE, styles.accent),
+            Span::styled(HELP_TITLE, styles.heading),
             Span::styled(" ", styles.border),
         ]));
 
@@ -2087,6 +2114,7 @@ mod tests {
             0,
             std::slice::from_ref(&(1..2)),
             Styles::default().muted.add_modifier(Modifier::ITALIC),
+            Styles::default().heading,
             Color::Reset,
         );
 
@@ -2555,11 +2583,17 @@ mod tests {
 
         assert!(mapping.len() > 1);
         assert!(screen(&terminal).contains("› [↪] carry"));
-        assert_eq!(
-            terminal.backend().buffer()[(3, 1)].fg,
-            app.styles.accent.fg.unwrap()
-        );
-        assert_eq!(terminal.backend().buffer()[(1, 2)].symbol(), " ");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(1, 1)].fg, app.styles.accent.fg.unwrap());
+        assert_eq!(buffer[(3, 1)].fg, app.styles.accent.fg.unwrap());
+        assert_eq!(buffer[(4, 1)].fg, app.styles.carried.fg.unwrap());
+        assert_eq!(buffer[(5, 1)].fg, app.styles.accent.fg.unwrap());
+
+        // Continuation rows leave the marker columns blank.
+        for x in 1..7 {
+            assert_eq!(buffer[(x, 2)].symbol(), " ");
+        }
 
         app.key(
             KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
@@ -2573,6 +2607,11 @@ mod tests {
         assert!(screen(&terminal).contains('■'));
         assert!(!screen(&terminal).contains("[↪]"));
 
+        // Search markers describe the search, so they keep their own colors.
+        let found = &terminal.backend().buffer()[(4, 1)];
+        assert_eq!(found.symbol(), "■");
+        assert_eq!(found.fg, app.styles.accent.fg.unwrap());
+
         app.key(
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
             &fixture.storage,
@@ -2584,6 +2623,65 @@ mod tests {
         assert!(screen(&terminal).contains("[↪]"));
         assert_eq!(app.tasks[0].status, TaskStatus::Carried);
         assert!(!fixture.task_path().exists());
+    }
+
+    #[test]
+    fn only_the_carried_arrow_takes_the_carried_color() {
+        let accent = Color::Rgb(169, 182, 101);
+        let carried = Color::Rgb(216, 166, 87);
+
+        for marker_style in [MarkerStyle::Unicode, MarkerStyle::Ascii] {
+            for selected in 0..3 {
+                let mut app = App::new(vec![
+                    Task {
+                        status: TaskStatus::Carried,
+                        ..Task::new("carried")
+                    },
+                    Task::new("pending"),
+                    Task {
+                        status: TaskStatus::Completed,
+                        ..Task::new("completed")
+                    },
+                ]);
+                app.marker_style = marker_style;
+                app.styles.accent = app.styles.accent.fg(accent);
+                app.styles.carried = app.styles.carried.fg(carried);
+                app.list.select(Some(selected));
+                let mut terminal = test_terminal(30, 8);
+                render(&mut terminal, &mut app);
+                let buffer = terminal.backend().buffer();
+
+                for index in 0..3 {
+                    let y = index as u16 + 1;
+                    let focus = &buffer[(1, y)];
+                    let text = &buffer[(7, y)];
+
+                    // Brackets follow selection; the carried arrow keeps its own color.
+                    let brackets = if index == selected {
+                        accent
+                    } else {
+                        Color::Reset
+                    };
+                    let mark = if index == 0 { carried } else { brackets };
+
+                    assert_eq!(
+                        buffer[(3, y)].fg,
+                        brackets,
+                        "task {index}, selected {selected}"
+                    );
+                    assert_eq!(buffer[(4, y)].fg, mark, "task {index}, selected {selected}");
+                    assert_eq!(
+                        buffer[(5, y)].fg,
+                        brackets,
+                        "task {index}, selected {selected}"
+                    );
+                    assert_eq!(focus.fg, accent);
+                    assert_eq!(focus.symbol() != " ", index == selected);
+                    assert_eq!(text.fg, Color::Reset);
+                    assert_eq!(text.modifier.contains(Modifier::CROSSED_OUT), index == 2);
+                }
+            }
+        }
     }
 
     #[test]
@@ -3634,7 +3732,7 @@ mod tests {
     }
 
     #[test]
-    fn only_leading_tags_are_bold_across_wrapping_and_completion_styles() {
+    fn only_leading_tags_are_bold_headings_across_wrapping_and_completion_styles() {
         for (text, tag) in [
             ("foo: first bar:", "foo:"),
             ("foo:bar", ""),
@@ -3672,11 +3770,20 @@ mod tests {
                                 continue;
                             }
 
-                            if cell.modifier.contains(Modifier::BOLD) {
+                            let in_tag = cell.modifier.contains(Modifier::BOLD);
+
+                            if in_tag {
                                 bold.push_str(cell.symbol());
                             }
 
-                            assert_eq!(cell.fg, Color::Reset);
+                            // A completed task keeps one color, its section prefix included.
+                            let expected = if in_tag && !completed {
+                                app.styles.heading.fg.unwrap()
+                            } else {
+                                Color::Reset
+                            };
+
+                            assert_eq!(cell.fg, expected);
                             assert_eq!(cell.modifier.contains(Modifier::CROSSED_OUT), completed);
                             assert_eq!(cell.modifier.contains(Modifier::DIM), completed);
                         }
@@ -3688,6 +3795,58 @@ mod tests {
                     assert_eq!(app.tasks, original);
                     assert!(!app.can_undo());
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn search_matches_replace_the_heading_color_where_they_cover_a_section_prefix() {
+        let heading = Color::Rgb(1, 2, 3);
+        let accent = Color::Rgb(20, 40, 60);
+        let mut app = App::new(vec![
+            Task::new("Work: review"),
+            Task::new("Work: rework"),
+            Task {
+                status: TaskStatus::Completed,
+                ..Task::new("Work: redo")
+            },
+        ]);
+        app.styles.heading = app.styles.heading.fg(heading);
+        app.styles.accent = app.styles.accent.fg(accent);
+        app.mode = Mode::Searching {
+            input: "rk: re".into(),
+            original: Some(0),
+        };
+        let mut terminal = test_terminal(40, 10);
+        render(&mut terminal, &mut app);
+        let buffer = terminal.backend().buffer();
+
+        // Tabs sit on the border and the row under them is left blank, so tasks start on row 2.
+        // Text starts at column 7: "Wo" is unmatched prefix, "rk:" matched prefix, " re"
+        // matched body, and the rest unmatched body. Only the focused match uses the accent.
+        for (y, completed, match_color) in [
+            (2, false, accent),
+            (3, false, Color::Reset),
+            (4, true, Color::Reset),
+        ] {
+            for x in 7..16 {
+                let cell = &buffer[(x, y)];
+                let in_prefix = x < 12;
+                let in_match = (9..15).contains(&x);
+
+                let expected = if in_match {
+                    match_color
+                } else if in_prefix && !completed {
+                    heading
+                } else {
+                    Color::Reset
+                };
+
+                assert_eq!(cell.fg, expected, "({x}, {y})");
+                assert_eq!(cell.bg, Color::Reset, "({x}, {y})");
+                assert_eq!(cell.modifier.contains(Modifier::BOLD), in_prefix);
+                assert_eq!(cell.modifier.contains(Modifier::REVERSED), in_match);
+                assert_eq!(cell.modifier.contains(Modifier::CROSSED_OUT), completed);
             }
         }
     }
@@ -3888,9 +4047,23 @@ mod tests {
 
         let buffer = terminal.backend().buffer();
         let prompt_width = "› ".width() as u16;
+        let styles = Styles::default();
 
         (prompt_width..width)
-            .map(|x| buffer[(x, 0)].modifier.contains(Modifier::BOLD))
+            .map(|x| {
+                let cell = &buffer[(x, 0)];
+                let bold = cell.modifier.contains(Modifier::BOLD);
+
+                // Only a complete section prefix is drawn as a heading.
+                let expected = if bold {
+                    styles.heading.fg
+                } else {
+                    styles.normal.fg
+                };
+                assert_eq!(Some(cell.fg), expected, "{text:?}, cell {x}");
+
+                bold
+            })
             .collect()
     }
 
@@ -4263,6 +4436,34 @@ mod tests {
 
             assert_eq!(help_state(&app), (0, 0, bottom - top - 1));
         }
+    }
+
+    #[test]
+    fn the_reference_title_and_group_names_are_its_only_headings() {
+        let heading = Color::Rgb(1, 2, 3);
+        let mut app = app_with_texts(&["task"]);
+        app.mode = help_mode();
+        app.styles.heading = app.styles.heading.fg(heading);
+        let mut terminal = test_terminal(100, 80);
+        render(&mut terminal, &mut app);
+        let buffer = terminal.backend().buffer();
+        let mut headings = Vec::new();
+
+        for y in 0..buffer.area.height {
+            let text: String = (0..buffer.area.width)
+                .map(|x| &buffer[(x, y)])
+                .filter(|cell| cell.fg == heading)
+                .map(|cell| cell.symbol())
+                .collect();
+
+            if !text.trim().is_empty() {
+                headings.push(text.trim().to_owned());
+            }
+        }
+
+        let mut expected = vec![HELP_TITLE];
+        expected.extend(HELP_GROUPS.iter().map(|(name, _)| *name));
+        assert_eq!(headings, expected);
     }
 
     #[test]

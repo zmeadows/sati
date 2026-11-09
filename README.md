@@ -130,7 +130,7 @@ the `Work` section. Sections are optional: with none, sati looks exactly as befo
 any task has a section, tabs appear on the top border, with the current one shown in
 the accent color and a blank row separating them from the tasks:
 
-- `[*]` shows every task in your order, with each section prefix in bold.
+- `[*]` shows every task in your order, with each section prefix as a bold heading.
 - `[-]` comes next and shows tasks without a section, when there are any.
 - Each section follows with its own tab, in an order you choose. A new section starts at
   the right end. `Work:` and `work:` are the same section, labelled with the first
@@ -226,8 +226,9 @@ to the interactive checklist.
 Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--marker-style ascii` uses `>`, `[ ]`, `[x]`, and `[>]`; it changes only task markers, and other UI symbols remain Unicode.
 
 The `default` theme uses your terminal’s foreground and background, with dimming for muted
-items and ANSI bright yellow (`lightyellow`) for its accent. Named themes supply their own
-colors; TOML styles can override them, followed by CLI `--accent` for the accent foreground.
+items, ANSI bright yellow (`lightyellow`) for its accent, bright cyan (`lightcyan`) for
+headings, and yellow for the carried arrow. Named themes supply their own colors; TOML
+styles can override them, followed by CLI `--accent` for the accent foreground only.
 
 ```sh
 sati
@@ -298,8 +299,9 @@ re-enables it. When both flags of a pair are given, the last one wins.
 The `default` theme uses terminal-native colors and remains the default. Other
 built-in themes reproduce established Vim, Neovim, and Emacs color schemes, in both dark
 and light variants (such as Solarized Light, Catppuccin Latte, Modus Operandi, and Ef
-Summer). Each provides five RGB foregrounds, its original background, and no base text
-modifiers. `default` keeps the terminal background unless explicitly overridden.
+Summer). Each provides explicit RGB foregrounds for all seven style roles, one shared RGB
+background, and no base text modifiers. `default` keeps the terminal background unless
+explicitly overridden.
 
 Run `sati --list-themes` to print the available theme identifiers.
 
@@ -309,22 +311,39 @@ Cycle themes during a session with `t` / `T`. Changes are temporary and never
 modify configuration; restarting restores the CLI/configured theme. TOML style
 overrides and CLI accent remain active while cycling.
 
+Seven style roles color the interface, each configurable as `[styles.ROLE]`:
+
+| Role | Used for | Inherits |
+| --- | --- | --- |
+| `normal` | Task text, other body text, and the shared background | — |
+| `muted` | Secondary text: inactive tabs, hints, and the scrollbar | `normal` |
+| `completed` | Completed task text, section prefix included | `muted` |
+| `border` | Window and dialog borders | `muted` |
+| `accent` | Focus marker, current tab, prompts, and new status messages | `normal` |
+| `heading` | Section prefixes such as `Work:`, and the keyboard reference's titles | `normal` |
+| `carried` | The arrow in a carried task's checkbox (`↪` or `>`) | `normal` |
+
+Each role starts from its parent's resolved style and keeps whatever the theme or an
+override doesn't change. In the `default` theme, muted adds DIM to normal; completed and
+border are muted unchanged; accent, heading, and carried change only the foreground, to
+`lightyellow`, `lightcyan`, and `yellow` from the terminal's palette. The RGB themes
+instead supply explicit foregrounds and empty base modifier sets for each role, and their
+background reaches every role through normal.
+
 Explicit `[styles.*]` settings override the chosen theme, and
 `--accent` takes final precedence for the accent foreground only, preserving
-configured background and modifiers.
+configured background and modifiers; it never changes heading or carried.
 
-The five style roles support `fg`, `bg`, and `modifiers`. Foregrounds accept Ratatui ANSI
+Every role supports `fg`, `bg`, and `modifiers`. Foregrounds accept Ratatui ANSI
 names, hex RGB, and palette indices (as strings). `reset` inherits the terminal
-foreground and is allowed except for accent. In the `default` theme, muted
-inherits normal and adds DIM; completed and border inherit resolved muted.
-Accent inherits normal, then defaults its foreground to `lightyellow`. The RGB
-themes instead supply explicit foregrounds and empty base modifier sets for each
-role.
+foreground and is allowed except for accent.
 
 Omitted properties retain those inherited values. A modifier array **replaces**
 inherited modifiers; `modifiers = []` clears them. Supported names are `bold`,
 `dim`, `italic`, `underlined`, and `crossed_out`, without duplicates. Completion
-strikethrough, focus/prefix boldness, and search highlighting remain contextual.
+strikethrough, focus/prefix boldness, and search highlighting remain contextual: they are
+not roles, and they apply on top of the role styles. A search match inside a section
+prefix is highlighted like any other match.
 Backgrounds accept exact hex RGB strings or `reset` (terminal default). A normal
 background cascades to every role unless that role overrides it. For example,
 `[styles.normal]` with `bg = "#20242d"` replaces the selected theme's background.

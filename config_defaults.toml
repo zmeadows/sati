@@ -21,7 +21,9 @@ mouse = true                      # true or false; false leaves the mouse to the
 # Style overrides have no default entries: any [styles.*] setting replaces what the chosen
 # theme provides for that role. Uncomment and edit only the ones you want.
 #
-# Roles: normal, muted, completed, border, accent.
+# Roles: normal (task text and background), muted (secondary text), completed (completed
+#     tasks), border, accent (focus, current tab, prompts), heading (section prefixes and
+#     reference titles), and carried (the arrow in a carried task's checkbox).
 # fg: an ANSI color name such as "lightyellow", "#RRGGBB", a palette index such as "208",
 #     or "reset" for the terminal foreground (not allowed for accent).
 # bg: "#RRGGBB" or "reset" only.
@@ -46,3 +48,11 @@ mouse = true                      # true or false; false leaves the mouse to the
 # [styles.accent]
 # fg = "#e78a4e"
 # modifiers = ["bold"]
+
+# [styles.heading]
+# fg = "#a9b665"
+# modifiers = []
+
+# [styles.carried]
+# fg = "#d8a657"
+# modifiers = []
