@@ -50,8 +50,8 @@ impl FromStr for BuiltinTheme {
     fn from_str(name: &str) -> Result<Self, Self::Err> {
         Self::ALL
             .iter()
-            .find(|(_, id, _)| *id == name)
-            .map(|(theme, _, _)| *theme)
+            .find(|(_, id)| *id == name)
+            .map(|(theme, _)| *theme)
             .ok_or_else(|| {
                 format!(
                     "unknown theme: {name:?}; run `sati --list-themes` to see the available themes"
@@ -70,59 +70,51 @@ impl TryFrom<String> for BuiltinTheme {
 
 impl BuiltinTheme {
     #[rustfmt::skip]
-    pub const ALL: &'static [(Self, &'static str, &'static str)] = &[
-        (Self::Default, "default", "Default"),
-        (Self::GruvboxMaterial, "gruvbox-material", "Gruvbox Material"),
-        (Self::CatppuccinMocha, "catppuccin-mocha", "Catppuccin Mocha"),
-        (Self::TokyoNightStorm, "tokyonight-storm", "Tokyo Night Storm"),
-        (Self::KanagawaWave, "kanagawa-wave", "Kanagawa Wave"),
-        (Self::RosePine, "rose-pine", "Rosé Pine"),
-        (Self::Nightfox, "nightfox", "Nightfox"),
-        (Self::OneDark, "onedark", "One Dark"),
-        (Self::GithubDark, "github-dark", "GitHub Dark"),
-        (Self::EverforestMedium, "everforest-medium", "Everforest Dark / Medium"),
-        (Self::CyberdreamMuted, "cyberdream-muted", "Cyberdream Muted"),
-        (Self::Nord, "nord", "Nord"),
-        (Self::Dracula, "dracula", "Dracula"),
-        (Self::Darcula, "darcula", "Darcula"),
-        (Self::Gruvbox, "gruvbox", "Gruvbox Classic"),
-        (Self::SolarizedDark, "solarized-dark", "Solarized Dark"),
-        (Self::SolarizedLight, "solarized-light", "Solarized Light"),
-        (Self::GruvboxLight, "gruvbox-light", "Gruvbox Light"),
-        (Self::CatppuccinLatte, "catppuccin-latte", "Catppuccin Latte"),
-        (Self::GithubLight, "github-light", "GitHub Light"),
-        (Self::RosePineDawn, "rose-pine-dawn", "Rosé Pine Dawn"),
-        (Self::EverforestLight, "everforest-light", "Everforest Light"),
-        (Self::ModusOperandi, "modus-operandi", "Modus Operandi"),
-        (Self::EfSummer, "ef-summer", "Ef Summer"),
-        (Self::Monokai, "monokai", "Monokai"),
-        (Self::ModusVivendi, "modus-vivendi", "Modus Vivendi"),
-        (Self::ModusOperandiDeuteranopia, "modus-operandi-deuteranopia", "Modus Operandi Deuteranopia"),
-        (Self::ModusVivendiDeuteranopia, "modus-vivendi-deuteranopia", "Modus Vivendi Deuteranopia"),
-        (Self::ModusOperandiTritanopia, "modus-operandi-tritanopia", "Modus Operandi Tritanopia"),
-        (Self::ModusVivendiTritanopia, "modus-vivendi-tritanopia", "Modus Vivendi Tritanopia"),
+    pub const ALL: &'static [(Self, &'static str)] = &[
+        (Self::Default, "default"),
+        (Self::GruvboxMaterial, "gruvbox-material"),
+        (Self::CatppuccinMocha, "catppuccin-mocha"),
+        (Self::TokyoNightStorm, "tokyonight-storm"),
+        (Self::KanagawaWave, "kanagawa-wave"),
+        (Self::RosePine, "rose-pine"),
+        (Self::Nightfox, "nightfox"),
+        (Self::OneDark, "onedark"),
+        (Self::GithubDark, "github-dark"),
+        (Self::EverforestMedium, "everforest-medium"),
+        (Self::CyberdreamMuted, "cyberdream-muted"),
+        (Self::Nord, "nord"),
+        (Self::Dracula, "dracula"),
+        (Self::Darcula, "darcula"),
+        (Self::Gruvbox, "gruvbox"),
+        (Self::SolarizedDark, "solarized-dark"),
+        (Self::SolarizedLight, "solarized-light"),
+        (Self::GruvboxLight, "gruvbox-light"),
+        (Self::CatppuccinLatte, "catppuccin-latte"),
+        (Self::GithubLight, "github-light"),
+        (Self::RosePineDawn, "rose-pine-dawn"),
+        (Self::EverforestLight, "everforest-light"),
+        (Self::ModusOperandi, "modus-operandi"),
+        (Self::EfSummer, "ef-summer"),
+        (Self::Monokai, "monokai"),
+        (Self::ModusVivendi, "modus-vivendi"),
+        (Self::ModusOperandiDeuteranopia, "modus-operandi-deuteranopia"),
+        (Self::ModusVivendiDeuteranopia, "modus-vivendi-deuteranopia"),
+        (Self::ModusOperandiTritanopia, "modus-operandi-tritanopia"),
+        (Self::ModusVivendiTritanopia, "modus-vivendi-tritanopia"),
     ];
 
     pub fn id(self) -> &'static str {
         Self::ALL
             .iter()
-            .find(|(theme, _, _)| *theme == self)
+            .find(|(theme, _)| *theme == self)
             .expect("registered theme")
             .1
-    }
-
-    pub fn display_name(self) -> &'static str {
-        Self::ALL
-            .iter()
-            .find(|(theme, _, _)| *theme == self)
-            .expect("registered theme")
-            .2
     }
 
     pub fn cycle(self, forward: bool) -> Self {
         let index = Self::ALL
             .iter()
-            .position(|(theme, _, _)| *theme == self)
+            .position(|(theme, _)| *theme == self)
             .expect("registered theme");
 
         let next = if forward {
@@ -504,7 +496,7 @@ impl BuiltinTheme {
 // Prints one theme ID per line for `sati --list-themes`.
 pub fn print_list() -> crate::storage::Result<()> {
     let mut contents = String::new();
-    for (_, id, _) in BuiltinTheme::ALL {
+    for (_, id) in BuiltinTheme::ALL {
         contents.push_str(id);
         contents.push('\n');
     }
@@ -564,7 +556,7 @@ mod tests {
 
         assert_eq!(palettes.len(), BuiltinTheme::ALL.len() - 1);
 
-        for ((name, colors), (theme, id, _)) in palettes.iter().zip(&BuiltinTheme::ALL[1..]) {
+        for ((name, colors), (theme, id)) in palettes.iter().zip(&BuiltinTheme::ALL[1..]) {
             assert_eq!(name, id);
 
             let [
@@ -599,9 +591,8 @@ mod tests {
 
     #[test]
     fn registry_drives_both_cycle_directions_and_wraparound() {
-        for (index, &(theme, id, display)) in BuiltinTheme::ALL.iter().enumerate() {
+        for (index, &(theme, id)) in BuiltinTheme::ALL.iter().enumerate() {
             assert_eq!(id.parse::<BuiltinTheme>().unwrap(), theme);
-            assert_eq!(theme.display_name(), display);
             assert_eq!(theme.id(), id);
             assert_eq!(
                 theme.cycle(true),
@@ -623,7 +614,7 @@ mod tests {
 
     #[test]
     fn all_available_themes_parse_and_preserve_overrides_and_modifier_resets() {
-        let names: Vec<_> = BuiltinTheme::ALL.iter().map(|(_, name, _)| *name).collect();
+        let names: Vec<_> = BuiltinTheme::ALL.iter().map(|(_, name)| *name).collect();
         assert_eq!(names.len(), 30);
         assert_eq!(
             names.iter().collect::<std::collections::HashSet<_>>().len(),

@@ -1614,11 +1614,7 @@ impl App {
         self.theme = self.theme.cycle(forward);
         self.styles =
             crate::styles::Styles::resolve(self.theme, &self.style_overrides, self.cli_accent);
-        self.show_status_message(format!(
-            "Theme: {} ({})",
-            self.theme.display_name(),
-            self.theme.id()
-        ));
+        self.show_status_message(format!("Theme: {}", self.theme.id()));
     }
 
     fn yank_task(&mut self) {
@@ -3061,7 +3057,7 @@ mod tests {
             );
             assert_eq!(
                 app.status_message.as_ref().unwrap().message(),
-                format!("Theme: {} ({})", expected.display_name(), expected.id())
+                format!("Theme: {}", expected.id())
             );
         }
 
@@ -3091,7 +3087,7 @@ mod tests {
         press(&mut app, &fixture, KeyCode::Char('t'));
         assert_eq!(app.theme, BuiltinTheme::Default);
 
-        for &(theme, id, display) in BuiltinTheme::ALL {
+        for &(theme, id) in BuiltinTheme::ALL {
             for forward in [false, true] {
                 app.theme = theme.cycle(!forward);
                 press(
@@ -3103,7 +3099,7 @@ mod tests {
                 assert_eq!(app.theme, theme);
                 assert_eq!(
                     app.status_message.as_ref().unwrap().message(),
-                    format!("Theme: {display} ({id})")
+                    format!("Theme: {id}")
                 );
             }
         }

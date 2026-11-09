@@ -34,10 +34,8 @@ impl StatusMessage {
             message if message.starts_with("Undid: ") => "Undid",
             message if message.starts_with("Redid: ") => "Redid",
             message if message.starts_with("Cleared ") => "Cleared",
-            message if message.starts_with("Theme: ") => message
-                .rsplit_once(" (")
-                .and_then(|(_, id)| id.strip_suffix(')'))
-                .unwrap_or("Theme changed"),
+            // A theme's identifier alone still says which theme was chosen.
+            message if message.starts_with("Theme: ") => &message["Theme: ".len()..],
             message => message,
         }
     }
@@ -83,11 +81,11 @@ mod tests {
     #[test]
     fn compact_theme_messages_keep_exact_identifiers() {
         for (message, compact) in [
-            ("Theme: Rosé Pine (rose-pine)", "rose-pine"),
-            ("Theme: Default (default)", "default"),
+            ("Theme: rose-pine", "rose-pine"),
+            ("Theme: default", "default"),
             (
-                "Theme: Everforest Dark / Medium (everforest-medium)",
-                "everforest-medium",
+                "Theme: modus-operandi-deuteranopia",
+                "modus-operandi-deuteranopia",
             ),
             ("Copied task", "Copied task"),
             ("Copy sent to terminal", "Copy sent"),

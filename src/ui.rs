@@ -2337,9 +2337,9 @@ mod tests {
                     "Copy sent to terminal",
                     "Copy failed: output unavailable",
                     "Copied task",
-                    "Theme: Everforest Dark / Medium (everforest-medium)",
-                    "Theme: Rosé Pine (rose-pine)",
-                    "Theme: Default (default)",
+                    "Theme: modus-operandi-deuteranopia",
+                    "Theme: rose-pine",
+                    "Theme: default",
                 ] {
                     app.status_message = Some(crate::status_message::StatusMessage::new(
                         notice,

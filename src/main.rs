@@ -273,7 +273,7 @@ fn chosen_flag(on: bool, off: bool) -> Option<bool> {
 
 // Listing the names lets clap suggest close matches for typos; help omits them for brevity.
 fn theme_parser() -> impl TypedValueParser<Value = themes::BuiltinTheme> {
-    let names = themes::BuiltinTheme::ALL.iter().map(|(_, name, _)| *name);
+    let names = themes::BuiltinTheme::ALL.iter().map(|(_, name)| *name);
 
     PossibleValuesParser::new(names).map(|name| {
         name.parse::<themes::BuiltinTheme>()
@@ -852,7 +852,7 @@ mod tests {
                             .unwrap();
                         assert_eq!(
                             app.status_message.as_ref().unwrap().message(),
-                            format!("Theme: {} ({})", expected.display_name(), expected.id())
+                            format!("Theme: {}", expected.id())
                         );
                     }
 
@@ -920,7 +920,7 @@ mod tests {
 
     #[test]
     fn every_theme_is_selectable_from_cli_over_toml() {
-        for &(_, name, _) in themes::BuiltinTheme::ALL {
+        for &(_, name) in themes::BuiltinTheme::ALL {
             let config: config::Config = toml::from_str("theme='gruvbox-material'").unwrap();
             let cli = parse_cli(&["--theme", name]).unwrap();
             let selected = name.parse::<themes::BuiltinTheme>().unwrap();

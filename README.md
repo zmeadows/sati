@@ -298,8 +298,8 @@ re-enables it. When both flags of a pair are given, the last one wins.
 
 The `default` theme uses terminal-native colors and remains the default. Other
 built-in themes reproduce established Vim, Neovim, and Emacs color schemes, in both dark
-and light variants (such as Solarized Light, Catppuccin Latte, Modus Operandi, and Ef
-Summer). Each provides explicit RGB foregrounds for all seven style roles, one shared RGB
+and light variants (such as `solarized-light`, `catppuccin-latte`, `modus-operandi`, and
+`ef-summer`). Each provides explicit RGB foregrounds for all seven style roles, one shared RGB
 background, and no base text modifiers. `default` keeps the terminal background unless
 explicitly overridden.
 
