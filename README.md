@@ -42,11 +42,19 @@ There's no prescribed way to use `sati`, but a few habits have worked well for m
 
 Prebuilt executables are available from [GitHub Releases](https://github.com/zmeadows/sati/releases).
 Download and extract the archive for your platform; Rust is not required. Archives
-include LICENSE, and SHA-256 checksums are provided in `SHA256SUMS`.
+are `.tar.gz` on Linux/macOS and `.zip` on Windows, and include LICENSE.
+Run the extracted executable from a terminal with `./sati` (Linux/macOS) or
+`.\sati.exe` (Windows PowerShell), or put it in a directory on your `PATH`.
+Compare the archive's SHA-256 hash with `SHA256SUMS` to check download integrity.
 
 Builds target Linux x86_64 and ARM64 (GNU/glibc, built on Ubuntu 22.04), macOS
 Apple Silicon and Intel, and Windows x86_64. Ubuntu 22.04 provides an older glibc
 baseline; compatibility with older Linux systems is not guaranteed.
+
+macOS downloads are not Developer ID signed or notarized; Windows downloads are not
+Authenticode signed. [Gatekeeper](https://support.apple.com/en-us/102445) or
+[SmartScreen](https://learn.microsoft.com/en-us/windows/security/operating-system-security/virus-and-threat-protection/microsoft-defender-smartscreen/)
+may warn when launching them.
 
 With [Rust and Cargo](https://www.rust-lang.org/tools/install) (Rust 1.89 or newer):
 
@@ -59,6 +67,10 @@ Then run `sati`.
 ## Keyboard shortcuts
 
 Where a row lists several keys, Vim-style keys usually come first, followed by arrow-key and Emacs-style alternatives.
+
+On macOS, Alt shortcuts need Option to send Meta/Escape-prefixed input. Terminal.app
+calls this “Use Option as Meta key”; iTerm2 uses “+Esc”. Settings vary by terminal,
+and terminal or OS shortcuts can intercept key combinations before sati receives them.
 
 ### Checklist
 
@@ -124,8 +136,8 @@ terminal or multiplexer binds `Ctrl+S` itself, use `/` or `Ctrl+F`.
 Task copies use one in-memory register, separate from the system clipboard. `y` (or
 `Alt+W`) puts the selected task's text in the register, and `p`, `P`, or `Ctrl+Y` paste
 it as a new task. Pasted tasks start incomplete and unmarked; the register remains
-available for repeated pastes until exit. `c` still copies the entire checklist as
-Markdown to the system clipboard.
+available for repeated pastes until exit. `c` sends the current tab's tasks as
+Markdown to the terminal using OSC 52 (see [Export](#export)).
 
 ### Sections
 
@@ -161,8 +173,7 @@ Press `L` / `H` (or `Alt+N` / `Alt+P`) on a section tab to move it one place rig
 left among the named sections; a count such as `3L` moves it further. `[*]` and `[-]` stay
 first, the ends don't wrap, and the tasks themselves keep their order; `u` undoes a move. Renaming a section keeps its place.
 A section disappears from the order with its last task, and comes back at the right end
-if you use it again. On macOS, the `Alt` shortcuts need the terminal to send Option as
-Meta (Esc+).
+if you use it again.
 
 A section tab hides the shared prefix and keeps navigation, counts, reordering (`J` / `K`), and search within its own tasks.
 `X`, `D`, and `c` clear or copy only the current tab's tasks; `sati export` always
@@ -208,7 +219,7 @@ adds nothing.
 
 **Search:** Press `/` and type. Each change to the query focuses the first match starting from the task that was selected when search began (that task itself if it matches), wrapping to the top. `Tab` / `Shift+Tab` (or `Ctrl+N` / `Ctrl+P`) cycle through the matches, and moving the cursor within the query keeps the focused match. `Enter` selects the focused match and returns to the checklist. `Esc` cancels and restores your previous selection. Exiting search clears highlighting; the query is not remembered.
 
-**Pasting on Windows:** Windows terminals deliver pasted text to sati as ordinary keystrokes. Open a prompt (`a`, `e`, or `/`) before pasting; in the checklist itself, pasted letters act as shortcuts. A line break in the pasted text acts as `Enter` and a tab as `Tab`, so paste one line at a time. Windows Terminal asks before pasting multiple lines by default; keep that warning on. `u` or `Ctrl+Z` undoes accidental changes only while sati stays open: if a pasted `q` exits sati, its undo history is lost.
+**Pasting on Windows:** Sati's current Crossterm Windows input backend does not report bracketed-paste events, so pasted text can arrive as ordinary keystrokes. Open a prompt (`a`, `e`, or `/`) before pasting; in the checklist itself, pasted letters act as shortcuts. A line break acts as `Enter`, potentially submitting the prompt and letting subsequent text execute shortcuts; a tab acts as `Tab`. Paste one line at a time. Windows Terminal asks before pasting multiple lines by default; keep that warning on. `u` or `Ctrl+Z` undoes accidental changes only while sati stays open: if a pasted `q` exits sati, its undo history is lost.
 
 ## Options
 
@@ -356,10 +367,10 @@ background cascades to every role unless that role overrides it. For example,
 
 Sati fills character cells through Ratatui and sends OSC 11 for the resolved RGB normal
 background, including terminal padding. Runtime `t` / `T` changes both. Terminals
-that ignore OSC 11 still get cell backgrounds. OSC 111 restores the configured
-terminal background, if Sati changed it, on exit or when switching to a theme without an
-effective background. It cannot recover a temporary OSC override that existed before
-Sati started.
+that ignore OSC 11 still get cell backgrounds. On terminals supporting OSC 111, it restores
+the configured terminal background, if Sati changed it, on exit or when switching to a theme
+without an effective background. It cannot recover a temporary OSC override that existed
+before Sati started.
 
 ### Accessibility-oriented themes
 
@@ -400,12 +411,26 @@ protection of its own. Carried tasks export as ordinary unchecked items, with ta
 order and literal text preserved.
 
 Press `c` in the checklist to send the same Markdown, limited to the current section
-tab, to the terminal clipboard using OSC 52. The brief “Copy sent to terminal” message
-clears on subsequent activity or after `status_message_duration_ms`; clipboard acceptance
-depends on terminal and multiplexer support.
+tab, to the terminal using OSC 52. The brief “Copy sent to terminal” message
+clears on subsequent activity or after `status_message_duration_ms`; it confirms sending,
+not that the system clipboard changed. The terminal must accept clipboard writes,
+and any multiplexer must pass them through; sati cannot confirm acceptance.
 `--no-status-messages` (or `status_messages = false`) hides this and sati's other brief
 status messages (undo/redo descriptions, wrap, delete and clear confirmations, and hints such as
 “Nothing to undo”), but a failed copy is still reported.
+
+If OSC 52 does not work, pipe `sati export` into a clipboard utility in your local
+desktop session (install `wl-copy` or `xclip` separately if needed):
+
+| Platform | Command |
+| --- | --- |
+| Linux Wayland | `sati export \| wl-copy` |
+| Linux X11 | `sati export \| xclip -selection clipboard` |
+| macOS (UTF-8 locale) | `sati export \| pbcopy` |
+| Windows PowerShell | `sati export \| Set-Clipboard` |
+
+For Windows PowerShell, first run `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8`
+so the pipeline decodes sati's UTF-8 output correctly.
 
 ## Data
 
