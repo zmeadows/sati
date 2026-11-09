@@ -2,6 +2,7 @@ use super::*;
 use crate::model::current_time;
 use crate::status_message::DEFAULT_DURATION;
 use crate::storage::tests::Fixture;
+use ratatui::crossterm::event::ModifierKeyCode;
 
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
@@ -1933,6 +1934,143 @@ fn editing_an_erased_task_can_move_it_to_another_section() {
     assert_eq!(texts(&app), ["Home: moved task", "Home: b"]);
     assert_eq!(app.view, SectionView::Named("home".into()));
     assert_eq!(app.list.selected(), Some(0));
+}
+
+// Terminals reporting every key as an escape code send Shift, Ctrl, and lock keys on their own.
+fn bare_modifier(code: ModifierKeyCode, modifiers: KeyModifiers) -> KeyEvent {
+    KeyEvent::new(KeyCode::Modifier(code), modifiers)
+}
+
+#[test]
+fn bare_modifier_and_lock_keys_keep_a_section_suggestion() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["work: a", "Home: b", "Errands: c"]);
+    app.show_section(SectionView::Named("work".into()));
+
+    press(&mut app, &fixture, KeyCode::Char('a'));
+
+    for key in [
+        bare_modifier(ModifierKeyCode::LeftShift, KeyModifiers::SHIFT),
+        bare_modifier(ModifierKeyCode::LeftControl, KeyModifiers::CONTROL),
+        bare_modifier(ModifierKeyCode::LeftAlt, KeyModifiers::ALT),
+        KeyEvent::from(KeyCode::CapsLock),
+    ] {
+        press(&mut app, &fixture, key);
+        assert_eq!(app.completion_ghost().as_deref(), Some("work: "), "{key:?}");
+    }
+
+    // A capital letter typed with Shift continues after the suggested section.
+    press(
+        &mut app,
+        &fixture,
+        bare_modifier(ModifierKeyCode::LeftShift, KeyModifiers::SHIFT),
+    );
+    press(
+        &mut app,
+        &fixture,
+        KeyEvent::new(KeyCode::Char('B'), KeyModifiers::SHIFT),
+    );
+    assert_eq!(input_text(&app), "work: B");
+
+    press(&mut app, &fixture, KeyCode::Enter);
+    assert_eq!(texts(&app), ["work: a", "Home: b", "Errands: c", "work: B"]);
+}
+
+#[test]
+fn shift_tab_and_ctrl_n_step_from_a_prefilled_suggestion_after_a_bare_modifier() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["Work: a", "Home: b", "Errands: c"]);
+    app.show_section(SectionView::Named("home".into()));
+
+    press(&mut app, &fixture, KeyCode::Char('a'));
+    assert_eq!(app.completion_ghost().as_deref(), Some("Home: "));
+
+    press(
+        &mut app,
+        &fixture,
+        bare_modifier(ModifierKeyCode::LeftShift, KeyModifiers::SHIFT),
+    );
+    press(
+        &mut app,
+        &fixture,
+        KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+    );
+    assert_eq!(app.completion_ghost().as_deref(), Some("Errands: "));
+
+    press(
+        &mut app,
+        &fixture,
+        bare_modifier(ModifierKeyCode::LeftControl, KeyModifiers::CONTROL),
+    );
+    press(
+        &mut app,
+        &fixture,
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+    );
+    assert_eq!(app.completion_ghost().as_deref(), Some("Home: "));
+}
+
+#[test]
+fn only_keys_that_edit_or_move_the_cursor_drop_a_suggestion() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["Work: a", "Home: b"]);
+    app.show_section(SectionView::Named("work".into()));
+
+    press(&mut app, &fixture, KeyCode::Char('a'));
+
+    for key in [
+        KeyEvent::from(KeyCode::Up),
+        KeyEvent::from(KeyCode::Down),
+        KeyEvent::from(KeyCode::PageDown),
+        KeyEvent::from(KeyCode::F(1)),
+        KeyEvent::from(KeyCode::Insert),
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+    ] {
+        press(&mut app, &fixture, key);
+        assert_eq!(app.completion_ghost().as_deref(), Some("Work: "), "{key:?}");
+        assert_eq!(input_text(&app), "");
+    }
+
+    for key in [
+        KeyEvent::from(KeyCode::Left),
+        KeyEvent::from(KeyCode::Right),
+        KeyEvent::from(KeyCode::Home),
+        KeyEvent::from(KeyCode::End),
+        KeyEvent::from(KeyCode::Delete),
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+    ] {
+        press(&mut app, &fixture, KeyCode::Tab);
+        assert!(app.completion_ghost().is_some(), "{key:?}");
+
+        press(&mut app, &fixture, key);
+        assert_eq!(app.completion_ghost(), None, "{key:?}");
+        assert_eq!(input_text(&app), "");
+    }
+}
+
+#[test]
+fn bare_modifiers_keep_a_pending_count_and_status_message() {
+    let fixture = Fixture::new();
+    let mut app = app_with_tasks(5);
+    app.list.select(Some(0));
+
+    press(&mut app, &fixture, KeyCode::Char('3'));
+    app.status_message = Some(StatusMessage::new("Copied task", DEFAULT_DURATION));
+    press(
+        &mut app,
+        &fixture,
+        bare_modifier(ModifierKeyCode::LeftShift, KeyModifiers::SHIFT),
+    );
+    assert_eq!(notice(&app), Some("Copied task"));
+
+    press(
+        &mut app,
+        &fixture,
+        KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT),
+    );
+
+    assert_eq!(app.list.selected(), Some(3));
+    assert_eq!(app.tasks[3].text, "task 0");
 }
 
 // Replace the whole rename input with `name`.

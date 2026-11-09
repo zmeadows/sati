@@ -1414,7 +1414,16 @@ impl App {
     pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
         let key = self.normalize_key(key);
 
-        if key.kind == KeyEventKind::Release
+        // With every key reported as an escape code, the terminal also sends Shift, Ctrl, Alt,
+        // and lock keys pressed on their own. They only change how other keys read, so they
+        // must not cancel a count, section jump, status message, or section suggestion.
+        let modifier_only = matches!(
+            key.code,
+            KeyCode::Modifier(_) | KeyCode::CapsLock | KeyCode::NumLock | KeyCode::ScrollLock
+        );
+
+        if modifier_only
+            || key.kind == KeyEventKind::Release
             || (key.kind == KeyEventKind::Repeat && !self.repeat_allowed(key))
         {
             return Ok(false);
@@ -1536,6 +1545,12 @@ impl App {
                 modifiers: KeyModifiers::NONE,
                 ..key
             }
+        } else if key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT) {
+            // Some terminals report Shift+Tab as Tab with Shift rather than as BackTab.
+            KeyEvent {
+                code: KeyCode::BackTab,
+                ..key
+            }
         } else {
             key
         }
@@ -1618,9 +1633,6 @@ impl App {
             return Ok(false);
         }
 
-        // These shortcuts edit the input directly, so a pending suggestion is dropped.
-        self.completion = None;
-
         if self.mode == Mode::Normal {
             let half_page = usize::from(self.viewport.height / 2);
 
@@ -1689,8 +1701,13 @@ impl App {
             {
                 input.insert(single_line_character(character).encode_utf8(&mut [0; 4]));
             }
-            _ => {}
+            // Unlisted chords do nothing, so a pending suggestion stays.
+            _ => return Ok(true),
         }
+
+        // Every shortcut above edits the input or moves its cursor, so a pending suggestion
+        // no longer fits and is dropped.
+        self.completion = None;
 
         Ok(true)
     }
@@ -1703,9 +1720,7 @@ impl App {
             }
 
             if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
-                let forward =
-                    key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT);
-                self.search_next(forward);
+                self.search_next(key.code == KeyCode::Tab);
 
                 return Ok(());
             }
@@ -1724,12 +1739,10 @@ impl App {
         }
 
         if let Mode::FuzzySection { matches, .. } = &self.mode {
-            let forward = key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT);
-
             // Other keys edit the query below, like any other input.
             match key.code {
                 KeyCode::Tab | KeyCode::BackTab => {
-                    self.cycle_section_match(forward);
+                    self.cycle_section_match(key.code == KeyCode::Tab);
                     return Ok(());
                 }
                 // Enter needs a focused match: none is focused when nothing matches, or
@@ -1750,11 +1763,9 @@ impl App {
         }
 
         if matches!(self.mode, Mode::Adding(..) | Mode::Editing { .. }) {
-            let forward = key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT);
-
             match key.code {
                 KeyCode::Tab | KeyCode::BackTab => {
-                    self.cycle_completion(forward);
+                    self.cycle_completion(key.code == KeyCode::Tab);
                     return Ok(());
                 }
                 _ if self.completion.is_none() => {}
@@ -1768,9 +1779,17 @@ impl App {
                     self.completion = None;
                     return Ok(());
                 }
-                // Esc lands here too: it drops the suggestion, then cancels the add or edit
-                // below like it does without one.
-                _ => self.completion = None,
+                // These move the cursor off the end of the word or change the text after it.
+                // Esc drops the suggestion too, then cancels the add or edit below like it
+                // does without one.
+                KeyCode::Delete
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::Esc => self.completion = None,
+                // Keys that do nothing while typing, such as Up or F1, keep the suggestion.
+                _ => {}
             }
         }
 
@@ -1976,14 +1995,7 @@ impl App {
             KeyCode::Char('h') => self.cycle_section(false, count),
             KeyCode::Char('l') => self.cycle_section(true, count),
             KeyCode::Char('s') => self.pending_section_jump = Some(Instant::now()),
-            KeyCode::Tab | KeyCode::BackTab
-                if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
-            {
-                self.cycle_section(
-                    key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT),
-                    None,
-                );
-            }
+            KeyCode::Tab | KeyCode::BackTab => self.cycle_section(key.code == KeyCode::Tab, None),
             KeyCode::PageUp => self.page(false, usize::from(self.viewport.height)),
             KeyCode::PageDown => self.page(true, usize::from(self.viewport.height)),
             KeyCode::Char('g' | 'G') | KeyCode::Home | KeyCode::End if !self.tasks.is_empty() => {
