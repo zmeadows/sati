@@ -26,7 +26,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         Layout::vertical([Constraint::Min(0), Constraint::Length(input_height)]).split(area);
 
     let tabs = app.section_tabs();
-    app.tab_targets.clear();
+    app.viewport.tab_targets.clear();
     let list_area = sections[0];
 
     let mut block = Block::default()
@@ -77,7 +77,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         // Tabs sit on the top border between the corners.
         let strip_width = list_area.width.saturating_sub(2);
         let strip = Rect::new(list_area.x + 1, list_area.y, strip_width, 1);
-        app.tab_targets = draw_section_tabs(frame, app, &tabs, strip);
+        app.viewport.tab_targets = draw_section_tabs(frame, app, &tabs, strip);
 
         // Leave a blank row under the tabs so they don't merge with the first task,
         // unless that would leave no room for tasks.
@@ -90,7 +90,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
             // first character of its name (the `*` or `-` of [*] and [-]). Only the first
             // ten tabs have a digit, and tabs scrolled off the strip get none.
             if showing_section_jump(app) {
-                for (target, view) in &app.tab_targets {
+                for (target, view) in &app.viewport.tab_targets {
                     let Some(position) = tabs.iter().position(|(tab, _)| tab == view) else {
                         continue;
                     };
@@ -305,7 +305,7 @@ fn draw_section_tabs(
     // reorder on every edit, so they scroll from the first one and leave the saved scroll
     // for the ordinary tabs.
     let target = active.unwrap_or(0);
-    let saved_scroll = if picking { 0 } else { app.tab_scroll };
+    let saved_scroll = if picking { 0 } else { app.viewport.tab_scroll };
     let mut start = saved_scroll.min(target);
 
     while start < target && fitting_tabs(&widths, start, width) <= target {
@@ -313,7 +313,7 @@ fn draw_section_tabs(
     }
 
     if !picking {
-        app.tab_scroll = start;
+        app.viewport.tab_scroll = start;
     }
 
     let end = fitting_tabs(&widths, start, width);
@@ -426,7 +426,7 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         ..
     } = layout;
 
-    app.row_tasks = row_tasks;
+    app.viewport.row_tasks = row_tasks;
     let total_rows = lines.len();
 
     if lines.is_empty() {
@@ -650,18 +650,21 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
 }
 
 fn update_task_viewport(app: &mut App, layout: &TaskLayout, height: u16) -> Range<usize> {
-    app.viewport_height = height;
+    app.viewport.viewport_height = height;
 
     if layout.lines.is_empty() {
-        app.scroll = 0;
+        app.viewport.scroll = 0;
         return 0..0;
     }
 
     let height = usize::from(height);
-    app.scroll = app.scroll.min(layout.lines.len().saturating_sub(height));
+    app.viewport.scroll = app
+        .viewport
+        .scroll
+        .min(layout.lines.len().saturating_sub(height));
 
     if height == 0 {
-        return app.scroll..app.scroll;
+        return app.viewport.scroll..app.viewport.scroll;
     }
 
     let focus = layout.input_row.map(|row| (row, row + 1)).or_else(|| {
@@ -684,18 +687,20 @@ fn update_task_viewport(app: &mut App, layout: &TaskLayout, height: u16) -> Rang
     });
 
     if let Some((start, end)) = focus
-        && (app.reveal_selection || end <= app.scroll || start >= app.scroll + height)
+        && (app.viewport.reveal_selection
+            || end <= app.viewport.scroll
+            || start >= app.viewport.scroll + height)
     {
-        if end - start > height || start < app.scroll {
-            app.scroll = start;
-        } else if end > app.scroll + height {
-            app.scroll = end - height;
+        if end - start > height || start < app.viewport.scroll {
+            app.viewport.scroll = start;
+        } else if end > app.viewport.scroll + height {
+            app.viewport.scroll = end - height;
         }
     }
 
-    app.reveal_selection = false;
+    app.viewport.reveal_selection = false;
 
-    app.scroll..(app.scroll + height).min(layout.lines.len())
+    app.viewport.scroll..(app.viewport.scroll + height).min(layout.lines.len())
 }
 
 fn draw_inline_input(

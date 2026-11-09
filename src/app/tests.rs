@@ -351,7 +351,7 @@ fn clipboard_output_and_errors_leave_tasks_selection_and_histories_unchanged() {
     let undo = app.history.clone();
     let redo = app.redo_history.clone();
     let saved = fixture.storage.load().unwrap();
-    app.scroll = 2;
+    app.viewport.scroll = 2;
     let mut output = Vec::new();
     app.copy_markdown(&mut output);
     let mut expected = Vec::new();
@@ -386,7 +386,7 @@ fn clipboard_output_and_errors_leave_tasks_selection_and_histories_unchanged() {
     );
     assert_eq!(app.tasks, tasks);
     assert_eq!(app.list.selected(), selected);
-    assert_eq!(app.scroll, 2);
+    assert_eq!(app.viewport.scroll, 2);
     assert_eq!(app.history.clone(), undo);
     assert_eq!(app.redo_history.clone(), redo);
     assert_eq!(fixture.storage.load().unwrap(), saved);
@@ -503,7 +503,7 @@ fn task_register_copies_literal_text_and_pastes_unmarked_with_shared_placement()
                     }
                 );
                 assert_eq!(app.list.selected(), Some(index));
-                assert!(app.reveal_selection);
+                assert!(app.viewport.reveal_selection);
                 assert_eq!(app.history.len(), 1);
 
                 let pasted = app.tasks.clone();
@@ -1169,23 +1169,23 @@ fn esc_and_ctrl_g_restore_the_view_selection_and_scrolling() {
     ] {
         let mut app = picker_app();
         app.list.select(Some(3));
-        app.scroll = 2;
-        app.tab_scroll = 1;
-        app.reveal_selection = false;
+        app.viewport.scroll = 2;
+        app.viewport.tab_scroll = 1;
+        app.viewport.reveal_selection = false;
 
         press(&mut app, &fixture, KeyCode::Char('`'));
         type_keys(&mut app, &fixture, "wo");
         press(&mut app, &fixture, KeyCode::Tab);
-        app.scroll = 0;
-        app.tab_scroll = 0;
+        app.viewport.scroll = 0;
+        app.viewport.tab_scroll = 0;
 
         press(&mut app, &fixture, cancel);
 
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.view, SectionView::All);
         assert_eq!(app.list.selected(), Some(3));
-        assert_eq!((app.scroll, app.tab_scroll), (2, 1));
-        assert!(!app.reveal_selection);
+        assert_eq!((app.viewport.scroll, app.viewport.tab_scroll), (2, 1));
+        assert!(!app.viewport.reveal_selection);
         assert!(!app.can_undo() && !app.can_redo());
     }
 
@@ -1272,7 +1272,7 @@ fn task_shortcuts_and_clicks_only_type_into_the_section_picker() {
         &fixture,
         KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
     );
-    app.row_tasks = vec![Some(0), Some(1)];
+    app.viewport.row_tasks = vec![Some(0), Some(1)];
     app.mouse(
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -2208,9 +2208,9 @@ fn control_p_n_match_arrow_navigation_and_preserve_task_state() {
 
                 if let Some(index) = actual.list.selected() {
                     assert!(
-                        actual.row_tasks[actual.scroll
-                            ..(actual.scroll + usize::from(rows.height))
-                                .min(actual.row_tasks.len())]
+                        actual.viewport.row_tasks[actual.viewport.scroll
+                            ..(actual.viewport.scroll + usize::from(rows.height))
+                                .min(actual.viewport.row_tasks.len())]
                             .contains(&Some(index))
                     );
                 }
@@ -2940,7 +2940,7 @@ fn carryover_completion_and_runtime_history_are_coherent() {
         assert!(app.can_redo());
 
         if action == KeyCode::Null {
-            app.row_tasks = vec![Some(0), Some(1)];
+            app.viewport.row_tasks = vec![Some(0), Some(1)];
             app.mouse(
                 MouseEvent {
                     kind: MouseEventKind::Down(MouseButton::Left),
@@ -3503,7 +3503,7 @@ fn search_uses_original_anchor_and_accepts_or_cancels_without_mutating() {
     press(&mut app, &fixture, KeyCode::Esc);
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(app.list.selected(), Some(2));
-    assert!(app.reveal_selection);
+    assert!(app.viewport.reveal_selection);
 
     press(&mut app, &fixture, KeyCode::Char('/'));
     app.paste("alpha");
@@ -3987,8 +3987,8 @@ fn page_keys_are_safe_at_boundaries_and_in_input_modes() {
 
     for count in [0, 1, 3] {
         let mut app = app_with_tasks(count);
-        app.row_tasks = (0..count).map(Some).collect();
-        app.viewport_height = 2;
+        app.viewport.row_tasks = (0..count).map(Some).collect();
+        app.viewport.viewport_height = 2;
         let original = app.tasks.clone();
 
         for code in [
@@ -4045,10 +4045,10 @@ fn first_and_last_navigation_preserves_tasks_and_undo_and_is_modal() {
         (KeyCode::End, 2),
         (KeyCode::Home, 0),
     ] {
-        app.reveal_selection = false;
+        app.viewport.reveal_selection = false;
         press(&mut app, &fixture, code);
         assert_eq!(app.list.selected(), Some(selected));
-        assert!(app.reveal_selection);
+        assert!(app.viewport.reveal_selection);
         assert_eq!(app.tasks, changed);
         assert_eq!(fixture.storage.load().unwrap(), changed);
 
@@ -4846,7 +4846,7 @@ fn undo_restores_list_and_selection_for_every_modification() {
         assert_eq!(app.tasks, original);
         assert_eq!(app.list.selected(), Some(1));
         assert_eq!(fixture.storage.load().unwrap(), original);
-        assert!(app.reveal_selection);
+        assert!(app.viewport.reveal_selection);
         assert!(app.history.is_empty());
         assert_eq!(notice(&app), Some(format!("Undid: {label}").as_str()));
 
@@ -5192,7 +5192,7 @@ fn new_mutations_after_undo_record_the_restored_state() {
     press(&mut app, &fixture, KeyCode::Char('u'));
     assert!(app.tasks.is_empty());
     assert_eq!(app.list.selected(), None);
-    assert!(app.reveal_selection);
+    assert!(app.viewport.reveal_selection);
     assert!(app.history.is_empty());
     assert!(fixture.storage.load().unwrap().is_empty());
 }
@@ -5228,11 +5228,11 @@ fn mixed_mutations_undo_in_order_and_reveal_restored_wrapped_selection() {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(18, 6)).unwrap();
 
     for (tasks, selected) in snapshots.into_iter().rev() {
-        app.scroll = usize::MAX;
+        app.viewport.scroll = usize::MAX;
         press(&mut app, &fixture, Char('u'));
         assert_eq!(app.tasks, tasks);
         assert_eq!(app.list.selected(), selected);
-        assert!(app.reveal_selection);
+        assert!(app.viewport.reveal_selection);
         assert_eq!(fixture.storage.load().unwrap(), tasks);
 
         let mut rows = Rect::default();
@@ -5241,8 +5241,9 @@ fn mixed_mutations_undo_in_order_and_reveal_restored_wrapped_selection() {
             .unwrap();
 
         if let Some(selected) = selected {
-            let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
-            assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
+            let end =
+                (app.viewport.scroll + usize::from(rows.height)).min(app.viewport.row_tasks.len());
+            assert!(app.viewport.row_tasks[app.viewport.scroll..end].contains(&Some(selected)));
         }
     }
 
@@ -5638,7 +5639,7 @@ fn positional_insertions_preserve_order_selection_and_history() {
             assert_eq!(app.list.selected(), Some(expected_index));
             assert_eq!(fixture.storage.load().unwrap(), expected);
             assert_eq!(app.history.len(), 1);
-            assert!(app.reveal_selection);
+            assert!(app.viewport.reveal_selection);
 
             let mut terminal =
                 ratatui::Terminal::new(ratatui::backend::TestBackend::new(18, 3)).unwrap();
@@ -5648,7 +5649,10 @@ fn positional_insertions_preserve_order_selection_and_history() {
                 })
                 .unwrap();
 
-            assert_eq!(app.row_tasks[app.scroll], Some(expected_index));
+            assert_eq!(
+                app.viewport.row_tasks[app.viewport.scroll],
+                Some(expected_index)
+            );
 
             app.undo(&fixture.storage).unwrap();
             assert_eq!(app.tasks, original);
@@ -5825,7 +5829,7 @@ fn only_enter_confirms_clear() {
 fn mouse_toggle_undo_restores_the_selection_before_the_click() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(3);
-    app.row_tasks = vec![Some(0), Some(1), Some(2)];
+    app.viewport.row_tasks = vec![Some(0), Some(1), Some(2)];
     let original = app.tasks.clone();
 
     let click = MouseEvent {
@@ -5853,7 +5857,7 @@ fn mouse_toggle_failure_preserves_selection_and_existing_undo() {
     for has_previous in [false, true] {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(3);
-        app.row_tasks = vec![Some(0), Some(1), Some(2)];
+        app.viewport.row_tasks = vec![Some(0), Some(1), Some(2)];
         let original = app.tasks.clone();
 
         if has_previous {
@@ -5907,8 +5911,8 @@ fn mouse_toggle_failure_preserves_selection_and_existing_undo() {
 fn mouse_uses_visible_rows_and_ignores_borders_and_modal_input() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(10);
-    app.scroll = 5;
-    app.row_tasks = (0..10).map(Some).collect();
+    app.viewport.scroll = 5;
+    app.viewport.row_tasks = (0..10).map(Some).collect();
     let rows = Rect::new(1, 1, 30, 3);
 
     let click = |column, row| MouseEvent {
@@ -5935,7 +5939,7 @@ fn mouse_uses_visible_rows_and_ignores_borders_and_modal_input() {
 
     app.mode = Mode::Normal;
     app.list.select(Some(9));
-    app.scroll = 7;
+    app.viewport.scroll = 7;
     app.mouse(
         MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -5958,7 +5962,7 @@ fn mouse_uses_visible_rows_and_ignores_borders_and_modal_input() {
     )
     .unwrap();
 
-    assert_eq!(app.scroll, 6);
+    assert_eq!(app.viewport.scroll, 6);
     assert_eq!(app.list.selected(), Some(6));
 }
 
@@ -6005,8 +6009,8 @@ fn emacs_aliases_match_their_normal_mode_keys() {
         for app in &mut apps {
             app.show_section(SectionView::Named("work".into()));
             app.list.select(Some(1));
-            app.row_tasks = (0..5).map(Some).collect();
-            app.viewport_height = 2;
+            app.viewport.row_tasks = (0..5).map(Some).collect();
+            app.viewport.viewport_height = 2;
         }
 
         let [aliased, plain] = &mut apps;
@@ -6039,8 +6043,8 @@ fn emacs_aliases_leave_text_inputs_unchanged() {
 
     for start in [KeyCode::Char('a'), KeyCode::Char('e'), KeyCode::Char('/')] {
         let mut app = app_with_tasks(3);
-        app.row_tasks = (0..3).map(Some).collect();
-        app.viewport_height = 1;
+        app.viewport.row_tasks = (0..3).map(Some).collect();
+        app.viewport.viewport_height = 1;
         press(&mut app, &fixture, start);
         let selected = app.list.selected();
         let text = app.search_query().map(str::to_owned);
@@ -6068,8 +6072,8 @@ fn emacs_aliases_leave_text_inputs_unchanged() {
 fn page_aliases_repeat_while_mode_changing_aliases_fire_once() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(6);
-    app.row_tasks = (0..6).map(Some).collect();
-    app.viewport_height = 2;
+    app.viewport.row_tasks = (0..6).map(Some).collect();
+    app.viewport.viewport_height = 2;
     app.list.select(Some(0));
 
     repeat(
@@ -6144,8 +6148,8 @@ fn ctrl_s_starts_a_search_like_slash_and_ctrl_f() {
 fn ctrl_d_and_ctrl_u_move_half_a_page_and_stop_at_the_ends() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(10);
-    app.row_tasks = (0..10).map(Some).collect();
-    app.viewport_height = 4;
+    app.viewport.row_tasks = (0..10).map(Some).collect();
+    app.viewport.viewport_height = 4;
     app.list.select(Some(0));
     let original = app.tasks.clone();
 
@@ -6166,7 +6170,7 @@ fn ctrl_d_and_ctrl_u_move_half_a_page_and_stop_at_the_ends() {
         );
 
         assert_eq!(app.list.selected(), Some(selected), "Ctrl+{character}");
-        assert!(app.reveal_selection);
+        assert!(app.viewport.reveal_selection);
     }
 
     assert_eq!(app.tasks, original);
@@ -6180,8 +6184,8 @@ fn half_pages_move_at_least_one_row_in_tiny_or_undrawn_viewports() {
 
     for height in [0, 1] {
         let mut app = app_with_tasks(3);
-        app.row_tasks = (0..3).map(Some).collect();
-        app.viewport_height = height;
+        app.viewport.row_tasks = (0..3).map(Some).collect();
+        app.viewport.viewport_height = height;
         app.list.select(Some(0));
 
         press(
@@ -6212,8 +6216,8 @@ fn half_pages_move_at_least_one_row_in_tiny_or_undrawn_viewports() {
 fn held_ctrl_d_and_ctrl_u_keep_moving() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(6);
-    app.row_tasks = (0..6).map(Some).collect();
-    app.viewport_height = 4;
+    app.viewport.row_tasks = (0..6).map(Some).collect();
+    app.viewport.viewport_height = 4;
     app.list.select(Some(0));
 
     repeat(
@@ -6373,8 +6377,8 @@ fn question_mark_esc_and_ctrl_g_each_close_the_reference_without_changing_anythi
         let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c"]);
         app.show_section(SectionView::Named("work".into()));
         press(&mut app, &fixture, KeyCode::Char('j'));
-        app.scroll = 1;
-        app.reveal_selection = false;
+        app.viewport.scroll = 1;
+        app.viewport.reveal_selection = false;
         app.task_register = Some("kept".into());
         let before = task_state(&app);
 
@@ -6385,7 +6389,10 @@ fn question_mark_esc_and_ctrl_g_each_close_the_reference_without_changing_anythi
         assert_eq!(app.mode, Mode::Normal, "{close:?}");
         assert_eq!(task_state(&app), before);
         assert_eq!(app.view, SectionView::Named("work".into()));
-        assert_eq!((app.scroll, app.reveal_selection), (1, false));
+        assert_eq!(
+            (app.viewport.scroll, app.viewport.reveal_selection),
+            (1, false)
+        );
         assert_eq!(app.task_register.as_deref(), Some("kept"));
     }
 
@@ -6543,8 +6550,8 @@ fn question_mark_is_text_in_every_input_mode() {
 fn mouse_clicks_are_ignored_and_the_wheel_scrolls_while_the_reference_is_open() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "b"]);
-    app.row_tasks = vec![Some(0), Some(1)];
-    app.tab_targets = vec![(Rect::new(1, 0, 5, 1), SectionView::Named("work".into()))];
+    app.viewport.row_tasks = vec![Some(0), Some(1)];
+    app.viewport.tab_targets = vec![(Rect::new(1, 0, 5, 1), SectionView::Named("work".into()))];
     let before = task_state(&app);
     let rows = Rect::new(1, 1, 20, 2);
 
@@ -6576,6 +6583,6 @@ fn mouse_clicks_are_ignored_and_the_wheel_scrolls_while_the_reference_is_open() 
     }
 
     assert_eq!(help_scroll(&app), 0);
-    assert_eq!(app.scroll, 0);
+    assert_eq!(app.viewport.scroll, 0);
     assert!(!fixture.task_path().exists());
 }

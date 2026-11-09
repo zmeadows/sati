@@ -157,6 +157,25 @@ impl Persisted {
     }
 }
 
+// Layout from the last draw, which `ui::draw` writes so that the next key or click acts on
+// what is on screen.
+//
+// `scroll` is the first task-list row shown. Input may move it; drawing clamps it, and
+// scrolls to the selection or inline input when that is off screen or `reveal_selection`
+// asks, then clears that request.
+pub(crate) struct ViewportState {
+    pub(crate) scroll: usize,
+    pub(crate) reveal_selection: bool,
+    // The task on each list row, for paging and clicks; an inline add row has none.
+    pub(crate) row_tasks: Vec<Option<usize>>,
+    // The list rows that fit, for paging.
+    pub(crate) viewport_height: u16,
+    // Clickable tab regions.
+    pub(crate) tab_targets: Vec<(Rect, SectionView)>,
+    // The first visible tab when they overflow; kept between draws so tabs don't slide.
+    pub(crate) tab_scroll: usize,
+}
+
 pub struct App {
     pub tasks: Vec<Task>,
     // Lowercase keys of the named section tabs in display order; see `settled_section_order`.
@@ -176,22 +195,7 @@ pub struct App {
     pub status_message: Option<StatusMessage>,
     pub view: SectionView,
 
-    // Layout from the last draw, which `ui::draw` writes so that the next key or click acts on
-    // what is on screen.
-    //
-    // `scroll` is the first task-list row shown. Input may move it; drawing clamps it, and
-    // scrolls to the selection or inline input when that is off screen or `reveal_selection`
-    // asks, then clears that request.
-    pub scroll: usize,
-    pub reveal_selection: bool,
-    // The task on each list row, for paging and clicks; an inline add row has none.
-    pub row_tasks: Vec<Option<usize>>,
-    // The list rows that fit, for paging.
-    pub viewport_height: u16,
-    // Clickable tab regions.
-    pub tab_targets: Vec<(Rect, SectionView)>,
-    // The first visible tab when they overflow; kept between draws so tabs don't slide.
-    pub tab_scroll: usize,
+    pub(crate) viewport: ViewportState,
 
     // A Vim-style count typed before a motion, with when its last digit was typed; transient
     // and never saved.
@@ -231,12 +235,14 @@ impl App {
             cli_accent: None,
             status_message: None,
             view: SectionView::All,
-            scroll: 0,
-            reveal_selection: true,
-            row_tasks: Vec::new(),
-            viewport_height: 0,
-            tab_targets: Vec::new(),
-            tab_scroll: 0,
+            viewport: ViewportState {
+                scroll: 0,
+                reveal_selection: true,
+                row_tasks: Vec::new(),
+                viewport_height: 0,
+                tab_targets: Vec::new(),
+                tab_scroll: 0,
+            },
             pending_count: None,
             pending_section_jump: None,
             completion: None,
@@ -338,7 +344,7 @@ impl App {
             self.list.select(self.visible_indices().first().copied());
         }
 
-        self.reveal_selection = true;
+        self.viewport.reveal_selection = true;
     }
 
     fn cycle_section(&mut self, forward: bool, count: Option<usize>) {
@@ -435,9 +441,9 @@ impl App {
         let original = NavigationCheckpoint {
             view: self.view.clone(),
             selected: self.list.selected(),
-            scroll: self.scroll,
-            tab_scroll: self.tab_scroll,
-            reveal_selection: self.reveal_selection,
+            scroll: self.viewport.scroll,
+            tab_scroll: self.viewport.tab_scroll,
+            reveal_selection: self.viewport.reveal_selection,
         };
 
         self.mode = Mode::FuzzySection {
@@ -523,9 +529,9 @@ impl App {
 
         self.view = original.view;
         self.list.select(original.selected);
-        self.scroll = original.scroll;
-        self.tab_scroll = original.tab_scroll;
-        self.reveal_selection = original.reveal_selection;
+        self.viewport.scroll = original.scroll;
+        self.viewport.tab_scroll = original.tab_scroll;
+        self.viewport.reveal_selection = original.reveal_selection;
     }
 
     // Move the current section tab `count` places. [*] and [-] stay where they are, and the
@@ -681,7 +687,7 @@ impl App {
         };
 
         self.list.select(Some(visible[next]));
-        self.reveal_selection = true;
+        self.viewport.reveal_selection = true;
     }
 
     pub fn insertion_index(&self, placement: AddPlacement) -> usize {
@@ -724,14 +730,15 @@ impl App {
         let current_position = position(current).unwrap_or(0);
 
         let start = self
+            .viewport
             .row_tasks
             .iter()
             .position(|&task| task == Some(current))
             .unwrap_or(0);
 
         // Anchor within a tall task when its beginning has scrolled offscreen.
-        let anchor = if self.row_tasks.get(self.scroll) == Some(&Some(current)) {
-            self.scroll
+        let anchor = if self.viewport.row_tasks.get(self.viewport.scroll) == Some(&Some(current)) {
+            self.viewport.scroll
         } else {
             start
         };
@@ -746,8 +753,9 @@ impl App {
         };
 
         let candidate = self
+            .viewport
             .row_tasks
-            .get(target.min(self.row_tasks.len().saturating_sub(1)))
+            .get(target.min(self.viewport.row_tasks.len().saturating_sub(1)))
             .copied()
             .flatten()
             .and_then(position)
@@ -763,12 +771,12 @@ impl App {
 
         if next != current_position {
             self.list.select(Some(visible[next]));
-            self.scroll = if forward {
-                self.scroll.saturating_add(rows)
+            self.viewport.scroll = if forward {
+                self.viewport.scroll.saturating_add(rows)
             } else {
-                self.scroll.saturating_sub(rows)
+                self.viewport.scroll.saturating_sub(rows)
             };
-            self.reveal_selection = true;
+            self.viewport.reveal_selection = true;
         }
     }
 
@@ -810,7 +818,7 @@ impl App {
         let previous_selected = self.list.selected();
         let previous_view = std::mem::replace(&mut self.view, view);
         self.list.select(selected);
-        self.reveal_selection = true;
+        self.viewport.reveal_selection = true;
 
         if self.history.len() == HISTORY_LIMIT {
             self.history.pop_front();
@@ -864,7 +872,7 @@ impl App {
             original: self.list.selected(),
         };
         self.list.select(None);
-        self.reveal_selection = true;
+        self.viewport.reveal_selection = true;
     }
 
     // Refocuses search from its anchor, but only when the query changed: cursor moves, Tab,
@@ -883,7 +891,7 @@ impl App {
             self.is_visible(index) && crate::search::matches(&self.search_text(index), input.text())
         });
         self.list.select(selected);
-        self.reveal_selection = true;
+        self.viewport.reveal_selection = true;
     }
 
     fn find_search_result(&self, query: &str, forward: bool) -> Option<usize> {
@@ -912,7 +920,7 @@ impl App {
 
         let selected = self.find_search_result(query, forward);
         self.list.select(selected);
-        self.reveal_selection = true;
+        self.viewport.reveal_selection = true;
     }
 
     fn finish_search(&mut self, accept: bool) {
@@ -923,7 +931,7 @@ impl App {
                 self.list.select(original);
             }
 
-            self.reveal_selection = true;
+            self.viewport.reveal_selection = true;
         }
     }
 
@@ -1000,7 +1008,7 @@ impl App {
         let current_selected = self.list.selected();
         let current_view = std::mem::replace(&mut self.view, view);
         self.list.select(selected);
-        self.reveal_selection = true;
+        self.viewport.reveal_selection = true;
 
         // No eviction is needed: mutations cap undo history and clear redo history, and undo
         // and redo only move one entry, so both together never exceed HISTORY_LIMIT.
@@ -1035,7 +1043,7 @@ impl App {
 
         // The task stays in place, so do not force the viewport to scroll to it.
         self.replace(tasks, Some(index), label, storage)?;
-        self.reveal_selection = false;
+        self.viewport.reveal_selection = false;
 
         Ok(())
     }
@@ -1620,7 +1628,7 @@ impl App {
         self.completion = None;
 
         if self.mode == Mode::Normal {
-            let half_page = usize::from(self.viewport_height / 2);
+            let half_page = usize::from(self.viewport.viewport_height / 2);
 
             // Alt+B/F switch sections the way they move between words in text inputs, where
             // Ctrl+D/U delete text instead of moving half a page.
@@ -1779,7 +1787,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
-                self.reveal_selection = true;
+                self.viewport.reveal_selection = true;
             }
             KeyCode::Backspace => input.delete_before(),
             KeyCode::Delete => input.delete_after(),
@@ -1841,7 +1849,7 @@ impl App {
         }
 
         self.mode = Mode::Normal;
-        self.reveal_selection = true;
+        self.viewport.reveal_selection = true;
 
         Ok(())
     }
@@ -1944,7 +1952,7 @@ impl App {
             KeyCode::Char('u') => self.undo(storage)?,
             KeyCode::Char('w') => {
                 self.wrap = !self.wrap;
-                self.reveal_selection = true;
+                self.viewport.reveal_selection = true;
                 self.show_status_message(if self.wrap { "Wrap on" } else { "Wrap off" });
             }
             KeyCode::Char('m') => self.toggle_carryover(storage)?,
@@ -1982,8 +1990,8 @@ impl App {
                     None,
                 );
             }
-            KeyCode::PageUp => self.page(false, usize::from(self.viewport_height)),
-            KeyCode::PageDown => self.page(true, usize::from(self.viewport_height)),
+            KeyCode::PageUp => self.page(false, usize::from(self.viewport.viewport_height)),
+            KeyCode::PageDown => self.page(true, usize::from(self.viewport.viewport_height)),
             KeyCode::Char('g' | 'G') | KeyCode::Home | KeyCode::End if !self.tasks.is_empty() => {
                 let first = key.code == KeyCode::Home
                     || (key.code == KeyCode::Char('g')
@@ -1995,7 +2003,7 @@ impl App {
                     visible.last()
                 };
                 self.list.select(index.copied());
-                self.reveal_selection = true;
+                self.viewport.reveal_selection = true;
             }
             KeyCode::Char(' ') | KeyCode::Enter => {
                 if let Some(index) = self.list.selected() {
@@ -2092,6 +2100,7 @@ impl App {
         if self.mode == Mode::Normal
             && event.kind == MouseEventKind::Down(MouseButton::Left)
             && let Some((_, view)) = self
+                .viewport
                 .tab_targets
                 .iter()
                 .find(|(area, _)| area.contains((event.column, event.row).into()))
@@ -2108,8 +2117,9 @@ impl App {
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(index) = self
+                    .viewport
                     .row_tasks
-                    .get(self.scroll + usize::from(event.row - rows.y))
+                    .get(self.viewport.scroll + usize::from(event.row - rows.y))
                     .copied()
                     .flatten()
                 {
@@ -2118,14 +2128,14 @@ impl App {
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                 let height = usize::from(rows.height);
-                self.scroll = if event.kind == MouseEventKind::ScrollDown {
-                    self.scroll.saturating_add(1)
+                self.viewport.scroll = if event.kind == MouseEventKind::ScrollDown {
+                    self.viewport.scroll.saturating_add(1)
                 } else {
-                    self.scroll.saturating_sub(1)
+                    self.viewport.scroll.saturating_sub(1)
                 }
-                .min(self.row_tasks.len().saturating_sub(height));
-                let end = (self.scroll + height).min(self.row_tasks.len());
-                let visible = &self.row_tasks[self.scroll..end];
+                .min(self.viewport.row_tasks.len().saturating_sub(height));
+                let end = (self.viewport.scroll + height).min(self.viewport.row_tasks.len());
+                let visible = &self.viewport.row_tasks[self.viewport.scroll..end];
 
                 if let Some(selected) = self.list.selected()
                     && !visible.contains(&Some(selected))
@@ -2138,7 +2148,7 @@ impl App {
                         });
                 }
 
-                self.reveal_selection = false;
+                self.viewport.reveal_selection = false;
             }
             _ => {}
         }

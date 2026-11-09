@@ -66,7 +66,7 @@ fn section_tabs_sit_on_the_top_border_in_fixed_positions() {
 
     assert_eq!(rows.y, 1);
 
-    assert!(plain.tab_targets.is_empty());
+    assert!(plain.viewport.tab_targets.is_empty());
     assert!(row_text(&terminal, 0).starts_with("┌──────"));
 
     let mut app = app_with_texts(&["Work: a", "home: b", "plain"]);
@@ -111,7 +111,7 @@ fn a_section_tab_shows_only_its_tasks_without_the_prefix() {
 
     assert!(screen.contains("fix bug") && screen.contains("email"));
     assert!(!screen.contains("Work: ") && !screen.contains("laundry"));
-    assert_eq!(app.row_tasks, [Some(0), Some(2)]);
+    assert_eq!(app.viewport.row_tasks, [Some(0), Some(2)]);
     // Tabs sit on the border and the row under them is left blank, so tasks start on row 2.
     assert!(
         !terminal.backend().buffer()[(7, 2)]
@@ -188,7 +188,7 @@ fn overflowing_tabs_scroll_only_to_keep_the_active_tab_visible() {
     );
     assert!(!last.contains('›') && last.ends_with("─┐"), "{last}");
 
-    for (area, _) in &app.tab_targets {
+    for (area, _) in &app.viewport.tab_targets {
         assert!(area.right() < 29);
     }
 
@@ -228,7 +228,7 @@ fn overflowing_tabs_scroll_only_to_keep_the_active_tab_visible() {
     // A two-row box still shows tabs on its border; a single row has no room.
     let mut two_rows = test_terminal(30, 2);
     render(&mut two_rows, &mut app);
-    assert!(!app.tab_targets.is_empty());
+    assert!(!app.viewport.tab_targets.is_empty());
 
     // With one inner row, the task keeps it instead of the blank row.
     let mut three_rows = test_terminal(30, 3);
@@ -237,7 +237,7 @@ fn overflowing_tabs_scroll_only_to_keep_the_active_tab_visible() {
 
     let mut one_row = test_terminal(30, 1);
     render(&mut one_row, &mut app);
-    assert!(app.tab_targets.is_empty());
+    assert!(app.viewport.tab_targets.is_empty());
 }
 
 #[test]
@@ -519,7 +519,7 @@ fn overflowing_picker_matches_keep_the_focused_one_visible_without_moving_tab_sc
 
     let top = row_text(&terminal, 0);
     assert!(top.contains(" Foxtrot ") && top.contains('‹'), "{top}");
-    assert_eq!(app.tab_scroll, 0);
+    assert_eq!(app.viewport.tab_scroll, 0);
 
     app.key(KeyEvent::from(KeyCode::Tab), &fixture.storage)
         .unwrap();
@@ -676,7 +676,7 @@ fn scrollbar_appears_on_the_right_border_only_when_tasks_overflow() {
     assert_eq!(thumb_rows(&terminal, 29).last(), Some(&last));
 
     app.list.select(Some(10));
-    app.reveal_selection = true;
+    app.viewport.reveal_selection = true;
     render(&mut terminal, &mut app);
     let middle = thumb_rows(&terminal, 29);
     assert!(
@@ -712,7 +712,7 @@ fn clicking_a_tab_shows_that_section() {
     let mut terminal = test_terminal(80, 12);
     let rows = render(&mut terminal, &mut app);
 
-    let (area, view) = app.tab_targets[1].clone();
+    let (area, view) = app.viewport.tab_targets[1].clone();
     assert_eq!(view, crate::model::SectionView::Named("home".into()));
 
     app.mouse(
@@ -1108,7 +1108,7 @@ fn search_enter_selects_the_focused_match_but_keeps_search_open_without_one() {
         let mut terminal = test_terminal(24, 6);
         render(&mut terminal, &mut app);
 
-        assert_eq!(app.scroll, 0);
+        assert_eq!(app.viewport.scroll, 0);
 
         for accept in [false, true] {
             app.key(
@@ -1151,8 +1151,9 @@ fn search_enter_selects_the_focused_match_but_keeps_search_open_without_one() {
             let rows = render(&mut terminal, &mut app);
 
             if let Some(selected) = app.list.selected() {
-                let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
-                assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
+                let end = (app.viewport.scroll + usize::from(rows.height))
+                    .min(app.viewport.row_tasks.len());
+                assert!(app.viewport.row_tasks[app.viewport.scroll..end].contains(&Some(selected)));
             }
 
             if accept && count == 1 {
@@ -1223,14 +1224,14 @@ fn unicode_checkboxes_are_single_cell_and_preserve_rendering_and_search() {
                 let mut terminal = test_terminal(width, 12);
                 let rows = render(&mut terminal, &mut app);
                 let ascii = terminal.backend().buffer().clone();
-                let mapping = app.row_tasks.clone();
-                let scroll = app.scroll;
+                let mapping = app.viewport.row_tasks.clone();
+                let scroll = app.viewport.scroll;
                 app.marker_style = MarkerStyle::Unicode;
                 let unicode_rows = render(&mut terminal, &mut app);
 
                 assert_eq!(rows, unicode_rows);
-                assert_eq!(app.row_tasks, mapping);
-                assert_eq!(app.scroll, scroll);
+                assert_eq!(app.viewport.row_tasks, mapping);
+                assert_eq!(app.viewport.scroll, scroll);
 
                 let mut unicode = terminal.backend().buffer().clone();
 
@@ -1269,7 +1270,7 @@ fn carryover_checkboxes_preserve_layout_and_search_markers() {
     app.styles.accent = app.styles.accent.fg(Color::Rgb(169, 182, 101));
     let mut terminal = test_terminal(24, 12);
     render(&mut terminal, &mut app);
-    let mapping = app.row_tasks.clone();
+    let mapping = app.viewport.row_tasks.clone();
 
     assert!(mapping.len() > 1);
     assert!(screen(&terminal).contains("› [↪] carry"));
@@ -1293,7 +1294,7 @@ fn carryover_checkboxes_preserve_layout_and_search_markers() {
     app.paste("carry");
     render(&mut terminal, &mut app);
 
-    assert_eq!(app.row_tasks, mapping);
+    assert_eq!(app.viewport.row_tasks, mapping);
     assert!(screen(&terminal).contains('■'));
     assert!(!screen(&terminal).contains("[↪]"));
 
@@ -1309,7 +1310,7 @@ fn carryover_checkboxes_preserve_layout_and_search_markers() {
     .unwrap();
     render(&mut terminal, &mut app);
 
-    assert_eq!(app.row_tasks, mapping);
+    assert_eq!(app.viewport.row_tasks, mapping);
     assert!(screen(&terminal).contains("[↪]"));
     assert_eq!(app.tasks[0].status, TaskStatus::Carried);
     assert!(!fixture.task_path().exists());
@@ -1416,7 +1417,7 @@ fn inline_add_preview_matches_saved_position_without_changing_tasks() {
                     .chain((index..count).map(Some))
                     .collect();
 
-                assert_eq!(app.row_tasks, expected);
+                assert_eq!(app.viewport.row_tasks, expected);
                 assert_eq!(app.tasks, original);
                 assert_eq!(app.list.selected(), selected);
                 assert!(!app.can_undo() && !app.can_redo());
@@ -1473,7 +1474,7 @@ fn inline_add_preview_matches_saved_position_without_changing_tasks() {
                 assert_eq!(app.tasks, added);
 
                 render(&mut terminal, &mut app);
-                assert!(app.row_tasks.iter().all(Option::is_some));
+                assert!(app.viewport.row_tasks.iter().all(Option::is_some));
                 assert!(!screen(&terminal).contains("add ›"));
                 assert!(!terminal.backend().cursor_visible());
             }
@@ -1507,7 +1508,8 @@ fn inline_edit_replaces_wrapped_rows_and_cancel_or_confirm_restores_layout() {
         let mut rows = render(&mut terminal, &mut app);
 
         assert!(
-            app.row_tasks
+            app.viewport
+                .row_tasks
                 .iter()
                 .filter(|&&task| task == Some(1))
                 .count()
@@ -1528,7 +1530,7 @@ fn inline_edit_replaces_wrapped_rows_and_cancel_or_confirm_restores_layout() {
         }
 
         rows = render(&mut terminal, &mut app);
-        assert_eq!(app.row_tasks, [Some(0), Some(1), Some(2)]);
+        assert_eq!(app.viewport.row_tasks, [Some(0), Some(1), Some(2)]);
         assert!(screen(&terminal).contains("before"));
         assert!(screen(&terminal).contains("after"));
         assert!(screen(&terminal).contains("edit ›"));
@@ -1556,8 +1558,9 @@ fn inline_edit_replaces_wrapped_rows_and_cancel_or_confirm_restores_layout() {
         assert!(!screen(&terminal).contains("edit ›"));
         assert!(!terminal.backend().cursor_visible());
 
-        let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
-        assert!(app.row_tasks[app.scroll..end].contains(&Some(1)));
+        let end =
+            (app.viewport.scroll + usize::from(rows.height)).min(app.viewport.row_tasks.len());
+        assert!(app.viewport.row_tasks[app.viewport.scroll..end].contains(&Some(1)));
 
         if ending == KeyCode::Esc {
             assert_eq!(app.tasks, original);
@@ -1633,12 +1636,13 @@ fn inline_inputs_follow_scrolling_and_resize_without_out_of_bounds_cursors() {
                             &fixture.storage,
                         )
                         .unwrap();
-                        app.scroll = usize::MAX;
-                        app.reveal_selection = false;
+                        app.viewport.scroll = usize::MAX;
+                        app.viewport.reveal_selection = false;
                         let rows = render(&mut terminal, &mut app);
 
                         assert!(
-                            app.row_tasks
+                            app.viewport
+                                .row_tasks
                                 .iter()
                                 .flatten()
                                 .all(|&index| index < app.tasks.len())
@@ -1652,9 +1656,9 @@ fn inline_inputs_follow_scrolling_and_resize_without_out_of_bounds_cursors() {
                             let cursor = terminal.backend().cursor_position();
                             assert!(rows.contains(cursor));
 
-                            let visual_row = app.scroll + usize::from(cursor.y - rows.y);
+                            let visual_row = app.viewport.scroll + usize::from(cursor.y - rows.y);
                             assert_eq!(
-                                app.row_tasks[visual_row],
+                                app.viewport.row_tasks[visual_row],
                                 if key == 'e' { Some(18) } else { None }
                             );
 
@@ -1687,9 +1691,10 @@ fn inline_inputs_follow_scrolling_and_resize_without_out_of_bounds_cursors() {
         .unwrap();
         terminal.backend_mut().resize(40, 12);
         let rows = render(&mut terminal, &mut app);
-        let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
+        let end =
+            (app.viewport.scroll + usize::from(rows.height)).min(app.viewport.row_tasks.len());
 
-        assert!(app.row_tasks[app.scroll..end].contains(&Some(18)));
+        assert!(app.viewport.row_tasks[app.viewport.scroll..end].contains(&Some(18)));
         assert_eq!(app.tasks, original);
         assert_eq!(app.list.selected(), Some(18));
         assert!(!app.can_undo() && !app.can_redo());
@@ -1730,7 +1735,7 @@ fn search_keeps_its_bottom_prompt_and_cursor_while_tab_cycles_matches() {
                 .unwrap()
                 .starts_with("search › needle")
         );
-        assert_eq!(app.row_tasks, [Some(0), Some(1)]);
+        assert_eq!(app.viewport.row_tasks, [Some(0), Some(1)]);
         assert!(screen(&terminal).contains("■"));
         assert!(terminal.backend().cursor_visible());
         assert_eq!(terminal.backend().cursor_position().y, 11);
@@ -1943,7 +1948,7 @@ fn search_spanning_wrapped_rows_preserves_mapping_and_reveals_results_after_resi
     let original = app.tasks.clone();
     let mut terminal = test_terminal(14, 9);
     render(&mut terminal, &mut app);
-    let mapping = app.row_tasks.clone();
+    let mapping = app.viewport.row_tasks.clone();
     app.key(
         KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
         &fixture.storage,
@@ -1952,7 +1957,7 @@ fn search_spanning_wrapped_rows_preserves_mapping_and_reveals_results_after_resi
     app.paste("tag: abcd");
     render(&mut terminal, &mut app);
 
-    assert_eq!(app.row_tasks, mapping);
+    assert_eq!(app.viewport.row_tasks, mapping);
 
     // Tabs sit on the border and the row under them is left blank, so tasks start on row 2.
     for (y, length) in [(2, 4), (3, 4)] {
@@ -1995,9 +2000,10 @@ fn search_spanning_wrapped_rows_preserves_mapping_and_reveals_results_after_resi
         render(&mut terminal, &mut app);
         let selected = app.list.selected().unwrap();
 
-        if app.viewport_height > 0 {
-            let end = (app.scroll + usize::from(app.viewport_height)).min(app.row_tasks.len());
-            assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
+        if app.viewport.viewport_height > 0 {
+            let end = (app.viewport.scroll + usize::from(app.viewport.viewport_height))
+                .min(app.viewport.row_tasks.len());
+            assert!(app.viewport.row_tasks[app.viewport.scroll..end].contains(&Some(selected)));
         }
     }
 
@@ -2060,14 +2066,14 @@ fn redo_restores_a_wrapped_selection_into_view() {
     assert!(app.can_redo());
 
     let mut terminal = test_terminal(18, 7);
-    app.scroll = usize::MAX;
+    app.viewport.scroll = usize::MAX;
     key(&mut app, KeyCode::Char('r'), KeyModifiers::CONTROL);
 
     assert_eq!(app.tasks, modified);
 
     render(&mut terminal, &mut app);
     assert_eq!(app.list.selected(), Some(0));
-    assert_eq!(app.row_tasks[app.scroll], Some(0));
+    assert_eq!(app.viewport.row_tasks[app.viewport.scroll], Some(0));
     assert!(!app.can_redo());
 
     key(&mut app, KeyCode::Char('D'), KeyModifiers::NONE);
@@ -2104,12 +2110,13 @@ fn inline_inputs_keep_the_viewport_height_selection_and_mouse_mapping() {
         app.mode = mode;
         let rows = render(&mut terminal, &mut app);
         heights.push(rows.height);
-        let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
+        let end =
+            (app.viewport.scroll + usize::from(rows.height)).min(app.viewport.row_tasks.len());
 
-        assert!(app.row_tasks[app.scroll..end].contains(&Some(11)));
+        assert!(app.viewport.row_tasks[app.viewport.scroll..end].contains(&Some(11)));
 
         if app.mode == Mode::Normal {
-            let index = app.row_tasks[app.scroll].unwrap();
+            let index = app.viewport.row_tasks[app.viewport.scroll].unwrap();
             let before = app.tasks[index].status;
             app.mouse(
                 MouseEvent {
@@ -2126,7 +2133,7 @@ fn inline_inputs_keep_the_viewport_height_selection_and_mouse_mapping() {
             assert_ne!(app.tasks[index].status, before);
 
             app.list.select(Some(11));
-            app.reveal_selection = true;
+            app.viewport.reveal_selection = true;
         }
     }
 
@@ -2181,7 +2188,13 @@ fn tiny_terminals_and_resizing_are_safe_in_every_mode() {
                         .all(|cell| cell.bg == Color::Rgb(46, 52, 64))
                 );
                 assert!(rows.right() <= width && rows.bottom() <= height);
-                assert!(app.row_tasks.iter().flatten().all(|&index| index == 0));
+                assert!(
+                    app.viewport
+                        .row_tasks
+                        .iter()
+                        .flatten()
+                        .all(|&index| index == 0)
+                );
 
                 let buffer = terminal.backend().buffer();
 
@@ -2212,7 +2225,7 @@ fn page_navigation_targets_visual_rows_in_mixed_task_heights() {
     );
     let mut rows = render(&mut terminal, &mut app);
     assert_eq!(rows.height, 3);
-    assert_eq!(app.row_tasks, [0, 1, 1, 2, 3, 3, 3, 4].map(Some));
+    assert_eq!(app.viewport.row_tasks, [0, 1, 1, 2, 3, 3, 3, 4].map(Some));
 
     for (code, selected) in [
         (KeyCode::PageDown, 2),
@@ -2227,8 +2240,9 @@ fn page_navigation_targets_visual_rows_in_mixed_task_heights() {
         assert_eq!(app.list.selected(), Some(selected));
 
         rows = render(&mut terminal, &mut app);
-        let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
-        assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
+        let end =
+            (app.viewport.scroll + usize::from(rows.height)).min(app.viewport.row_tasks.len());
+        assert!(app.viewport.row_tasks[app.viewport.scroll..end].contains(&Some(selected)));
     }
 
     assert!(!fixture.task_path().exists());
@@ -2253,7 +2267,7 @@ fn half_page_navigation_targets_visual_rows_in_mixed_task_heights() {
     );
     let mut rows = render(&mut terminal, &mut app);
     assert_eq!(rows.height, 5);
-    assert_eq!(app.row_tasks, [0, 1, 1, 2, 3, 3, 3, 4].map(Some));
+    assert_eq!(app.viewport.row_tasks, [0, 1, 1, 2, 3, 3, 3, 4].map(Some));
 
     // Each step covers two of the five rows, so the selection crosses tall tasks a row
     // at a time but still advances at least one task, and stops at either end.
@@ -2273,8 +2287,9 @@ fn half_page_navigation_targets_visual_rows_in_mixed_task_heights() {
         assert_eq!(app.list.selected(), Some(selected), "Ctrl+{character}");
 
         rows = render(&mut terminal, &mut app);
-        let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
-        assert!(app.row_tasks[app.scroll..end].contains(&Some(selected)));
+        let end =
+            (app.viewport.scroll + usize::from(rows.height)).min(app.viewport.row_tasks.len());
+        assert!(app.viewport.row_tasks[app.viewport.scroll..end].contains(&Some(selected)));
     }
 
     assert!(!fixture.task_path().exists());
@@ -2294,7 +2309,7 @@ fn page_navigation_uses_current_viewport_wrapping_and_resize() {
 
     // Page size excludes the borders.
     let mut rows = render(&mut terminal, &mut app);
-    assert_eq!(app.viewport_height, rows.height);
+    assert_eq!(app.viewport.viewport_height, rows.height);
     assert_eq!(rows.height, 10);
 
     let original = app.tasks.clone();
@@ -2308,10 +2323,10 @@ fn page_navigation_uses_current_viewport_wrapping_and_resize() {
         rows = render(&mut terminal, app);
     };
 
-    let height = usize::from(app.viewport_height);
+    let height = usize::from(app.viewport.viewport_height);
     press(&mut app, KeyCode::PageDown, KeyEventKind::Press);
     assert_eq!(app.list.selected(), Some(height));
-    assert_eq!(app.scroll, height);
+    assert_eq!(app.viewport.scroll, height);
 
     press(&mut app, KeyCode::PageDown, KeyEventKind::Repeat);
     assert_eq!(app.list.selected(), Some(2 * height));
@@ -2350,8 +2365,8 @@ fn page_navigation_uses_current_viewport_wrapping_and_resize() {
 
     render(&mut terminal, &mut app);
     // Simulate reading partway through the oversized selected task with the mouse wheel.
-    app.scroll += 5;
-    app.reveal_selection = false;
+    app.viewport.scroll += 5;
+    app.viewport.reveal_selection = false;
     render(&mut terminal, &mut app);
     app.key(page, &fixture.storage).unwrap();
 
@@ -2375,10 +2390,10 @@ fn page_navigation_uses_current_viewport_wrapping_and_resize() {
         }
 
         app.list.select(Some(0));
-        app.scroll = 0;
+        app.viewport.scroll = 0;
         terminal.backend_mut().resize(width, height);
         render(&mut terminal, &mut app);
-        let expected = usize::from(app.viewport_height.max(1));
+        let expected = usize::from(app.viewport.viewport_height.max(1));
         app.key(page, &fixture.storage).unwrap();
 
         // Only task 1 wraps: with wrapping off, or a one-cell width, each task has one row.
@@ -2390,8 +2405,12 @@ fn page_navigation_uses_current_viewport_wrapping_and_resize() {
         rows = render(&mut terminal, &mut app);
 
         if rows.height > 0 {
-            let end = (app.scroll + usize::from(rows.height)).min(app.row_tasks.len());
-            assert!(app.row_tasks[app.scroll..end].contains(&Some(app.list.selected().unwrap())));
+            let end =
+                (app.viewport.scroll + usize::from(rows.height)).min(app.viewport.row_tasks.len());
+            assert!(
+                app.viewport.row_tasks[app.viewport.scroll..end]
+                    .contains(&Some(app.list.selected().unwrap()))
+            );
         }
     }
 }
@@ -2408,12 +2427,12 @@ fn long_lists_scroll_to_selection_and_wrap_back_to_start() {
 
     app.navigate(false, None);
     render(&mut terminal, &mut app);
-    assert!(app.scroll > 0);
+    assert!(app.viewport.scroll > 0);
     assert!(screen(&terminal).contains("task 999"));
 
     app.navigate(true, None);
     render(&mut terminal, &mut app);
-    assert_eq!(app.scroll, 0);
+    assert_eq!(app.viewport.scroll, 0);
     assert!(screen(&terminal).contains("task 0"));
 }
 
@@ -2586,7 +2605,7 @@ fn disabled_wrapping_keeps_one_row_and_input_shows_its_tail() {
     assert!(app.wrap);
 
     render(&mut terminal, &mut app);
-    assert!(app.row_tasks.len() > 2);
+    assert!(app.viewport.row_tasks.len() > 2);
     assert_eq!(app.list.selected(), Some(0));
     assert!(!fixture.task_path().exists());
 }
@@ -2933,7 +2952,7 @@ fn wrapped_whitespace_cluster_stays_visible_and_maps_to_its_task() {
     let mut terminal = test_terminal(12, 5);
     let rows = render(&mut terminal, &mut app);
 
-    assert_eq!(app.row_tasks, [0, 0, 1].map(Some));
+    assert_eq!(app.viewport.row_tasks, [0, 0, 1].map(Some));
     assert_eq!(terminal.backend().buffer()[(7, 2)].symbol(), " \u{301}");
     assert_eq!(terminal.backend().buffer()[(8, 2)].symbol(), "X");
 
@@ -2964,7 +2983,7 @@ fn wrapped_whitespace_cluster_stays_visible_and_maps_to_its_task() {
 
     terminal.backend_mut().resize(13, 5);
     render(&mut terminal, &mut app);
-    assert_eq!(app.row_tasks, [0, 0, 1].map(Some));
+    assert_eq!(app.viewport.row_tasks, [0, 0, 1].map(Some));
     assert_eq!(terminal.backend().buffer()[(11, 1)].symbol(), " \u{301}");
 }
 
@@ -2977,7 +2996,7 @@ fn continuation_clicks_toggle_the_correct_task_and_leave_other_rows_alone() {
     let mut app = App::new(vec![Task::new("alpha beta gamma delta"), Task::new("next")]);
 
     let rows = render(&mut terminal, &mut app);
-    assert_eq!(app.row_tasks, [0, 0, 0, 1].map(Some));
+    assert_eq!(app.viewport.row_tasks, [0, 0, 0, 1].map(Some));
 
     let rendered = screen(&terminal);
     assert!(rendered.contains("› [ ] alpha beta"));
@@ -3022,7 +3041,7 @@ fn oversized_task_can_be_scrolled_read_and_navigated_after_resizing() {
     ]);
 
     let mut rows = render(&mut terminal, &mut app);
-    let total = app.row_tasks.len();
+    let total = app.viewport.row_tasks.len();
     assert!(total > usize::from(rows.height));
 
     let wheel = MouseEvent {
@@ -3046,12 +3065,12 @@ fn oversized_task_can_be_scrolled_read_and_navigated_after_resizing() {
 
     app.navigate(false, None);
     render(&mut terminal, &mut app);
-    assert_eq!(app.scroll, 0);
+    assert_eq!(app.viewport.scroll, 0);
     assert!(screen(&terminal).contains("[ ] word"));
 
     terminal.backend_mut().resize(30, 12);
     render(&mut terminal, &mut app);
-    assert!(app.row_tasks.len() < total);
+    assert!(app.viewport.row_tasks.len() < total);
     assert!(screen(&terminal).contains("[ ] word"));
     assert!(!fixture.task_path().exists());
 }
