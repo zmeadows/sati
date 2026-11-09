@@ -27,7 +27,7 @@ fn texts(app: &App) -> Vec<String> {
 }
 
 fn press(app: &mut App, fixture: &Fixture, key: impl Into<KeyEvent>) -> bool {
-    app.key(key.into(), &fixture.storage).unwrap()
+    app.handle_key(key.into(), &fixture.storage).unwrap()
 }
 
 fn repeat(app: &mut App, fixture: &Fixture, code: KeyCode, modifiers: KeyModifiers) {
@@ -39,8 +39,8 @@ fn repeat(app: &mut App, fixture: &Fixture, code: KeyCode, modifiers: KeyModifie
 struct TaskState {
     tasks: Vec<Task>,
     selected: Option<usize>,
-    history: VecDeque<UndoState>,
-    redo_history: VecDeque<UndoState>,
+    history: VecDeque<HistoryEntry>,
+    redo_history: VecDeque<HistoryEntry>,
 }
 
 fn notice(app: &App) -> Option<&str> {
@@ -131,7 +131,7 @@ fn selection_migrates_on_clean_save_and_tracks_mutations_without_navigation_writ
     block_saves(&fixture);
     app.persist_navigation_if_needed(&fixture.storage).unwrap(); // No redundant write.
     app.start_search();
-    app.paste("task 0");
+    app.handle_paste("task 0");
     app.persist_navigation_if_needed(&fixture.storage).unwrap(); // Original settled focus is still 2.
     restore_saves(&fixture);
     app.finish_search(true);
@@ -149,14 +149,14 @@ fn selection_migrates_on_clean_save_and_tracks_mutations_without_navigation_writ
     app.redo(&fixture.storage).unwrap();
     assert_eq!(fixture.storage.load_checklist().unwrap().selected, Some(1));
 
-    app.toggle(0, &fixture.storage).unwrap();
+    app.toggle_completion(0, &fixture.storage).unwrap();
     app.undo(&fixture.storage).unwrap();
     block_saves(&fixture);
     app.persist_navigation_if_needed(&fixture.storage).unwrap();
     app.list.select(Some(0));
     let before = task_state(&app);
 
-    assert!(app.toggle(0, &fixture.storage).is_err());
+    assert!(app.toggle_completion(0, &fixture.storage).is_err());
     assert!(app.undo(&fixture.storage).is_err());
     assert!(app.redo(&fixture.storage).is_err());
     assert_eq!(task_state(&app), before);
@@ -209,8 +209,8 @@ fn restart_keeps_saved_tasks_but_never_restores_or_creates_history_files() {
     for legacy in [false, true] {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(3);
-        app.toggle(0, &fixture.storage).unwrap();
-        app.toggle(1, &fixture.storage).unwrap();
+        app.toggle_completion(0, &fixture.storage).unwrap();
+        app.toggle_completion(1, &fixture.storage).unwrap();
         app.undo(&fixture.storage).unwrap();
 
         assert!(app.can_undo() && app.can_redo());
@@ -236,7 +236,7 @@ fn restart_keeps_saved_tasks_but_never_restores_or_creates_history_files() {
         assert_eq!(restarted.tasks, tasks);
         assert_eq!(fixture.storage.load().unwrap(), tasks);
 
-        restarted.toggle(2, &fixture.storage).unwrap();
+        restarted.toggle_completion(2, &fixture.storage).unwrap();
         restarted.undo(&fixture.storage).unwrap();
         assert_eq!(fixture.storage.load().unwrap(), tasks);
 
@@ -283,7 +283,7 @@ fn routine_and_important_status_messages_use_the_configured_duration() {
     assert!(expires_within_duration(&app));
 
     app.status_messages = false;
-    app.copy_markdown(&mut BrokenOutput);
+    app.request_clipboard_copy(&mut BrokenOutput);
 
     assert!(notice(&app).is_some_and(|message| message.starts_with("Copy failed:")));
     assert!(expires_within_duration(&app));
@@ -314,9 +314,9 @@ fn disabled_status_messages_hide_confirmations_but_still_report_copy_failures() 
     assert!(app.status_message.is_none());
 
     let mut output = Vec::new();
-    app.copy_markdown(&mut output);
+    app.request_clipboard_copy(&mut output);
     let mut expected = Vec::new();
-    crate::export::copy(&app.tasks, &mut expected).unwrap();
+    crate::export::write_osc52_clipboard_request(&app.tasks, &mut expected).unwrap();
 
     assert_eq!(output, expected);
     assert!(app.status_message.is_none());
@@ -326,7 +326,7 @@ fn disabled_status_messages_hide_confirmations_but_still_report_copy_failures() 
         assert!(app.status_message.is_none(), "{key}");
     }
 
-    app.copy_markdown(&mut BrokenOutput);
+    app.request_clipboard_copy(&mut BrokenOutput);
 
     assert!(
         app.status_message
@@ -362,9 +362,9 @@ fn clipboard_output_and_errors_leave_tasks_selection_and_histories_unchanged() {
     let saved = fixture.storage.load().unwrap();
     app.viewport.scroll = 2;
     let mut output = Vec::new();
-    app.copy_markdown(&mut output);
+    app.request_clipboard_copy(&mut output);
     let mut expected = Vec::new();
-    crate::export::copy(&tasks, &mut expected).unwrap();
+    crate::export::write_osc52_clipboard_request(&tasks, &mut expected).unwrap();
 
     assert_eq!(output, expected);
     assert_eq!(
@@ -388,7 +388,7 @@ fn clipboard_output_and_errors_leave_tasks_selection_and_histories_unchanged() {
         );
     }
 
-    app.copy_markdown(&mut BrokenOutput);
+    app.request_clipboard_copy(&mut BrokenOutput);
     assert_eq!(
         app.status_message.as_ref().map(StatusMessage::message),
         Some("Copy failed: output unavailable")
@@ -436,7 +436,7 @@ fn copy_key_remains_text_or_is_ignored_outside_normal_mode() {
             | Mode::Editing { input, .. }
             | Mode::Searching { input, .. }
             | Mode::RenamingSection { input }
-            | Mode::FuzzySection { input, .. } => assert_eq!(input.text(), "c"),
+            | Mode::PickingSectionTab { input, .. } => assert_eq!(input.text(), "c"),
             Mode::ConfirmClearNonCarried | Mode::Help { .. } => {}
             Mode::Normal => panic!("copy changed mode"),
         }
@@ -577,7 +577,7 @@ fn register_survives_deletion_and_handles_no_selection_repeats_and_failed_saves(
     block_saves(&fixture);
 
     assert!(
-        app.key(
+        app.handle_key(
             KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
             &fixture.storage
         )
@@ -970,7 +970,7 @@ fn picker_app() -> App {
 }
 
 fn picker_matches(app: &App) -> Vec<SectionView> {
-    let Mode::FuzzySection { matches, .. } = &app.mode else {
+    let Mode::PickingSectionTab { matches, .. } = &app.mode else {
         panic!("expected the section picker");
     };
 
@@ -1110,7 +1110,7 @@ fn tab_and_control_n_p_step_through_picker_matches_and_wrap() {
     repeat(&mut app, &fixture, KeyCode::Tab, KeyModifiers::NONE);
     assert_eq!(app.view, named("work"));
 
-    assert!(matches!(app.mode, Mode::FuzzySection { .. }));
+    assert!(matches!(app.mode, Mode::PickingSectionTab { .. }));
     assert!(!app.can_undo());
     assert!(!fixture.task_path().exists());
 }
@@ -1120,7 +1120,7 @@ fn control_arrows_move_by_word_in_the_picker_query() {
     let fixture = Fixture::new();
     let mut app = picker_app();
     press(&mut app, &fixture, KeyCode::Char('`'));
-    app.paste("wo rk");
+    app.handle_paste("wo rk");
 
     press(
         &mut app,
@@ -1129,7 +1129,7 @@ fn control_arrows_move_by_word_in_the_picker_query() {
     );
     press(&mut app, &fixture, KeyCode::Backspace);
 
-    let Mode::FuzzySection { input, .. } = &app.mode else {
+    let Mode::PickingSectionTab { input, .. } = &app.mode else {
         panic!("expected the section picker");
     };
     assert_eq!(input.text(), "work");
@@ -1142,7 +1142,7 @@ fn control_arrows_move_by_word_in_the_picker_query() {
     );
     press(&mut app, &fixture, KeyCode::Backspace);
 
-    let Mode::FuzzySection { input, .. } = &app.mode else {
+    let Mode::PickingSectionTab { input, .. } = &app.mode else {
         panic!("expected the section picker");
     };
     assert_eq!(input.text(), "woxr");
@@ -1157,7 +1157,7 @@ fn enter_keeps_the_previewed_section_without_history_or_saving() {
 
     // Holding Enter does nothing; only a press confirms.
     repeat(&mut app, &fixture, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(matches!(app.mode, Mode::FuzzySection { .. }));
+    assert!(matches!(app.mode, Mode::PickingSectionTab { .. }));
 
     press(&mut app, &fixture, KeyCode::Enter);
 
@@ -1239,7 +1239,10 @@ fn without_picker_matches_tab_and_enter_wait_until_the_query_matches_again() {
     ] {
         press(&mut app, &fixture, key);
 
-        assert!(matches!(app.mode, Mode::FuzzySection { .. }), "{key:?}");
+        assert!(
+            matches!(app.mode, Mode::PickingSectionTab { .. }),
+            "{key:?}"
+        );
         assert_eq!(app.view, named("wishlist"), "{key:?}");
     }
 
@@ -1263,7 +1266,7 @@ fn enter_waits_for_a_focused_match_when_the_picker_opens_on_all() {
 
     press(&mut app, &fixture, KeyCode::Enter);
 
-    assert!(matches!(app.mode, Mode::FuzzySection { .. }));
+    assert!(matches!(app.mode, Mode::PickingSectionTab { .. }));
     assert_eq!(app.view, SectionView::All);
 
     press(&mut app, &fixture, KeyCode::Tab);
@@ -1289,7 +1292,7 @@ fn task_shortcuts_and_clicks_only_type_into_the_section_picker() {
         KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
     );
     app.viewport.task_index_by_row = vec![Some(0), Some(1)];
-    app.mouse(
+    app.handle_mouse(
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 1,
@@ -1301,7 +1304,7 @@ fn task_shortcuts_and_clicks_only_type_into_the_section_picker() {
     )
     .unwrap();
 
-    let Mode::FuzzySection { input, .. } = &app.mode else {
+    let Mode::PickingSectionTab { input, .. } = &app.mode else {
         panic!("expected the section picker");
     };
 
@@ -1318,7 +1321,7 @@ fn the_picker_matches_unicode_names_and_pasted_text() {
     let mut app = app_with_texts(&["Café: latte", "日本語: 本", "Work: a"]);
     press(&mut app, &fixture, KeyCode::Char('`'));
 
-    app.paste("cafe");
+    app.handle_paste("cafe");
     assert_eq!(picker_matches(&app), [named("café")]);
     assert_eq!(app.view, named("café"));
 
@@ -1327,7 +1330,7 @@ fn the_picker_matches_unicode_names_and_pasted_text() {
         &fixture,
         KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
     );
-    app.paste("日語");
+    app.handle_paste("日語");
     assert_eq!(picker_matches(&app), [named("日本語")]);
     assert_eq!(app.list.selected(), Some(1));
 }
@@ -1611,7 +1614,7 @@ fn search_in_a_section_matches_only_its_tasks_and_ignores_the_prefix() {
     app.list.select(Some(2));
 
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("fix");
+    app.handle_paste("fix");
     assert_eq!(app.list.selected(), Some(0));
 
     press(&mut app, &fixture, KeyCode::Enter);
@@ -1619,13 +1622,13 @@ fn search_in_a_section_matches_only_its_tasks_and_ignores_the_prefix() {
     assert_eq!(app.list.selected(), Some(0));
 
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("work");
+    app.handle_paste("work");
     assert_eq!(app.list.selected(), None);
 
     press(&mut app, &fixture, KeyCode::Esc);
     app.select_tab(SectionView::All);
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("work");
+    app.handle_paste("work");
     assert_eq!(app.list.selected(), Some(0));
 }
 
@@ -1701,14 +1704,14 @@ fn copying_in_a_tab_copies_only_its_tasks_with_full_text() {
     ] {
         app.select_tab(view);
         let mut output = Vec::new();
-        app.copy_markdown(&mut output);
+        app.request_clipboard_copy(&mut output);
 
         let tasks: Vec<_> = shown
             .iter()
             .map(|&index| app.tasks[index].clone())
             .collect();
         let mut expected = Vec::new();
-        crate::export::copy(&tasks, &mut expected).unwrap();
+        crate::export::write_osc52_clipboard_request(&tasks, &mut expected).unwrap();
 
         assert_eq!(output, expected);
     }
@@ -1731,11 +1734,11 @@ fn adding_on_a_section_tab_suggests_that_section_and_typing_accepts_it() {
 
     press(&mut app, &fixture, KeyCode::Char('a'));
     assert_eq!(input_text(&app), "");
-    assert_eq!(app.completion_ghost().as_deref(), Some("work: "));
+    assert_eq!(app.section_suggestion_suffix().as_deref(), Some("work: "));
 
     type_keys(&mut app, &fixture, "x");
     assert_eq!(input_text(&app), "work: x");
-    assert_eq!(app.completion_ghost(), None);
+    assert_eq!(app.section_suggestion_suffix(), None);
 
     press(&mut app, &fixture, KeyCode::Enter);
 
@@ -1745,7 +1748,7 @@ fn adding_on_a_section_tab_suggests_that_section_and_typing_accepts_it() {
 
     app.select_tab(SectionView::All);
     press(&mut app, &fixture, KeyCode::Char('a'));
-    assert_eq!(app.completion_ghost(), None);
+    assert_eq!(app.section_suggestion_suffix(), None);
 }
 
 #[test]
@@ -1759,7 +1762,7 @@ fn space_or_enter_accept_a_suggestion_and_backspace_dismisses_it() {
         press(&mut app, &fixture, accept);
 
         assert_eq!(input_text(&app), "Work: ");
-        assert_eq!(app.completion_ghost(), None);
+        assert_eq!(app.section_suggestion_suffix(), None);
 
         // A section with no task text adds nothing.
         press(&mut app, &fixture, KeyCode::Enter);
@@ -1771,7 +1774,7 @@ fn space_or_enter_accept_a_suggestion_and_backspace_dismisses_it() {
     press(&mut app, &fixture, KeyCode::Backspace);
 
     assert_eq!(input_text(&app), "");
-    assert_eq!(app.completion_ghost(), None);
+    assert_eq!(app.section_suggestion_suffix(), None);
 
     press(&mut app, &fixture, KeyCode::Esc);
     assert_eq!(app.mode, Mode::Normal);
@@ -1812,12 +1815,12 @@ fn esc_and_ctrl_g_cancel_an_add_or_edit_even_while_a_suggestion_shows() {
                 press(&mut app, &fixture, KeyCode::Tab);
             }
 
-            assert!(app.completion_ghost().is_some(), "{start}");
+            assert!(app.section_suggestion_suffix().is_some(), "{start}");
 
             press(&mut app, &fixture, cancel);
 
             assert_eq!(app.mode, Mode::Normal, "{cancel:?} after {start}");
-            assert_eq!(app.completion_ghost(), None);
+            assert_eq!(app.section_suggestion_suffix(), None);
         }
     }
 
@@ -1834,7 +1837,7 @@ fn control_n_and_p_cycle_section_suggestions_like_tab_without_accepting() {
     press(&mut app, &fixture, KeyCode::Char('a'));
     let ctrl = |character| KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL);
 
-    for (key, ghost) in [
+    for (key, suffix) in [
         (ctrl('n'), "Errands: "),
         (ctrl('n'), "Home: "),
         (ctrl('p'), "Errands: "),
@@ -1842,7 +1845,11 @@ fn control_n_and_p_cycle_section_suggestions_like_tab_without_accepting() {
     ] {
         press(&mut app, &fixture, key);
 
-        assert_eq!(app.completion_ghost().as_deref(), Some(ghost), "{key:?}");
+        assert_eq!(
+            app.section_suggestion_suffix().as_deref(),
+            Some(suffix),
+            "{key:?}"
+        );
         assert_eq!(input_text(&app), "");
     }
 
@@ -1853,7 +1860,10 @@ fn control_n_and_p_cycle_section_suggestions_like_tab_without_accepting() {
         KeyCode::Char('n'),
         KeyModifiers::CONTROL,
     );
-    assert_eq!(app.completion_ghost().as_deref(), Some("Errands: "));
+    assert_eq!(
+        app.section_suggestion_suffix().as_deref(),
+        Some("Errands: ")
+    );
 
     assert_eq!(app.tasks.len(), 3);
     assert!(!app.can_undo());
@@ -1865,7 +1875,7 @@ fn tab_cycles_matching_sections_on_empty_or_partial_input() {
     let mut app = app_with_texts(&["Work: a", "Home: b", "Errands: c", "Workout: d"]);
     press(&mut app, &fixture, KeyCode::Char('a'));
 
-    for (key, ghost) in [
+    for (key, suffix) in [
         (KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), "Errands: "),
         (KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), "Home: "),
         (
@@ -1878,16 +1888,20 @@ fn tab_cycles_matching_sections_on_empty_or_partial_input() {
         ),
     ] {
         press(&mut app, &fixture, key);
-        assert_eq!(app.completion_ghost().as_deref(), Some(ghost), "{key:?}");
+        assert_eq!(
+            app.section_suggestion_suffix().as_deref(),
+            Some(suffix),
+            "{key:?}"
+        );
     }
 
     press(&mut app, &fixture, KeyCode::Backspace);
     type_keys(&mut app, &fixture, "wO");
     press(&mut app, &fixture, KeyCode::Tab);
-    assert_eq!(app.completion_ghost().as_deref(), Some("rk: "));
+    assert_eq!(app.section_suggestion_suffix().as_deref(), Some("rk: "));
 
     press(&mut app, &fixture, KeyCode::Tab);
-    assert_eq!(app.completion_ghost().as_deref(), Some("rkout: "));
+    assert_eq!(app.section_suggestion_suffix().as_deref(), Some("rkout: "));
 
     press(&mut app, &fixture, KeyCode::Enter);
     assert_eq!(input_text(&app), "Workout: ");
@@ -1897,13 +1911,13 @@ fn tab_cycles_matching_sections_on_empty_or_partial_input() {
     type_keys(&mut app, &fixture, "zz");
     press(&mut app, &fixture, KeyCode::Tab);
 
-    assert_eq!(app.completion_ghost(), None);
+    assert_eq!(app.section_suggestion_suffix(), None);
     assert_eq!(notice(&app), Some("No matching sections"));
 
     // Text with a space can no longer become a section.
     type_keys(&mut app, &fixture, " x");
     press(&mut app, &fixture, KeyCode::Tab);
-    assert_eq!(app.completion_ghost(), None);
+    assert_eq!(app.section_suggestion_suffix(), None);
     assert_eq!(input_text(&app), "zz x");
 }
 
@@ -1915,7 +1929,7 @@ fn editing_an_erased_task_can_move_it_to_another_section() {
 
     press(&mut app, &fixture, KeyCode::Char('e'));
     assert_eq!(input_text(&app), "Work: a");
-    assert_eq!(app.completion_ghost(), None);
+    assert_eq!(app.section_suggestion_suffix(), None);
 
     press(
         &mut app,
@@ -1923,7 +1937,7 @@ fn editing_an_erased_task_can_move_it_to_another_section() {
         KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
     );
     press(&mut app, &fixture, KeyCode::Tab);
-    assert_eq!(app.completion_ghost().as_deref(), Some("Home: "));
+    assert_eq!(app.section_suggestion_suffix().as_deref(), Some("Home: "));
 
     // Modifier shortcuts edit the input directly and drop the suggestion.
     press(
@@ -1931,10 +1945,10 @@ fn editing_an_erased_task_can_move_it_to_another_section() {
         &fixture,
         KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
     );
-    assert_eq!(app.completion_ghost(), None);
+    assert_eq!(app.section_suggestion_suffix(), None);
 
     press(&mut app, &fixture, KeyCode::Tab);
-    app.paste("moved task");
+    app.handle_paste("moved task");
     assert_eq!(input_text(&app), "Home: moved task");
 
     press(&mut app, &fixture, KeyCode::Enter);
@@ -1964,7 +1978,11 @@ fn bare_modifier_and_lock_keys_keep_a_section_suggestion() {
         KeyEvent::from(KeyCode::CapsLock),
     ] {
         press(&mut app, &fixture, key);
-        assert_eq!(app.completion_ghost().as_deref(), Some("work: "), "{key:?}");
+        assert_eq!(
+            app.section_suggestion_suffix().as_deref(),
+            Some("work: "),
+            "{key:?}"
+        );
     }
 
     // A capital letter typed with Shift continues after the suggested section.
@@ -1991,7 +2009,7 @@ fn shift_tab_and_ctrl_n_step_from_a_prefilled_suggestion_after_a_bare_modifier()
     app.select_tab(SectionView::Named("home".into()));
 
     press(&mut app, &fixture, KeyCode::Char('a'));
-    assert_eq!(app.completion_ghost().as_deref(), Some("Home: "));
+    assert_eq!(app.section_suggestion_suffix().as_deref(), Some("Home: "));
 
     press(
         &mut app,
@@ -2003,7 +2021,10 @@ fn shift_tab_and_ctrl_n_step_from_a_prefilled_suggestion_after_a_bare_modifier()
         &fixture,
         KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
     );
-    assert_eq!(app.completion_ghost().as_deref(), Some("Errands: "));
+    assert_eq!(
+        app.section_suggestion_suffix().as_deref(),
+        Some("Errands: ")
+    );
 
     press(
         &mut app,
@@ -2015,7 +2036,7 @@ fn shift_tab_and_ctrl_n_step_from_a_prefilled_suggestion_after_a_bare_modifier()
         &fixture,
         KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
     );
-    assert_eq!(app.completion_ghost().as_deref(), Some("Home: "));
+    assert_eq!(app.section_suggestion_suffix().as_deref(), Some("Home: "));
 }
 
 #[test]
@@ -2035,7 +2056,11 @@ fn only_keys_that_edit_or_move_the_cursor_drop_a_suggestion() {
         KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
     ] {
         press(&mut app, &fixture, key);
-        assert_eq!(app.completion_ghost().as_deref(), Some("Work: "), "{key:?}");
+        assert_eq!(
+            app.section_suggestion_suffix().as_deref(),
+            Some("Work: "),
+            "{key:?}"
+        );
         assert_eq!(input_text(&app), "");
     }
 
@@ -2048,10 +2073,10 @@ fn only_keys_that_edit_or_move_the_cursor_drop_a_suggestion() {
         KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
     ] {
         press(&mut app, &fixture, KeyCode::Tab);
-        assert!(app.completion_ghost().is_some(), "{key:?}");
+        assert!(app.section_suggestion_suffix().is_some(), "{key:?}");
 
         press(&mut app, &fixture, key);
-        assert_eq!(app.completion_ghost(), None, "{key:?}");
+        assert_eq!(app.section_suggestion_suffix(), None, "{key:?}");
         assert_eq!(input_text(&app), "");
     }
 }
@@ -2088,7 +2113,7 @@ fn type_rename(app: &mut App, fixture: &Fixture, name: &str) {
         fixture,
         KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
     );
-    app.paste(name);
+    app.handle_paste(name);
 }
 
 #[test]
@@ -2254,7 +2279,7 @@ fn a_failed_rename_save_keeps_the_tasks_tab_history_and_input() {
     press(&mut app, &fixture, KeyCode::Char('E'));
     type_rename(&mut app, &fixture, "Job");
 
-    let result = app.key(
+    let result = app.handle_key(
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         &fixture.storage,
     );
@@ -2593,8 +2618,8 @@ fn control_g_cancels_each_mode_through_esc_without_persisting() {
     ] {
         let search = matches!(mode, Mode::Searching { .. });
         let mut app = app_with_tasks(2);
-        app.toggle(0, &fixture.storage).unwrap();
-        app.toggle(1, &fixture.storage).unwrap();
+        app.toggle_completion(0, &fixture.storage).unwrap();
+        app.toggle_completion(1, &fixture.storage).unwrap();
         app.undo(&fixture.storage).unwrap();
         app.mode = mode;
         app.list.select(Some(0));
@@ -2645,7 +2670,7 @@ fn tab_and_shift_tab_cycle_visible_matches_with_wrapping_while_typing() {
     app.list.select(Some(1));
 
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("hit");
+    app.handle_paste("hit");
 
     assert_eq!(app.list.selected(), Some(2));
 
@@ -2673,7 +2698,7 @@ fn control_n_and_p_step_through_search_results_like_tab_and_esc_still_restores()
     let ctrl = |character| KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL);
 
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("hit");
+    app.handle_paste("hit");
 
     for (key, expected) in [(ctrl('n'), 4), (ctrl('n'), 0), (ctrl('p'), 4)] {
         press(&mut app, &fixture, key);
@@ -2697,7 +2722,7 @@ fn moving_the_search_cursor_keeps_the_match_chosen_with_tab_until_the_query_chan
     app.list.select(Some(1));
 
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("hit");
+    app.handle_paste("hit");
     press(&mut app, &fixture, KeyCode::Tab);
 
     assert_eq!(app.list.selected(), Some(3));
@@ -2719,7 +2744,7 @@ fn moving_the_search_cursor_keeps_the_match_chosen_with_tab_until_the_query_chan
         assert_eq!(app.list.selected(), Some(3), "{key:?}");
     }
 
-    app.paste("");
+    app.handle_paste("");
     assert_eq!(app.list.selected(), Some(3));
 
     // Editing the query starts again from the task selected before searching.
@@ -2735,7 +2760,7 @@ fn enter_selects_the_focused_match_and_esc_restores_the_original_selection() {
     let original = task_state(&app);
 
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("hit");
+    app.handle_paste("hit");
     press(&mut app, &fixture, KeyCode::Tab);
     press(&mut app, &fixture, KeyCode::Esc);
 
@@ -2743,7 +2768,7 @@ fn enter_selects_the_focused_match_and_esc_restores_the_original_selection() {
     assert_eq!(task_state(&app), original);
 
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("hit");
+    app.handle_paste("hit");
     press(&mut app, &fixture, KeyCode::Tab);
     press(&mut app, &fixture, KeyCode::Enter);
 
@@ -2762,7 +2787,7 @@ fn enter_keeps_search_open_without_matches_and_cancels_an_empty_query() {
     app.list.select(Some(1));
 
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("missing");
+    app.handle_paste("missing");
     press(&mut app, &fixture, KeyCode::Tab);
     press(&mut app, &fixture, KeyCode::Enter);
 
@@ -2785,7 +2810,7 @@ fn n_and_shift_n_do_nothing_in_normal_mode_after_a_search() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["hit 0", "miss 1", "hit 2"]);
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("hit");
+    app.handle_paste("hit");
     press(&mut app, &fixture, KeyCode::Enter);
     let before = task_state(&app);
 
@@ -2835,7 +2860,7 @@ fn failed_saves_that_would_empty_a_tab_keep_its_view_tasks_and_history() {
             press(&mut app, &fixture, key);
         }
 
-        let result = app.key(KeyEvent::from(*last), &fixture.storage);
+        let result = app.handle_key(KeyEvent::from(*last), &fixture.storage);
 
         assert!(result.is_err(), "{keys:?}");
         assert_eq!(app.view, SectionView::Named("work".into()), "{keys:?}");
@@ -2996,7 +3021,7 @@ fn editing_a_task_into_another_section_saves_the_tab_it_moves_to() {
         &fixture,
         KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
     );
-    app.paste("Home: moved");
+    app.handle_paste("Home: moved");
     press(&mut app, &fixture, KeyCode::Enter);
 
     assert_eq!(app.view, SectionView::Named("home".into()));
@@ -3016,11 +3041,11 @@ fn a_failed_save_of_an_edit_that_moves_sections_keeps_the_view() {
         &fixture,
         KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
     );
-    app.paste("Home: moved");
+    app.handle_paste("Home: moved");
     let before = task_state(&app);
     block_saves(&fixture);
 
-    let result = app.key(KeyEvent::from(KeyCode::Enter), &fixture.storage);
+    let result = app.handle_key(KeyEvent::from(KeyCode::Enter), &fixture.storage);
 
     assert!(result.is_err());
     assert_eq!(app.view, SectionView::Named("work".into()));
@@ -3090,7 +3115,7 @@ fn carryover_no_ops_preserve_redo_and_completed_clearing_keeps_carried_tasks() {
 
     press(&mut app, &fixture, KeyCode::Enter);
     press(&mut app, &fixture, KeyCode::Char('a'));
-    app.paste("temporary");
+    app.handle_paste("temporary");
     press(&mut app, &fixture, KeyCode::Enter);
     app.undo(&fixture.storage).unwrap();
     let completed = task_state(&app);
@@ -3136,7 +3161,7 @@ fn carryover_completion_and_runtime_history_are_coherent() {
 
         if action == KeyCode::Null {
             app.viewport.task_index_by_row = vec![Some(0), Some(1)];
-            app.mouse(
+            app.handle_mouse(
                 MouseEvent {
                     kind: MouseEventKind::Down(MouseButton::Left),
                     column: 1,
@@ -3239,13 +3264,13 @@ fn carryover_survives_other_operations_and_failed_saves_preserve_history() {
     assert_eq!(app.tasks[1].status, TaskStatus::Carried);
 
     press(&mut app, &fixture, KeyCode::Char('e'));
-    app.paste(" edited");
+    app.handle_paste(" edited");
     press(&mut app, &fixture, KeyCode::Enter);
 
     assert_eq!(app.tasks[1].status, TaskStatus::Carried);
 
     press(&mut app, &fixture, KeyCode::Char('a'));
-    app.paste("new");
+    app.handle_paste("new");
     press(&mut app, &fixture, KeyCode::Enter);
 
     assert_ne!(app.tasks[2].status, TaskStatus::Carried);
@@ -3259,7 +3284,7 @@ fn carryover_survives_other_operations_and_failed_saves_preserve_history() {
 
     press(&mut app, &fixture, KeyCode::Char('D'));
     assert!(
-        app.key(
+        app.handle_key(
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             &fixture.storage
         )
@@ -3335,8 +3360,8 @@ fn conventional_aliases_match_primary_actions_and_ignore_repeats() {
                 let mut app = App::new(tasks.clone());
 
                 if count > 0 {
-                    app.toggle(0, &fixture.storage).unwrap();
-                    app.toggle(1, &fixture.storage).unwrap();
+                    app.toggle_completion(0, &fixture.storage).unwrap();
+                    app.toggle_completion(1, &fixture.storage).unwrap();
                     app.undo(&fixture.storage).unwrap();
                     app.list.select(Some(2));
                 }
@@ -3397,8 +3422,8 @@ fn conventional_aliases_do_not_leak_into_other_modes_or_replace_text_delete() {
         Mode::ConfirmClearNonCarried,
     ] {
         let mut app = app_with_tasks(2);
-        app.toggle(0, &fixture.storage).unwrap();
-        app.toggle(1, &fixture.storage).unwrap();
+        app.toggle_completion(0, &fixture.storage).unwrap();
+        app.toggle_completion(1, &fixture.storage).unwrap();
         app.undo(&fixture.storage).unwrap();
         app.mode = mode;
 
@@ -3453,8 +3478,8 @@ fn conventional_aliases_do_not_leak_into_other_modes_or_replace_text_delete() {
 fn alias_save_failures_preserve_current_state_and_both_histories() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(2);
-    app.toggle(0, &fixture.storage).unwrap();
-    app.toggle(1, &fixture.storage).unwrap();
+    app.toggle_completion(0, &fixture.storage).unwrap();
+    app.toggle_completion(1, &fixture.storage).unwrap();
     app.undo(&fixture.storage).unwrap();
     let before = task_state(&app);
     block_saves(&fixture);
@@ -3464,7 +3489,7 @@ fn alias_save_failures_preserve_current_state_and_both_histories() {
         KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
         KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
     ] {
-        assert!(app.key(event, &fixture.storage).is_err());
+        assert!(app.handle_key(event, &fixture.storage).is_err());
         assert_eq!(task_state(&app), before);
     }
 }
@@ -3666,7 +3691,7 @@ fn search_uses_original_anchor_and_accepts_or_cancels_without_mutating() {
 
     assert_eq!(app.list.selected(), None);
 
-    app.paste("a");
+    app.handle_paste("a");
     assert_eq!(app.list.selected(), Some(2));
 
     press(&mut app, &fixture, KeyCode::Char('l'));
@@ -3675,7 +3700,7 @@ fn search_uses_original_anchor_and_accepts_or_cancels_without_mutating() {
     press(&mut app, &fixture, KeyCode::Backspace);
     assert_eq!(app.list.selected(), Some(2));
 
-    app.paste("lpha");
+    app.handle_paste("lpha");
     assert_eq!(app.list.selected(), Some(3));
 
     // A repeated Enter is not a deliberate selection.
@@ -3701,7 +3726,7 @@ fn search_uses_original_anchor_and_accepts_or_cancels_without_mutating() {
     assert!(app.viewport.reveal_selection);
 
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("alpha");
+    app.handle_paste("alpha");
     press(&mut app, &fixture, KeyCode::Enter);
     repeat(&mut app, &fixture, KeyCode::Enter, KeyModifiers::NONE);
 
@@ -3717,7 +3742,7 @@ fn search_input_reuses_cursor_editing_and_paste_normalization() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(1);
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("α beta");
+    app.handle_paste("α beta");
 
     for (code, modifiers, text, cursor) in [
         (KeyCode::Left, KeyModifiers::CONTROL, "α beta", 3),
@@ -3750,7 +3775,7 @@ fn search_input_reuses_cursor_editing_and_paste_normalization() {
 
     repeat(&mut app, &fixture, KeyCode::Left, KeyModifiers::CONTROL);
     repeat(&mut app, &fixture, KeyCode::Right, KeyModifiers::NONE);
-    app.paste("X\r\n\tY");
+    app.handle_paste("X\r\n\tY");
 
     assert_eq!(app.search_query(), Some("e\u{301}X  Yta"));
 
@@ -3802,14 +3827,14 @@ fn empty_and_single_result_search_cycles_in_place_preserves_undo_and_ignores_mou
         assert_eq!(app.list.selected(), selection);
 
         press(&mut app, &fixture, KeyCode::Char('/'));
-        app.paste("task");
+        app.handle_paste("task");
         let rows = Rect::new(0, 0, 20, 3);
 
         for kind in [
             MouseEventKind::Down(MouseButton::Left),
             MouseEventKind::ScrollDown,
         ] {
-            app.mouse(
+            app.handle_mouse(
                 MouseEvent {
                     kind,
                     column: 1,
@@ -3868,7 +3893,7 @@ fn separators_normalize_in_all_input_modes_without_submitting() {
             };
 
             if pasted {
-                app.paste(text);
+                app.handle_paste(text);
             } else {
                 for character in text.chars() {
                     press(&mut app, &fixture, KeyCode::Char(character));
@@ -4001,7 +4026,7 @@ fn typing_and_paste_insert_at_the_cursor_in_both_input_modes() {
             Mode::Adding(input, AddPlacement::End)
         };
         press(&mut app, &fixture, KeyCode::Char('界'));
-        app.paste("e\u{301}\r\nq\tD\u{2028}");
+        app.handle_paste("e\u{301}\r\nq\tD\u{2028}");
 
         match &app.mode {
             Mode::Adding(input, _) | Mode::Editing { input, .. } => {
@@ -4053,7 +4078,7 @@ fn backspace_removes_whole_graphemes_in_add_and_edit_modes() {
             }
         }
 
-        app.paste("e\u{301}👩‍💻");
+        app.handle_paste("e\u{301}👩‍💻");
         repeat(&mut app, &fixture, KeyCode::Backspace, KeyModifiers::NONE);
 
         match &app.mode {
@@ -4086,8 +4111,10 @@ fn pasted_multiline_text_is_literal_and_requires_explicit_confirmation() {
         let mut app = app_with_tasks(1);
         let original = app.tasks.clone();
         press(&mut app, &fixture, KeyCode::Char('a'));
-        app.paste("Start ");
-        app.paste("日本語\r\nq\nD\rd\tx\0u\u{0008}\u{001b}[13u\u{0085}👩‍💻\u{2028}e\u{2029}end");
+        app.handle_paste("Start ");
+        app.handle_paste(
+            "日本語\r\nq\nD\rd\tx\0u\u{0008}\u{001b}[13u\u{0085}👩‍💻\u{2028}e\u{2029}end",
+        );
         let expected = "Start 日本語 q D d x u  [13u 👩‍💻 e end";
 
         assert_eq!(app.mode, Mode::Adding(expected.into(), AddPlacement::End));
@@ -4118,7 +4145,7 @@ fn paste_appends_to_edit_input_and_preserves_completion_order_and_undo() {
     app.tasks[1].status = TaskStatus::Completed;
     let original = app.tasks.clone();
     press(&mut app, &fixture, KeyCode::Char('e'));
-    app.paste(" \r\nD\nd q日本語");
+    app.handle_paste(" \r\nD\nd q日本語");
 
     assert_eq!(
         app.mode,
@@ -4156,8 +4183,8 @@ fn paste_in_normal_or_confirmation_mode_cannot_act_or_consume_undo() {
             press(&mut app, &fixture, KeyCode::Char('D'));
         }
 
-        app.paste("q\r\nD\r\nd\ra\nx u\u{001b}日本語");
-        app.paste("");
+        app.handle_paste("q\r\nD\r\nd\ra\nx u\u{001b}日本語");
+        app.handle_paste("");
         assert_eq!(app.tasks, modified);
         assert_eq!(app.list.selected(), Some(1));
         assert_eq!(
@@ -4393,7 +4420,7 @@ fn typed_prefixes_set_the_section_field_and_edits_or_pastes_keep_it_consistent()
     let mut app = App::new(Vec::new());
 
     type_keys(&mut app, &fixture, "a");
-    app.paste("Work: fix bug");
+    app.handle_paste("Work: fix bug");
     press(&mut app, &fixture, KeyCode::Enter);
 
     let task = &app.tasks[0];
@@ -4414,7 +4441,7 @@ fn typed_prefixes_set_the_section_field_and_edits_or_pastes_keep_it_consistent()
             &fixture,
             KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
         );
-        app.paste(typed);
+        app.handle_paste(typed);
         press(&mut app, &fixture, KeyCode::Enter);
 
         let task = &app.tasks[0];
@@ -4592,10 +4619,10 @@ fn any_other_input_discards_a_pending_count() {
                     row: 0,
                     modifiers: KeyModifiers::NONE,
                 };
-                app.mouse(scroll, Rect::default(), &fixture.storage)
+                app.handle_mouse(scroll, Rect::default(), &fixture.storage)
                     .unwrap();
             }
-            _ => app.paste("text"),
+            _ => app.handle_paste("text"),
         }
 
         press(&mut app, &fixture, KeyCode::Char('j'));
@@ -4736,7 +4763,7 @@ fn failed_counted_reordering_preserves_state_and_discards_the_count() {
     block_saves(&fixture);
 
     press(&mut app, &fixture, KeyCode::Char('3'));
-    let result = app.key(
+    let result = app.handle_key(
         KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE),
         &fixture.storage,
     );
@@ -4839,7 +4866,7 @@ fn repeated_actions_and_releases_preserve_tasks_selection_mode_and_undo() {
         ..KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)
     };
 
-    assert!(!app.key(release, &fixture.storage).unwrap());
+    assert!(!app.handle_key(release, &fixture.storage).unwrap());
     assert_eq!(app.tasks, changed);
     assert_eq!(app.list.selected(), Some(1));
     assert_eq!(app.mode, Mode::Normal);
@@ -5161,14 +5188,14 @@ fn failed_saves_never_confirm_a_change() {
     block_saves(&fixture);
 
     for key in [KeyCode::Char('d'), KeyCode::Char('X')] {
-        let result = app.key(KeyEvent::new(key, KeyModifiers::NONE), &fixture.storage);
+        let result = app.handle_key(KeyEvent::new(key, KeyModifiers::NONE), &fixture.storage);
 
         assert!(result.is_err());
         assert_eq!(notice(&app), None);
     }
 
     press(&mut app, &fixture, KeyCode::Char('D'));
-    let result = app.key(
+    let result = app.handle_key(
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         &fixture.storage,
     );
@@ -5184,7 +5211,7 @@ fn undo_and_redo_each_keep_exactly_256_states_and_discard_older_history() {
 
     for index in 0..258 {
         press(&mut app, &fixture, KeyCode::Char('a'));
-        app.paste(&format!("task {index}"));
+        app.handle_paste(&format!("task {index}"));
         press(&mut app, &fixture, KeyCode::Enter);
 
         assert_eq!(app.history.len(), (index + 1).min(HISTORY_LIMIT));
@@ -5236,7 +5263,7 @@ fn redo_is_preserved_by_no_ops_and_failed_saves_but_cleared_by_a_new_branch() {
     let mut app = app_with_tasks(1);
 
     for _ in 0..3 {
-        app.toggle(0, &fixture.storage).unwrap();
+        app.toggle_completion(0, &fixture.storage).unwrap();
     }
 
     app.undo(&fixture.storage).unwrap();
@@ -5261,7 +5288,7 @@ fn redo_is_preserved_by_no_ops_and_failed_saves_but_cleared_by_a_new_branch() {
         press(&mut app, &fixture, code);
     }
 
-    app.paste("task");
+    app.handle_paste("task");
     press(&mut app, &fixture, KeyCode::Enter);
     press(&mut app, &fixture, KeyCode::Char('n'));
     press(&mut app, &fixture, KeyCode::Esc);
@@ -5273,7 +5300,7 @@ fn redo_is_preserved_by_no_ops_and_failed_saves_but_cleared_by_a_new_branch() {
 
     for operation in 0..3 {
         let result = match operation {
-            0 => app.toggle(0, &fixture.storage),
+            0 => app.toggle_completion(0, &fixture.storage),
             1 => app.undo(&fixture.storage),
             _ => app.redo(&fixture.storage),
         };
@@ -5307,7 +5334,7 @@ fn redo_is_preserved_by_no_ops_and_failed_saves_but_cleared_by_a_new_branch() {
 fn redo_shortcut_is_normal_mode_only_and_ignores_repeats_and_releases() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(1);
-    app.toggle(0, &fixture.storage).unwrap();
+    app.toggle_completion(0, &fixture.storage).unwrap();
     app.undo(&fixture.storage).unwrap();
     let original = app.tasks.clone();
 
@@ -5372,13 +5399,13 @@ fn new_mutations_after_undo_record_the_restored_state() {
 
     for text in ["first", "second"] {
         press(&mut app, &fixture, KeyCode::Char('a'));
-        app.paste(text);
+        app.handle_paste(text);
         press(&mut app, &fixture, KeyCode::Enter);
     }
 
     press(&mut app, &fixture, KeyCode::Char('u'));
     press(&mut app, &fixture, KeyCode::Char('e'));
-    app.paste(" edited");
+    app.handle_paste(" edited");
     press(&mut app, &fixture, KeyCode::Enter);
 
     assert_eq!(app.history.len(), 2);
@@ -5535,7 +5562,7 @@ fn failed_modification_or_undo_preserves_the_undo_buffer() {
 
     for code in [KeyCode::Char('d'), KeyCode::Char('X'), KeyCode::Char('u')] {
         assert!(
-            app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
+            app.handle_key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
                 .is_err()
         );
         assert_eq!(app.tasks, modified);
@@ -5638,7 +5665,7 @@ fn failed_edit_save_preserves_original_and_input() {
     press(&mut app, &fixture, KeyCode::Char('x'));
 
     assert!(
-        app.key(
+        app.handle_key(
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             &fixture.storage
         )
@@ -5755,7 +5782,7 @@ fn failed_move_save_preserves_order_and_selection() {
 
     for code in [KeyCode::Char('J'), KeyCode::Char('K')] {
         assert!(
-            app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
+            app.handle_key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
                 .is_err()
         );
         assert_eq!(app.tasks, original);
@@ -5825,7 +5852,7 @@ fn positional_insertions_preserve_order_selection_and_history() {
             let mut expected = original.clone();
             expected.insert(expected_index, Task::new("New task"));
             press(&mut app, &fixture, KeyCode::Char(key));
-            app.paste("New task");
+            app.handle_paste("New task");
             press(&mut app, &fixture, KeyCode::Enter);
 
             // The new task gets its own identity; everything else must match exactly.
@@ -5863,7 +5890,7 @@ fn positional_insertions_preserve_order_selection_and_history() {
 
             app.undo(&fixture.storage).unwrap();
             press(&mut app, &fixture, KeyCode::Char(key));
-            app.paste("New branch");
+            app.handle_paste("New branch");
             press(&mut app, &fixture, KeyCode::Enter);
 
             assert!(!app.can_redo());
@@ -5877,14 +5904,14 @@ fn positional_input_cancellation_and_save_failures_preserve_both_histories() {
     for key in ['a', 'o', 'O'] {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(2);
-        app.toggle(0, &fixture.storage).unwrap();
-        app.toggle(1, &fixture.storage).unwrap();
+        app.toggle_completion(0, &fixture.storage).unwrap();
+        app.toggle_completion(1, &fixture.storage).unwrap();
         app.undo(&fixture.storage).unwrap();
         let original = task_state(&app);
 
         for ending in [KeyCode::Esc, KeyCode::Enter] {
             press(&mut app, &fixture, KeyCode::Char(key));
-            app.paste(if ending == KeyCode::Esc {
+            app.handle_paste(if ending == KeyCode::Esc {
                 "canceled task"
             } else {
                 " "
@@ -5906,11 +5933,11 @@ fn positional_input_cancellation_and_save_failures_preserve_both_histories() {
         }
 
         press(&mut app, &fixture, KeyCode::Char(key));
-        app.paste("new task");
+        app.handle_paste("new task");
         block_saves(&fixture);
 
         assert!(
-            app.key(
+            app.handle_key(
                 KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
                 &fixture.storage
             )
@@ -6038,7 +6065,7 @@ fn mouse_toggle_undo_restores_the_selection_before_the_click() {
         modifiers: KeyModifiers::NONE,
     };
 
-    app.mouse(click, Rect::new(1, 1, 30, 3), &fixture.storage)
+    app.handle_mouse(click, Rect::new(1, 1, 30, 3), &fixture.storage)
         .unwrap();
     assert_eq!(app.list.selected(), Some(2));
     assert_eq!(app.tasks[2].status, TaskStatus::Completed);
@@ -6082,7 +6109,7 @@ fn mouse_toggle_failure_preserves_selection_and_existing_undo() {
         };
 
         assert!(
-            app.mouse(click, Rect::new(1, 1, 30, 3), &fixture.storage)
+            app.handle_mouse(click, Rect::new(1, 1, 30, 3), &fixture.storage)
                 .is_err()
         );
         assert_eq!(app.tasks, before_click);
@@ -6121,25 +6148,27 @@ fn mouse_uses_visible_rows_and_ignores_borders_and_modal_input() {
         modifiers: KeyModifiers::NONE,
     };
 
-    app.mouse(click(1, 2), rows, &fixture.storage).unwrap();
+    app.handle_mouse(click(1, 2), rows, &fixture.storage)
+        .unwrap();
     assert_eq!(app.list.selected(), Some(6));
     assert_eq!(app.tasks[6].status, TaskStatus::Completed);
     assert_eq!(fixture.storage.load().unwrap(), app.tasks);
 
     for (column, row) in [(0, 1), (31, 1), (1, 0), (1, 4)] {
-        app.mouse(click(column, row), rows, &fixture.storage)
+        app.handle_mouse(click(column, row), rows, &fixture.storage)
             .unwrap();
         assert_eq!(app.list.selected(), Some(6));
     }
 
     app.mode = Mode::Adding(TextInput::default(), AddPlacement::End);
-    app.mouse(click(1, 2), rows, &fixture.storage).unwrap();
+    app.handle_mouse(click(1, 2), rows, &fixture.storage)
+        .unwrap();
     assert_eq!(app.tasks[6].status, TaskStatus::Completed);
 
     app.mode = Mode::Normal;
     app.list.select(Some(9));
     app.viewport.scroll = 7;
-    app.mouse(
+    app.handle_mouse(
         MouseEvent {
             kind: MouseEventKind::ScrollDown,
             ..click(1, 1)
@@ -6151,7 +6180,7 @@ fn mouse_uses_visible_rows_and_ignores_borders_and_modal_input() {
 
     assert_eq!(app.list.selected(), Some(9));
 
-    app.mouse(
+    app.handle_mouse(
         MouseEvent {
             kind: MouseEventKind::ScrollUp,
             ..click(1, 1)
@@ -6173,7 +6202,7 @@ fn failed_save_does_not_accept_a_mutation() {
     let original = app.tasks.clone();
 
     assert!(
-        app.key(
+        app.handle_key(
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
             &fixture.storage
         )
@@ -6222,11 +6251,11 @@ fn emacs_aliases_match_their_normal_mode_keys() {
         assert_eq!(aliased.list.selected(), plain.list.selected());
         assert_eq!(
             aliased
-                .completion
+                .section_suggestions
                 .as_ref()
                 .map(|c| (c.labels.clone(), c.current)),
             plain
-                .completion
+                .section_suggestions
                 .as_ref()
                 .map(|c| (c.labels.clone(), c.current)),
         );
@@ -6259,7 +6288,7 @@ fn emacs_aliases_leave_text_inputs_unchanged() {
         }
 
         assert_ne!(app.mode, Mode::Normal);
-        assert!(!matches!(app.mode, Mode::FuzzySection { .. }));
+        assert!(!matches!(app.mode, Mode::PickingSectionTab { .. }));
         assert_eq!(app.list.selected(), selected);
         assert_eq!(app.search_query().map(str::to_owned), text);
     }
@@ -6337,7 +6366,7 @@ fn ctrl_s_starts_a_search_like_slash_and_ctrl_f() {
         assert_eq!(app.mode, expected.mode);
 
         // Inside the search input, the chord is ignored rather than restarting the search.
-        app.paste("tw");
+        app.handle_paste("tw");
         press(&mut app, &fixture, search);
         assert_eq!(app.search_query(), Some("tw"));
     }
@@ -6492,7 +6521,7 @@ fn ctrl_k_deletes_to_the_end_in_every_text_input() {
         let mut app = app_with_texts(&["Work: alpha", "Work: beta"]);
         app.select_tab(SectionView::Named("work".into()));
         press(&mut app, &fixture, start);
-        app.paste("xyz");
+        app.handle_paste("xyz");
         press(&mut app, &fixture, KeyCode::Home);
 
         press(&mut app, &fixture, ctrl_k);
@@ -6507,7 +6536,7 @@ fn ctrl_k_deletes_to_the_end_in_every_text_input() {
         | Mode::Editing { input, .. }
         | Mode::Searching { input, .. }
         | Mode::RenamingSection { input }
-        | Mode::FuzzySection { input, .. }) = &app.mode
+        | Mode::PickingSectionTab { input, .. }) = &app.mode
         else {
             panic!("{start:?} left text input");
         };
@@ -6736,7 +6765,7 @@ fn question_mark_is_text_in_every_input_mode() {
         | Mode::Editing { input, .. }
         | Mode::Searching { input, .. }
         | Mode::RenamingSection { input }
-        | Mode::FuzzySection { input, .. }) = &app.mode
+        | Mode::PickingSectionTab { input, .. }) = &app.mode
         else {
             panic!("{start:?} left text input");
         };
@@ -6769,7 +6798,7 @@ fn mouse_clicks_are_ignored_and_the_wheel_scrolls_while_the_reference_is_open() 
         mouse(MouseEventKind::ScrollDown, 1, 1),
         mouse(MouseEventKind::ScrollDown, 30, 9),
     ] {
-        app.mouse(event, rows, &fixture.storage).unwrap();
+        app.handle_mouse(event, rows, &fixture.storage).unwrap();
     }
 
     assert_eq!(help_scroll(&app), 2);
@@ -6778,7 +6807,7 @@ fn mouse_clicks_are_ignored_and_the_wheel_scrolls_while_the_reference_is_open() 
 
     for _ in 0..3 {
         let event = mouse(MouseEventKind::ScrollUp, 1, 1);
-        app.mouse(event, rows, &fixture.storage).unwrap();
+        app.handle_mouse(event, rows, &fixture.storage).unwrap();
     }
 
     assert_eq!(help_scroll(&app), 0);
@@ -6884,13 +6913,13 @@ fn accepted_searches_are_remembered_and_cancelled_ones_are_not() {
     let mut app = app_with_texts(&["a", "b", "target"]);
 
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("b");
+    app.handle_paste("b");
     press(&mut app, &fixture, KeyCode::Esc);
     apostrophe(&mut app, &fixture);
     assert_eq!(notice(&app), Some("No previous position"));
 
     press(&mut app, &fixture, KeyCode::Char('/'));
-    app.paste("target");
+    app.handle_paste("target");
     press(&mut app, &fixture, KeyCode::Enter);
     assert_eq!(app.list.selected(), Some(2));
 
@@ -6905,7 +6934,7 @@ fn the_section_picker_remembers_where_it_opened_only_when_accepted() {
     app.list.select(Some(2));
 
     press(&mut app, &fixture, KeyCode::Char('`'));
-    app.paste("wo");
+    app.handle_paste("wo");
     press(&mut app, &fixture, KeyCode::Esc);
     apostrophe(&mut app, &fixture);
     assert_eq!(notice(&app), Some("No previous position"));
@@ -6914,7 +6943,7 @@ fn the_section_picker_remembers_where_it_opened_only_when_accepted() {
     press(&mut app, &fixture, KeyCode::Char('`'));
     press(&mut app, &fixture, KeyCode::Tab);
     press(&mut app, &fixture, KeyCode::Tab);
-    app.paste("wo");
+    app.handle_paste("wo");
     press(&mut app, &fixture, KeyCode::Enter);
     assert_eq!(app.view, named("work"));
 
@@ -6935,7 +6964,7 @@ fn clicking_a_tab_is_remembered() {
         row: 0,
         modifiers: KeyModifiers::NONE,
     };
-    app.mouse(click, Rect::new(0, 1, 20, 5), &fixture.storage)
+    app.handle_mouse(click, Rect::new(0, 1, 20, 5), &fixture.storage)
         .unwrap();
     assert_eq!(app.view, named("work"));
 
@@ -6996,7 +7025,7 @@ fn changes_and_undo_that_move_to_another_tab_are_remembered() {
         &fixture,
         KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
     );
-    app.paste("Work: plain");
+    app.handle_paste("Work: plain");
     press(&mut app, &fixture, KeyCode::Enter);
     assert_eq!(app.view, named("work"));
 

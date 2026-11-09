@@ -144,7 +144,7 @@ fn moving_a_section_on_a_narrow_terminal_keeps_its_tab_visible() {
     render(&mut terminal, &mut app);
 
     for _ in 0..7 {
-        app.key(KeyEvent::from(KeyCode::Char('L')), &fixture.storage)
+        app.handle_key(KeyEvent::from(KeyCode::Char('L')), &fixture.storage)
             .unwrap();
         render(&mut terminal, &mut app);
 
@@ -154,7 +154,7 @@ fn moving_a_section_on_a_narrow_terminal_keeps_its_tab_visible() {
     assert_eq!(app.section_order.last().map(String::as_str), Some("s0"));
 
     for _ in 0..7 {
-        app.key(KeyEvent::from(KeyCode::Char('H')), &fixture.storage)
+        app.handle_key(KeyEvent::from(KeyCode::Char('H')), &fixture.storage)
             .unwrap();
         render(&mut terminal, &mut app);
 
@@ -200,7 +200,7 @@ fn overflowing_tabs_scroll_only_to_keep_the_active_tab_visible() {
     let initial = row_text(&wide, 0);
 
     let tab = |app: &mut App, code| {
-        app.key(
+        app.handle_key(
             ratatui::crossterm::event::KeyEvent::new(
                 code,
                 ratatui::crossterm::event::KeyModifiers::NONE,
@@ -262,7 +262,7 @@ fn the_clear_confirmation_names_the_current_tab_and_the_carryover_exception() {
     ] {
         app.mode = Mode::Normal;
         app.select_tab(view);
-        app.key(
+        app.handle_key(
             ratatui::crossterm::event::KeyEvent::new(
                 ratatui::crossterm::event::KeyCode::Char('D'),
                 ratatui::crossterm::event::KeyModifiers::NONE,
@@ -306,7 +306,7 @@ fn a_suggested_section_is_drawn_dim_after_the_cursor() {
     let fixture = crate::storage::tests::Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b"]);
     app.select_tab(crate::model::SectionView::Named("work".into()));
-    app.key(
+    app.handle_key(
         ratatui::crossterm::event::KeyEvent::new(
             ratatui::crossterm::event::KeyCode::Char('a'),
             ratatui::crossterm::event::KeyModifiers::NONE,
@@ -398,7 +398,7 @@ fn press_keys(app: &mut App, fixture: &crate::storage::tests::Fixture, keys: &st
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
     for character in keys.chars() {
-        app.key(KeyEvent::from(KeyCode::Char(character)), &fixture.storage)
+        app.handle_key(KeyEvent::from(KeyCode::Char(character)), &fixture.storage)
             .unwrap();
     }
 }
@@ -528,7 +528,7 @@ fn overflowing_picker_matches_keep_the_focused_one_visible_without_moving_tab_sc
     let top = row_text(&terminal, 0);
     assert!(top.contains(" Alpha ") && !top.contains("Foxtrot"), "{top}");
 
-    app.key(KeyEvent::from(KeyCode::BackTab), &fixture.storage)
+    app.handle_key(KeyEvent::from(KeyCode::BackTab), &fixture.storage)
         .unwrap();
     render(&mut terminal, &mut app);
 
@@ -536,7 +536,7 @@ fn overflowing_picker_matches_keep_the_focused_one_visible_without_moving_tab_sc
     assert!(top.contains(" Foxtrot ") && top.contains('‹'), "{top}");
     assert_eq!(app.viewport.tab_scroll, 0);
 
-    app.key(KeyEvent::from(KeyCode::Tab), &fixture.storage)
+    app.handle_key(KeyEvent::from(KeyCode::Tab), &fixture.storage)
         .unwrap();
     render(&mut terminal, &mut app);
 
@@ -607,15 +607,15 @@ fn tiny_terminals_and_resizing_are_safe_while_picking_a_section() {
     // An empty query focuses each tab in turn, including the shortened long one; a long
     // Unicode query matches nothing and has to clip inside the input.
     for query in ["", "日本語 🪷 long query 日本語"] {
-        app.key(clear_query, &fixture.storage).unwrap();
-        app.paste(query);
+        app.handle_key(clear_query, &fixture.storage).unwrap();
+        app.handle_paste(query);
 
         for width in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 40] {
             for height in [0, 1, 2, 3, 6, 12] {
                 terminal.backend_mut().resize(width, height);
 
                 for _ in 0..3 {
-                    app.key(KeyEvent::from(KeyCode::Tab), &fixture.storage)
+                    app.handle_key(KeyEvent::from(KeyCode::Tab), &fixture.storage)
                         .unwrap();
 
                     let rows = render(&mut terminal, &mut app);
@@ -631,7 +631,7 @@ fn tiny_terminals_and_resizing_are_safe_while_picking_a_section() {
         }
     }
 
-    assert!(matches!(app.mode, Mode::FuzzySection { .. }));
+    assert!(matches!(app.mode, Mode::PickingSectionTab { .. }));
 }
 
 fn thumb_rows(terminal: &Terminal<TestBackend>, x: u16) -> Vec<u16> {
@@ -676,7 +676,7 @@ fn scrollbar_appears_on_the_right_border_only_when_tasks_overflow() {
     assert!(row_text(&terminal, first).contains("task 0"));
 
     let key = |app: &mut App, code| {
-        app.key(
+        app.handle_key(
             ratatui::crossterm::event::KeyEvent::new(
                 code,
                 ratatui::crossterm::event::KeyModifiers::NONE,
@@ -730,7 +730,7 @@ fn clicking_a_tab_shows_that_section() {
     let (area, view) = app.viewport.tab_targets[1].clone();
     assert_eq!(view, crate::model::SectionView::Named("home".into()));
 
-    app.mouse(
+    app.handle_mouse(
         ratatui::crossterm::event::MouseEvent {
             kind: ratatui::crossterm::event::MouseEventKind::Down(
                 ratatui::crossterm::event::MouseButton::Left,
@@ -1036,7 +1036,7 @@ fn copy_feedback_uses_the_border_without_changing_the_viewport() {
             app.border_style = border_style;
             let mut terminal = test_terminal(width, 12);
             let before = render(&mut terminal, &mut app);
-            app.copy_markdown(&mut Vec::new());
+            app.request_clipboard_copy(&mut Vec::new());
 
             for notice in [
                 "Copy sent to terminal",
@@ -1126,15 +1126,15 @@ fn search_enter_selects_the_focused_match_but_keeps_search_open_without_one() {
         assert_eq!(app.viewport.scroll, 0);
 
         for accept in [false, true] {
-            app.key(
+            app.handle_key(
                 KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
                 &fixture.storage,
             )
             .unwrap();
-            app.paste(query);
+            app.handle_paste(query);
             render(&mut terminal, &mut app);
             let selected = app.list.selected();
-            app.key(
+            app.handle_key(
                 KeyEvent::new(
                     if accept { KeyCode::Enter } else { KeyCode::Esc },
                     KeyModifiers::NONE,
@@ -1152,7 +1152,7 @@ fn search_enter_selects_the_focused_match_but_keeps_search_open_without_one() {
                 assert_eq!(app.mode, Mode::Normal);
                 assert_eq!(app.list.selected(), selected);
 
-                app.key(
+                app.handle_key(
                     KeyEvent::new_with_kind(
                         KeyCode::Enter,
                         KeyModifiers::NONE,
@@ -1305,12 +1305,12 @@ fn carryover_checkboxes_preserve_layout_and_search_markers() {
         assert_eq!(buffer[(x, 2)].symbol(), " ");
     }
 
-    app.key(
+    app.handle_key(
         KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
         &fixture.storage,
     )
     .unwrap();
-    app.paste("carry");
+    app.handle_paste("carry");
     render(&mut terminal, &mut app);
 
     assert_eq!(app.viewport.task_index_by_row, mapping);
@@ -1322,7 +1322,7 @@ fn carryover_checkboxes_preserve_layout_and_search_markers() {
     assert_eq!(found.symbol(), "■");
     assert_eq!(found.fg, app.appearance.styles().accent.fg.unwrap());
 
-    app.key(
+    app.handle_key(
         KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
         &fixture.storage,
     )
@@ -1420,12 +1420,12 @@ fn inline_add_preview_matches_saved_position_without_changing_tasks() {
                 fixture.storage.save(&app.tasks).unwrap();
                 let original = app.tasks.clone();
                 let bytes = std::fs::read(fixture.task_path()).unwrap();
-                app.key(
+                app.handle_key(
                     KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
                     &fixture.storage,
                 )
                 .unwrap();
-                app.paste("New task");
+                app.handle_paste("New task");
                 let index = app.insertion_index(placement);
                 let mut terminal = test_terminal(40, 10);
                 let rows = render(&mut terminal, &mut app);
@@ -1466,7 +1466,7 @@ fn inline_add_preview_matches_saved_position_without_changing_tasks() {
                     (rows.x + 16, y).into()
                 );
 
-                app.key(
+                app.handle_key(
                     KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
                     &fixture.storage,
                 )
@@ -1478,7 +1478,7 @@ fn inline_add_preview_matches_saved_position_without_changing_tasks() {
                 assert_eq!(fixture.storage.load().unwrap(), app.tasks);
 
                 let added = app.tasks.clone();
-                app.key(
+                app.handle_key(
                     KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
                     &fixture.storage,
                 )
@@ -1487,7 +1487,7 @@ fn inline_add_preview_matches_saved_position_without_changing_tasks() {
                 assert_eq!(app.tasks, original);
                 assert_eq!(app.list.selected(), selected);
 
-                app.key(
+                app.handle_key(
                     KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
                     &fixture.storage,
                 )
@@ -1538,7 +1538,7 @@ fn inline_edit_replaces_wrapped_rows_and_cancel_or_confirm_restores_layout() {
                 > usize::from(rows.height)
         );
 
-        app.key(
+        app.handle_key(
             KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
             &fixture.storage,
         )
@@ -1560,12 +1560,12 @@ fn inline_edit_replaces_wrapped_rows_and_cancel_or_confirm_restores_layout() {
         assert_eq!(screen(&terminal).matches('›').count(), 1);
         assert_eq!(terminal.backend().cursor_position().y, rows.y + 1);
 
-        app.key(
+        app.handle_key(
             KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
             &fixture.storage,
         )
         .unwrap();
-        app.paste("New\n");
+        app.handle_paste("New\n");
         render(&mut terminal, &mut app);
 
         assert!(screen(&terminal).contains("edit › New original"));
@@ -1573,7 +1573,7 @@ fn inline_edit_replaces_wrapped_rows_and_cancel_or_confirm_restores_layout() {
         assert_eq!(std::fs::read(fixture.task_path()).unwrap(), bytes);
         assert!(!app.can_undo());
 
-        app.key(KeyEvent::new(ending, KeyModifiers::NONE), &fixture.storage)
+        app.handle_key(KeyEvent::new(ending, KeyModifiers::NONE), &fixture.storage)
             .unwrap();
         rows = render(&mut terminal, &mut app);
 
@@ -1593,7 +1593,7 @@ fn inline_edit_replaces_wrapped_rows_and_cancel_or_confirm_restores_layout() {
             assert_eq!(app.tasks[1].status, TaskStatus::Completed);
 
             let edited = app.tasks.clone();
-            app.key(
+            app.handle_key(
                 KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
                 &fixture.storage,
             )
@@ -1601,7 +1601,7 @@ fn inline_edit_replaces_wrapped_rows_and_cancel_or_confirm_restores_layout() {
 
             assert_eq!(app.tasks, original);
 
-            app.key(
+            app.handle_key(
                 KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
                 &fixture.storage,
             )
@@ -1633,14 +1633,14 @@ fn inline_inputs_follow_scrolling_and_resize_without_out_of_bounds_cursors() {
         );
         app.list.select(Some(18));
         let original = app.tasks.clone();
-        app.key(
+        app.handle_key(
             KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
             &fixture.storage,
         )
         .unwrap();
 
         if key != 'e' {
-            app.paste("new e\u{301}界👩‍💻 text");
+            app.handle_paste("new e\u{301}界👩‍💻 text");
         }
 
         let mut terminal = test_terminal(40, 12);
@@ -1653,7 +1653,7 @@ fn inline_inputs_follow_scrolling_and_resize_without_out_of_bounds_cursors() {
                     terminal.backend_mut().resize(width, height);
 
                     for movement in [KeyCode::Home, KeyCode::Right, KeyCode::End, KeyCode::Left] {
-                        app.key(
+                        app.handle_key(
                             KeyEvent::new(movement, KeyModifiers::NONE),
                             &fixture.storage,
                         )
@@ -1688,7 +1688,7 @@ fn inline_inputs_follow_scrolling_and_resize_without_out_of_bounds_cursors() {
                                 MouseEventKind::Down(MouseButton::Left),
                                 MouseEventKind::ScrollDown,
                             ] {
-                                app.mouse(
+                                app.handle_mouse(
                                     MouseEvent {
                                         kind,
                                         column: cursor.x,
@@ -1706,7 +1706,7 @@ fn inline_inputs_follow_scrolling_and_resize_without_out_of_bounds_cursors() {
             }
         }
 
-        app.key(
+        app.handle_key(
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
             &fixture.storage,
         )
@@ -1739,12 +1739,12 @@ fn search_keeps_its_bottom_prompt_and_cursor_while_tab_cycles_matches() {
             ..Task::new("another needle")
         },
     ]);
-    app.key(
+    app.handle_key(
         KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
         &fixture.storage,
     )
     .unwrap();
-    app.paste("needle");
+    app.handle_paste("needle");
     let mut terminal = test_terminal(40, 12);
 
     for _ in 0..2 {
@@ -1762,14 +1762,14 @@ fn search_keeps_its_bottom_prompt_and_cursor_while_tab_cycles_matches() {
         assert!(terminal.backend().cursor_visible());
         assert_eq!(terminal.backend().cursor_position().y, 11);
 
-        app.key(
+        app.handle_key(
             KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
             &fixture.storage,
         )
         .unwrap();
     }
 
-    app.key(
+    app.handle_key(
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         &fixture.storage,
     )
@@ -1843,11 +1843,11 @@ fn search_markers_highlights_and_exit_preserve_text_and_alignment() {
     app.appearance.styles_mut().accent.fg = Some(Color::Rgb(20, 40, 60));
     let mut terminal = test_terminal(40, 10);
     let key = |app: &mut App, code| {
-        app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
+        app.handle_key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
             .unwrap()
     };
     key(&mut app, KeyCode::Char('/'));
-    app.paste("i\u{307}foo");
+    app.handle_paste("i\u{307}foo");
     render(&mut terminal, &mut app);
     let buffer = terminal.backend().buffer();
 
@@ -1974,12 +1974,12 @@ fn search_spanning_wrapped_rows_preserves_mapping_and_reveals_results_after_resi
     let mut terminal = test_terminal(14, 9);
     render(&mut terminal, &mut app);
     let mapping = app.viewport.task_index_by_row.clone();
-    app.key(
+    app.handle_key(
         KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
         &fixture.storage,
     )
     .unwrap();
-    app.paste("tag: abcd");
+    app.handle_paste("tag: abcd");
     render(&mut terminal, &mut app);
 
     assert_eq!(app.viewport.task_index_by_row, mapping);
@@ -2000,7 +2000,7 @@ fn search_spanning_wrapped_rows_preserves_mapping_and_reveals_results_after_resi
         );
     }
 
-    app.key(
+    app.handle_key(
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         &fixture.storage,
     )
@@ -2017,7 +2017,7 @@ fn search_spanning_wrapped_rows_preserves_mapping_and_reveals_results_after_resi
         app.wrap = wrap;
         terminal.backend_mut().resize(width, height);
         render(&mut terminal, &mut app);
-        app.key(
+        app.handle_key(
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
             &fixture.storage,
         )
@@ -2034,7 +2034,7 @@ fn search_spanning_wrapped_rows_preserves_mapping_and_reveals_results_after_resi
         }
     }
 
-    app.key(
+    app.handle_key(
         KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
         &fixture.storage,
     )
@@ -2083,7 +2083,7 @@ fn redo_restores_a_wrapped_selection_into_view() {
         },
     ]);
     let key = |app: &mut App, code, modifiers| {
-        app.key(KeyEvent::new(code, modifiers), &fixture.storage)
+        app.handle_key(KeyEvent::new(code, modifiers), &fixture.storage)
             .unwrap()
     };
 
@@ -2145,7 +2145,7 @@ fn inline_inputs_keep_the_viewport_height_selection_and_mouse_mapping() {
         if app.mode == Mode::Normal {
             let index = app.viewport.task_index_by_row[app.viewport.scroll].unwrap();
             let before = app.tasks[index].status;
-            app.mouse(
+            app.handle_mouse(
                 MouseEvent {
                     kind: MouseEventKind::Down(MouseButton::Left),
                     column: rows.x,
@@ -2261,7 +2261,7 @@ fn page_navigation_targets_visual_rows_in_mixed_task_heights() {
         (KeyCode::PageUp, 1),
         (KeyCode::PageUp, 0),
     ] {
-        app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
+        app.handle_key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
             .unwrap();
         assert_eq!(app.list.selected(), Some(selected));
 
@@ -2312,7 +2312,7 @@ fn half_page_navigation_targets_visual_rows_in_mixed_task_heights() {
         ('u', 0),
     ] {
         let key = KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL);
-        app.key(key, &fixture.storage).unwrap();
+        app.handle_key(key, &fixture.storage).unwrap();
         assert_eq!(app.list.selected(), Some(selected), "Ctrl+{character}");
 
         rows = render(&mut terminal, &mut app);
@@ -2344,7 +2344,7 @@ fn page_navigation_uses_current_viewport_wrapping_and_resize() {
     let original = app.tasks.clone();
 
     let mut press = |app: &mut App, code, kind| {
-        app.key(
+        app.handle_key(
             KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind),
             &fixture.storage,
         )
@@ -2388,7 +2388,7 @@ fn page_navigation_uses_current_viewport_wrapping_and_resize() {
     render(&mut terminal, &mut app);
     let page = KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE);
     let up = KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE);
-    app.key(page, &fixture.storage).unwrap();
+    app.handle_key(page, &fixture.storage).unwrap();
 
     assert_eq!(app.list.selected(), Some(1));
 
@@ -2397,21 +2397,21 @@ fn page_navigation_uses_current_viewport_wrapping_and_resize() {
     app.viewport.scroll += 5;
     app.viewport.reveal_selection = false;
     render(&mut terminal, &mut app);
-    app.key(page, &fixture.storage).unwrap();
+    app.handle_key(page, &fixture.storage).unwrap();
 
     assert_eq!(app.list.selected(), Some(2));
 
     render(&mut terminal, &mut app);
-    app.key(up, &fixture.storage).unwrap();
+    app.handle_key(up, &fixture.storage).unwrap();
     assert_eq!(app.list.selected(), Some(1));
 
     render(&mut terminal, &mut app);
-    app.key(up, &fixture.storage).unwrap();
+    app.handle_key(up, &fixture.storage).unwrap();
     assert_eq!(app.list.selected(), Some(0));
 
     for (width, height, wrap) in [(18, 8, false), (40, 10, true), (30, 6, false), (1, 1, true)] {
         if app.wrap != wrap {
-            app.key(
+            app.handle_key(
                 KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
                 &fixture.storage,
             )
@@ -2423,7 +2423,7 @@ fn page_navigation_uses_current_viewport_wrapping_and_resize() {
         terminal.backend_mut().resize(width, height);
         render(&mut terminal, &mut app);
         let expected = usize::from(app.viewport.height.max(1));
-        app.key(page, &fixture.storage).unwrap();
+        app.handle_key(page, &fixture.storage).unwrap();
 
         // Only task 1 wraps: with wrapping off, or a one-cell width, each task has one row.
         assert_eq!(
@@ -2466,8 +2466,8 @@ fn long_lists_scroll_to_selection_and_wrap_back_to_start() {
 }
 
 #[test]
-fn only_leading_tags_are_bold_headings_across_wrapping_and_completion_styles() {
-    for (text, tag) in [
+fn only_leading_section_headings_are_bold_across_wrapping_and_completion_styles() {
+    for (text, heading) in [
         ("foo: first bar:", "foo:"),
         ("foo:bar", ""),
         ("https://example.com", ""),
@@ -2494,7 +2494,7 @@ fn only_leading_tags_are_bold_headings_across_wrapping_and_completion_styles() {
                 let mut bold = String::new();
 
                 // A section adds tabs and a blank row under them, so the task moves to row 2.
-                let first_row = if tag.is_empty() { 1 } else { 2 };
+                let first_row = if heading.is_empty() { 1 } else { 2 };
 
                 for y in first_row..19 {
                     for x in 7..width - 1 {
@@ -2504,14 +2504,14 @@ fn only_leading_tags_are_bold_headings_across_wrapping_and_completion_styles() {
                             continue;
                         }
 
-                        let in_tag = cell.modifier.contains(Modifier::BOLD);
+                        let in_heading = cell.modifier.contains(Modifier::BOLD);
 
-                        if in_tag {
+                        if in_heading {
                             bold.push_str(cell.symbol());
                         }
 
                         // A completed task keeps one color, its section prefix included.
-                        let expected = if in_tag && !completed {
+                        let expected = if in_heading && !completed {
                             app.appearance.styles().heading.fg.unwrap()
                         } else {
                             Color::Reset
@@ -2523,7 +2523,7 @@ fn only_leading_tags_are_bold_headings_across_wrapping_and_completion_styles() {
                     }
                 }
 
-                assert_eq!(bold, tag, "{text:?}, width={width}, wrap={wrap}");
+                assert_eq!(bold, heading, "{text:?}, width={width}, wrap={wrap}");
                 assert!(!buffer[(3, first_row)].modifier.contains(Modifier::BOLD));
                 assert_eq!(
                     buffer[(1, first_row)].fg,
@@ -2622,7 +2622,7 @@ fn disabled_wrapping_keeps_one_row_and_input_shows_its_tail() {
     let mut app = App::new(vec![Task::new("日本語".repeat(100)), Task::new("next")]);
 
     let toggle = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
-    app.key(toggle, &fixture.storage).unwrap();
+    app.handle_key(toggle, &fixture.storage).unwrap();
     assert!(!app.wrap);
 
     app.mode = Mode::Adding("a long input ending in 界z".into(), AddPlacement::End);
@@ -2633,7 +2633,7 @@ fn disabled_wrapping_keeps_one_row_and_input_shows_its_tail() {
     assert!(rendered.contains("add › z"));
 
     app.mode = Mode::Normal;
-    app.key(toggle, &fixture.storage).unwrap();
+    app.handle_key(toggle, &fixture.storage).unwrap();
     assert!(app.wrap);
 
     render(&mut terminal, &mut app);
@@ -2668,7 +2668,7 @@ fn editing_navigation_keeps_cursor_visible_through_long_unicode_input() {
                 ))
                 .chain([KeyCode::Home, KeyCode::End])
             {
-                app.key(
+                app.handle_key(
                     KeyEvent::new_with_kind(code, KeyModifiers::NONE, KeyEventKind::Repeat),
                     &fixture.storage,
                 )
@@ -2988,7 +2988,7 @@ fn wrapped_whitespace_cluster_stays_visible_and_maps_to_its_task() {
     assert_eq!(terminal.backend().buffer()[(7, 2)].symbol(), " \u{301}");
     assert_eq!(terminal.backend().buffer()[(8, 2)].symbol(), "X");
 
-    app.mouse(
+    app.handle_mouse(
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 7,
@@ -3006,7 +3006,7 @@ fn wrapped_whitespace_cluster_stays_visible_and_maps_to_its_task() {
     assert_eq!(app.tasks[0].text, "abcd \u{301}X");
 
     for (code, selected) in [(KeyCode::PageDown, 1), (KeyCode::PageUp, 0)] {
-        app.key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
+        app.handle_key(KeyEvent::new(code, KeyModifiers::NONE), &fixture.storage)
             .unwrap();
         render(&mut terminal, &mut app);
 
@@ -3045,14 +3045,14 @@ fn continuation_clicks_toggle_the_correct_task_and_leave_other_rows_alone() {
         modifiers: KeyModifiers::NONE,
     };
 
-    app.mouse(click(2), rows, &fixture.storage).unwrap();
+    app.handle_mouse(click(2), rows, &fixture.storage).unwrap();
     assert_eq!(app.tasks[0].status, TaskStatus::Completed);
     assert_ne!(app.tasks[1].status, TaskStatus::Completed);
 
-    app.mouse(click(4), rows, &fixture.storage).unwrap();
+    app.handle_mouse(click(4), rows, &fixture.storage).unwrap();
     assert_eq!(app.tasks[1].status, TaskStatus::Completed);
 
-    app.mouse(click(5), rows, &fixture.storage).unwrap();
+    app.handle_mouse(click(5), rows, &fixture.storage).unwrap();
     assert!(
         app.tasks
             .iter()
@@ -3084,7 +3084,7 @@ fn oversized_task_can_be_scrolled_read_and_navigated_after_resizing() {
     };
 
     for _ in 0..total {
-        app.mouse(wheel, rows, &fixture.storage).unwrap();
+        app.handle_mouse(wheel, rows, &fixture.storage).unwrap();
         rows = render(&mut terminal, &mut app);
     }
 
@@ -3281,7 +3281,7 @@ fn resizing_keeps_the_reference_scroll_within_the_shown_layout() {
 
     press_keys(&mut app, &fixture, "?");
     render(&mut terminal, &mut app);
-    app.key(end.into(), &fixture.storage).unwrap();
+    app.handle_key(end.into(), &fixture.storage).unwrap();
     render(&mut terminal, &mut app);
     let (scroll, max_scroll, page) = help_state(&app);
 

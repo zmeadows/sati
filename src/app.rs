@@ -68,7 +68,7 @@ pub enum Mode {
     },
     // Picking a section tab by fuzzy name, typed into the tab bar in place of [*]. The view
     // previews the focused match; `original` is where Esc returns to.
-    FuzzySection {
+    PickingSectionTab {
         input: TextInput,
         // Matching tabs, best first: [-] and named sections, never [*].
         matches: Vec<SectionView>,
@@ -95,7 +95,7 @@ impl Mode {
             | Mode::Editing { input, .. }
             | Mode::Searching { input, .. }
             | Mode::RenamingSection { input }
-            | Mode::FuzzySection { input, .. } => Some(input),
+            | Mode::PickingSectionTab { input, .. } => Some(input),
             Mode::Normal | Mode::ConfirmClearNonCarried | Mode::Help { .. } => None,
         }
     }
@@ -130,22 +130,23 @@ impl Position {
     }
 }
 
-// A pending section suggestion while adding or editing, shown as dim text after the
-// cursor. It only exists while the input is a single partial word with the cursor at its end.
-struct Completion {
+// Existing section names suggested while adding or editing, and the `current` one shown as
+// dim text after the cursor. They only exist while the input is a single partial word with the
+// cursor at its end.
+struct SectionSuggestions {
     labels: Vec<String>,
     current: usize,
 }
 
 #[cfg_attr(test, derive(Clone, Debug, PartialEq))]
-struct UndoState {
+struct HistoryEntry {
     tasks: Vec<Task>,
     section_order: Vec<String>,
     selected: Option<usize>,
     view: SectionView,
-    // The view the change from this snapshot left behind. Undo and redo return to `view`
-    // only while the user is still there, so a later manual tab switch is kept.
-    left_view: SectionView,
+    // The view the change from this snapshot arrived at. Undo and redo return to `view` only
+    // while the user is still in `resulting_view`, so a later manual tab switch is kept.
+    resulting_view: SectionView,
     // Describes the change from this snapshot to the next state, e.g. "delete task".
     label: String,
 }
@@ -222,13 +223,13 @@ pub struct App {
     // Set by `s` / Alt+S, with when it was typed: the next key picks a tab by number.
     // Transient and never saved.
     pending_section_jump: Option<Instant>,
-    completion: Option<Completion>,
+    section_suggestions: Option<SectionSuggestions>,
     task_register: Option<String>,
     // Where navigation stood before the latest jump: a tab switch, a first/last-task or search
     // jump, or a change that moved the view. Session-only: never saved, and not part of undo.
     previous_position: Option<Position>,
-    history: VecDeque<UndoState>,
-    redo_history: VecDeque<UndoState>,
+    history: VecDeque<HistoryEntry>,
+    redo_history: VecDeque<HistoryEntry>,
     persisted: Persisted,
 }
 
@@ -264,7 +265,7 @@ impl App {
             },
             pending_count: None,
             pending_section_jump: None,
-            completion: None,
+            section_suggestions: None,
             task_register: None,
             previous_position: None,
             history: VecDeque::new(),
@@ -304,7 +305,7 @@ impl App {
         // Temporary search and section-picker focus is never saved.
         let (selected, view) = match &self.mode {
             Mode::Searching { original, .. } => (*original, self.view.clone()),
-            Mode::FuzzySection { original, .. } => (original.selected, original.view.clone()),
+            Mode::PickingSectionTab { original, .. } => (original.selected, original.view.clone()),
             _ => (self.list.selected(), self.view.clone()),
         };
 
@@ -372,7 +373,7 @@ impl App {
     // `'` swaps the current position with the remembered one, so pressing it again returns.
     fn return_to_previous_position(&mut self) {
         let Some(target) = self.previous_position.clone() else {
-            self.show_status_message("No previous position");
+            self.show_routine_message("No previous position");
 
             return;
         };
@@ -385,7 +386,7 @@ impl App {
 
         if !tab_exists {
             self.previous_position = None;
-            self.show_status_message("Previous section no longer exists");
+            self.show_routine_message("Previous section no longer exists");
 
             return;
         }
@@ -428,7 +429,7 @@ impl App {
         let tabs = self.section_tabs();
 
         if tabs.is_empty() {
-            self.show_status_message("No sections yet (start a task with \"Name: \")");
+            self.show_routine_message("No sections yet (start a task with \"Name: \")");
 
             return;
         }
@@ -515,7 +516,7 @@ impl App {
     // until the query or Tab picks another tab.
     fn start_section_picker(&mut self) {
         if self.section_tabs().is_empty() {
-            self.show_status_message("No sections yet (start a task with \"Name: \")");
+            self.show_routine_message("No sections yet (start a task with \"Name: \")");
 
             return;
         }
@@ -528,7 +529,7 @@ impl App {
             reveal_selection: self.viewport.reveal_selection,
         };
 
-        self.mode = Mode::FuzzySection {
+        self.mode = Mode::PickingSectionTab {
             input: TextInput::default(),
             matches: self.matching_section_tabs(""),
             matched_query: String::new(),
@@ -540,7 +541,7 @@ impl App {
     // Cursor moves leave the query, and so the focused match, alone. With no matches, the
     // last preview stays on screen.
     fn refresh_section_picker(&mut self) {
-        let Mode::FuzzySection {
+        let Mode::PickingSectionTab {
             input,
             matched_query,
             ..
@@ -557,7 +558,7 @@ impl App {
         let found = self.matching_section_tabs(&query);
         let best = found.first().cloned();
 
-        if let Mode::FuzzySection {
+        if let Mode::PickingSectionTab {
             matches,
             matched_query,
             ..
@@ -575,7 +576,7 @@ impl App {
     // The focused match is the previewed tab. When that isn't a match (the picker opened on
     // [*]), stepping starts from the first or last match.
     fn cycle_section_match(&mut self, forward: bool) {
-        let Mode::FuzzySection { matches, .. } = &self.mode else {
+        let Mode::PickingSectionTab { matches, .. } = &self.mode else {
             return;
         };
 
@@ -600,7 +601,8 @@ impl App {
     // Accepting keeps the previewed tab, saved on a clean exit like any other navigation.
     // Cancelling restores the view, selection, and scrolling from before the picker opened.
     fn finish_section_picker(&mut self, accept: bool) {
-        let Mode::FuzzySection { original, .. } = std::mem::replace(&mut self.mode, Mode::Normal)
+        let Mode::PickingSectionTab { original, .. } =
+            std::mem::replace(&mut self.mode, Mode::Normal)
         else {
             return;
         };
@@ -667,7 +669,7 @@ impl App {
     }
 
     // The input typed so far when it can still become a section: one word, cursor at the end.
-    fn completion_partial(&self) -> Option<&str> {
+    fn section_suggestion_prefix(&self) -> Option<&str> {
         let (Mode::Adding(input, _) | Mode::Editing { input, .. }) = &self.mode else {
             return None;
         };
@@ -678,63 +680,66 @@ impl App {
         (one_word && input.cursor() == text.len()).then_some(text)
     }
 
-    fn cycle_completion(&mut self, forward: bool) {
-        if let Some(completion) = &mut self.completion {
-            let count = completion.labels.len();
+    fn cycle_section_suggestion(&mut self, forward: bool) {
+        if let Some(suggestions) = &mut self.section_suggestions {
+            let count = suggestions.labels.len();
 
-            completion.current = if forward {
-                (completion.current + 1) % count
+            suggestions.current = if forward {
+                (suggestions.current + 1) % count
             } else {
-                (completion.current + count - 1) % count
+                (suggestions.current + count - 1) % count
             };
 
             return;
         }
 
-        let Some(partial) = self.completion_partial() else {
+        let Some(prefix) = self.section_suggestion_prefix() else {
             return;
         };
 
-        let partial = partial.to_lowercase();
+        let prefix = prefix.to_lowercase();
         let all = self.section_labels();
 
         let labels: Vec<String> = all
             .iter()
-            .filter(|label| label.to_lowercase().starts_with(&partial))
+            .filter(|label| label.to_lowercase().starts_with(&prefix))
             .cloned()
             .collect();
 
         if labels.is_empty() {
             if all.is_empty() {
-                self.show_status_message("No sections yet (start a task with \"Name: \")");
+                self.show_routine_message("No sections yet (start a task with \"Name: \")");
             } else {
-                self.show_status_message("No matching sections");
+                self.show_routine_message("No matching sections");
             }
 
             return;
         }
 
         let current = if forward { 0 } else { labels.len() - 1 };
-        self.completion = Some(Completion { labels, current });
+        self.section_suggestions = Some(SectionSuggestions { labels, current });
     }
 
     // Replace the partial word with the chosen section, ready for the task text.
-    fn accept_completion(&mut self) {
-        let Some(completion) = self.completion.take() else {
+    fn accept_section_suggestion(&mut self) {
+        let Some(suggestions) = self.section_suggestions.take() else {
             return;
         };
 
         if let Mode::Adding(input, _) | Mode::Editing { input, .. } = &mut self.mode {
-            let label = &completion.labels[completion.current];
+            let label = &suggestions.labels[suggestions.current];
             *input = format!("{label}: ").into();
         }
     }
 
     // The dim text drawn after the cursor: the rest of the suggested "Section: ".
-    pub fn completion_ghost(&self) -> Option<String> {
-        let completion = self.completion.as_ref()?;
-        let label = &completion.labels[completion.current];
-        let typed = self.completion_partial().unwrap_or("").to_lowercase();
+    pub fn section_suggestion_suffix(&self) -> Option<String> {
+        let suggestions = self.section_suggestions.as_ref()?;
+        let label = &suggestions.labels[suggestions.current];
+        let typed = self
+            .section_suggestion_prefix()
+            .unwrap_or("")
+            .to_lowercase();
 
         let start = label
             .char_indices()
@@ -921,12 +926,12 @@ impl App {
             self.history.pop_front();
         }
 
-        self.history.push_back(UndoState {
+        self.history.push_back(HistoryEntry {
             tasks: previous_tasks,
             section_order: previous_order,
             selected: previous_selected,
             view: previous_view,
-            left_view: self.view.clone(),
+            resulting_view: self.view.clone(),
             label: label.into(),
         });
         self.redo_history.clear();
@@ -1052,8 +1057,8 @@ impl App {
             &mut self.history
         };
 
-        let Some(previous) = source.back() else {
-            self.show_status_message(if redo {
+        let Some(entry) = source.back() else {
+            self.show_routine_message(if redo {
                 "Nothing to redo"
             } else {
                 "Nothing to undo"
@@ -1062,30 +1067,23 @@ impl App {
             return Ok(());
         };
 
-        let selected = previous
-            .selected
-            .filter(|&index| index < previous.tasks.len());
+        let selected = entry.selected.filter(|&index| index < entry.tasks.len());
 
         // Return to the snapshot's tab and selection only if the user hasn't switched tabs
         // since the change. Otherwise keep their tab ([*] if it no longer exists) and move
         // the selection into it, so a task from another tab cannot pull the view away.
-        let (view, selected) = if self.view == previous.left_view {
-            let view = reconcile_active_view(
-                &previous.tasks,
-                &previous.section_order,
-                &previous.view,
-                selected,
-            );
+        let (view, selected) = if self.view == entry.resulting_view {
+            let view =
+                reconcile_active_view(&entry.tasks, &entry.section_order, &entry.view, selected);
 
             (view, selected)
         } else {
-            let view =
-                reconcile_active_view(&previous.tasks, &previous.section_order, &self.view, None);
+            let view = reconcile_active_view(&entry.tasks, &entry.section_order, &self.view, None);
 
             let selected = selected
-                .filter(|&index| view_includes_task(&view, &previous.tasks[index]))
+                .filter(|&index| view_includes_task(&view, &entry.tasks[index]))
                 .or_else(|| {
-                    previous
+                    entry
                         .tasks
                         .iter()
                         .position(|task| view_includes_task(&view, task))
@@ -1094,20 +1092,15 @@ impl App {
             (view, selected)
         };
 
-        self.persisted.save(
-            storage,
-            &previous.tasks,
-            &previous.section_order,
-            selected,
-            &view,
-        )?;
-        let previous = source.pop_back().unwrap();
+        self.persisted
+            .save(storage, &entry.tasks, &entry.section_order, selected, &view)?;
+        let entry = source.pop_back().unwrap();
 
         let verb = if redo { "Redid" } else { "Undid" };
-        let message = format!("{verb}: {}", previous.label);
+        let message = format!("{verb}: {}", entry.label);
 
-        let current_tasks = std::mem::replace(&mut self.tasks, previous.tasks);
-        let current_order = std::mem::replace(&mut self.section_order, previous.section_order);
+        let current_tasks = std::mem::replace(&mut self.tasks, entry.tasks);
+        let current_order = std::mem::replace(&mut self.section_order, entry.section_order);
         let current_selected = self.list.selected();
         let current_view = std::mem::replace(&mut self.view, view);
         self.list.select(selected);
@@ -1127,20 +1120,20 @@ impl App {
         };
 
         // The label describes the same change in either direction, so it moves with it.
-        destination.push_back(UndoState {
+        destination.push_back(HistoryEntry {
             tasks: current_tasks,
             section_order: current_order,
             selected: current_selected,
             view: current_view,
-            left_view: self.view.clone(),
-            label: previous.label,
+            resulting_view: self.view.clone(),
+            label: entry.label,
         });
-        self.show_status_message(message);
+        self.show_routine_message(message);
 
         Ok(())
     }
 
-    fn toggle(&mut self, index: usize, storage: &Storage) -> Result<()> {
+    fn toggle_completion(&mut self, index: usize, storage: &Storage) -> Result<()> {
         let (status, label) = match self.tasks[index].status {
             TaskStatus::Pending | TaskStatus::Carried => (TaskStatus::Completed, "complete task"),
             TaskStatus::Completed => (TaskStatus::Pending, "uncomplete task"),
@@ -1165,7 +1158,7 @@ impl App {
             TaskStatus::Pending => (TaskStatus::Carried, "mark carryover"),
             TaskStatus::Carried => (TaskStatus::Pending, "unmark carryover"),
             TaskStatus::Completed => {
-                self.show_status_message("Completed tasks can't be carried");
+                self.show_routine_message("Completed tasks can't be carried");
 
                 return Ok(());
             }
@@ -1226,15 +1219,15 @@ impl App {
         self.commit_checklist_change(tasks, section_order, view, selected, label, storage)?;
 
         if kept == 0 {
-            self.show_status_message(format!("Cleared {cleared}"));
+            self.show_routine_message(format!("Cleared {cleared}"));
         } else {
-            self.show_status_message(format!("Cleared {cleared}, kept {kept} carried"));
+            self.show_routine_message(format!("Cleared {cleared}, kept {kept} carried"));
         }
 
         Ok(())
     }
 
-    fn move_selected(&mut self, down: bool, count: usize, storage: &Storage) -> Result<()> {
+    fn move_selected_task(&mut self, down: bool, count: usize, storage: &Storage) -> Result<()> {
         let Some(index) = self.list.selected() else {
             return Ok(());
         };
@@ -1278,7 +1271,7 @@ impl App {
 
         if removed == 0 {
             let section = self.scope_label().map(|label| format!("{label} "));
-            self.show_status_message(format!("No completed {}tasks", section.unwrap_or_default()));
+            self.show_routine_message(format!("No completed {}tasks", section.unwrap_or_default()));
 
             return Ok(());
         }
@@ -1317,7 +1310,7 @@ impl App {
         let section_order = self.section_order.clone();
         let label = format!("clear {cleared}");
         self.commit_checklist_change(tasks, section_order, view, selected, label, storage)?;
-        self.show_status_message(format!("Cleared {cleared}"));
+        self.show_routine_message(format!("Cleared {cleared}"));
 
         Ok(())
     }
@@ -1348,13 +1341,13 @@ impl App {
 
     fn start_rename_section(&mut self) {
         if self.section_tabs().is_empty() {
-            self.show_status_message("No sections yet (start a task with \"Name: \")");
+            self.show_routine_message("No sections yet (start a task with \"Name: \")");
 
             return;
         }
 
         let (SectionView::Named(_), Some(label)) = (&self.view, self.scope_label()) else {
-            self.show_status_message("Switch to a section tab to rename it");
+            self.show_routine_message("Switch to a section tab to rename it");
 
             return;
         };
@@ -1394,7 +1387,7 @@ impl App {
     // why Enter does nothing.
     fn explain_rename_problem(&mut self) {
         if let Some(problem) = self.rename_problem() {
-            self.show_important_status_message(problem);
+            self.show_important_message(problem);
         }
     }
 
@@ -1439,7 +1432,7 @@ impl App {
             storage,
         )?;
 
-        self.show_status_message(format!(
+        self.show_routine_message(format!(
             "Renamed {old_label} to {name} ({renamed} {})",
             task_noun(renamed)
         ));
@@ -1450,13 +1443,13 @@ impl App {
     fn cycle_theme(&mut self, forward: bool) {
         let theme = self.appearance.theme().cycle(forward);
         self.appearance.set_theme(theme);
-        self.show_status_message(format!("Theme: {}", theme.id()));
+        self.show_routine_message(format!("Theme: {}", theme.id()));
     }
 
     fn yank_task(&mut self) {
         if let Some(task) = self.list.selected().and_then(|index| self.tasks.get(index)) {
             self.task_register = Some(task.full_text());
-            self.show_status_message("Copied task");
+            self.show_routine_message("Copied task");
         }
     }
 
@@ -1491,7 +1484,7 @@ impl App {
 
     fn paste_task(&mut self, placement: AddPlacement, storage: &Storage) -> Result<()> {
         let Some(text) = self.task_register.clone() else {
-            self.show_status_message("Nothing to paste");
+            self.show_routine_message("Nothing to paste");
 
             return Ok(());
         };
@@ -1499,7 +1492,7 @@ impl App {
         self.insert_task(text, placement, "paste task", storage)
     }
 
-    pub fn copy_markdown(&mut self, output: &mut impl std::io::Write) {
+    pub fn request_clipboard_copy(&mut self, output: &mut impl std::io::Write) {
         // Inside a tab, copy only what that tab shows.
         let visible: Vec<Task> = self
             .active_view_task_indices()
@@ -1507,26 +1500,26 @@ impl App {
             .map(|index| self.tasks[index].clone())
             .collect();
 
-        match crate::export::copy(&visible, output) {
-            Ok(()) => self.show_status_message("Copy sent to terminal"),
+        match crate::export::write_osc52_clipboard_request(&visible, output) {
+            Ok(()) => self.show_routine_message("Copy sent to terminal"),
             // Failures are always reported, even when confirmations are disabled.
-            Err(error) => self.show_important_status_message(format!("Copy failed: {error}")),
+            Err(error) => self.show_important_message(format!("Copy failed: {error}")),
         }
     }
 
-    fn show_status_message(&mut self, message: impl Into<String>) {
+    fn show_routine_message(&mut self, message: impl Into<String>) {
         if self.status_messages {
-            self.show_important_status_message(message);
+            self.show_important_message(message);
         }
     }
 
     // Errors and validation feedback ignore `status_messages`, but share the configured
     // lifetime with routine messages.
-    fn show_important_status_message(&mut self, message: impl Into<String>) {
+    fn show_important_message(&mut self, message: impl Into<String>) {
         self.status_message = Some(StatusMessage::new(message, self.status_message_duration));
     }
 
-    pub fn key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
+    pub fn handle_key(&mut self, key: KeyEvent, storage: &Storage) -> Result<bool> {
         let key = self.normalize_key(key);
 
         // With every key reported as an escape code, the terminal also sends Shift, Ctrl, Alt,
@@ -1582,7 +1575,7 @@ impl App {
                 | Mode::Editing { .. }
                 | Mode::Searching { .. }
                 | Mode::RenamingSection { .. }
-                | Mode::FuzzySection { .. } => {
+                | Mode::PickingSectionTab { .. } => {
                     self.handle_text_input_key(key, storage)?;
                     false
                 }
@@ -1700,7 +1693,7 @@ impl App {
             Mode::Adding(_, _)
             | Mode::Editing { .. }
             | Mode::Searching { .. }
-            | Mode::FuzzySection { .. }
+            | Mode::PickingSectionTab { .. }
                 if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) =>
             {
                 true
@@ -1709,7 +1702,7 @@ impl App {
             | Mode::Editing { .. }
             | Mode::Searching { .. }
             | Mode::RenamingSection { .. }
-            | Mode::FuzzySection { .. } => {
+            | Mode::PickingSectionTab { .. } => {
                 matches!(
                     key.code,
                     KeyCode::Char(_)
@@ -1826,7 +1819,7 @@ impl App {
 
         // Every shortcut above edits the input or moves its cursor, so a pending suggestion
         // no longer fits and is dropped.
-        self.completion = None;
+        self.section_suggestions = None;
 
         Ok(true)
     }
@@ -1857,7 +1850,7 @@ impl App {
             }
         }
 
-        if let Mode::FuzzySection { matches, .. } = &self.mode {
+        if let Mode::PickingSectionTab { matches, .. } = &self.mode {
             // Other keys edit the query below, like any other input.
             match key.code {
                 KeyCode::Tab | KeyCode::BackTab => {
@@ -1884,18 +1877,20 @@ impl App {
         if matches!(self.mode, Mode::Adding(..) | Mode::Editing { .. }) {
             match key.code {
                 KeyCode::Tab | KeyCode::BackTab => {
-                    self.cycle_completion(key.code == KeyCode::Tab);
+                    self.cycle_section_suggestion(key.code == KeyCode::Tab);
                     return Ok(());
                 }
-                _ if self.completion.is_none() => {}
+                _ if self.section_suggestions.is_none() => {}
                 KeyCode::Char(' ') | KeyCode::Enter => {
-                    self.accept_completion();
+                    self.accept_section_suggestion();
                     return Ok(());
                 }
                 // Typing continues after the suggested section.
-                KeyCode::Char(character) if !character.is_control() => self.accept_completion(),
+                KeyCode::Char(character) if !character.is_control() => {
+                    self.accept_section_suggestion()
+                }
                 KeyCode::Backspace => {
-                    self.completion = None;
+                    self.section_suggestions = None;
                     return Ok(());
                 }
                 // These move the cursor off the end of the word or change the text after it.
@@ -1906,7 +1901,7 @@ impl App {
                 | KeyCode::Right
                 | KeyCode::Home
                 | KeyCode::End
-                | KeyCode::Esc => self.completion = None,
+                | KeyCode::Esc => self.section_suggestions = None,
                 // Keys that do nothing while typing, such as Up or F1, keep the suggestion.
                 _ => {}
             }
@@ -1974,7 +1969,7 @@ impl App {
                 self.rename_section(&name, storage)?;
             }
             Mode::Searching { .. }
-            | Mode::FuzzySection { .. }
+            | Mode::PickingSectionTab { .. }
             | Mode::Normal
             | Mode::ConfirmClearNonCarried
             | Mode::Help { .. } => return Ok(()),
@@ -2084,13 +2079,13 @@ impl App {
                     storage,
                 )?;
             }
-            KeyCode::Char('c') => self.copy_markdown(&mut std::io::stdout().lock()),
+            KeyCode::Char('c') => self.request_clipboard_copy(&mut std::io::stdout().lock()),
             KeyCode::Char('q') => return Ok(true),
             KeyCode::Char('u') => self.undo(storage)?,
             KeyCode::Char('w') => {
                 self.wrap = !self.wrap;
                 self.viewport.reveal_selection = true;
-                self.show_status_message(if self.wrap { "Wrap on" } else { "Wrap off" });
+                self.show_routine_message(if self.wrap { "Wrap on" } else { "Wrap off" });
             }
             KeyCode::Char('m') => self.toggle_carryover(storage)?,
             // Clearing several tasks takes Shift, so a stray `x` does nothing.
@@ -2098,13 +2093,13 @@ impl App {
             KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.clear_completed(storage)?;
             }
-            KeyCode::Char('J') => self.move_selected(true, count.unwrap_or(1), storage)?,
-            KeyCode::Char('K') => self.move_selected(false, count.unwrap_or(1), storage)?,
+            KeyCode::Char('J') => self.move_selected_task(true, count.unwrap_or(1), storage)?,
+            KeyCode::Char('K') => self.move_selected_task(false, count.unwrap_or(1), storage)?,
             KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.move_selected(true, count.unwrap_or(1), storage)?;
+                self.move_selected_task(true, count.unwrap_or(1), storage)?;
             }
             KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.move_selected(false, count.unwrap_or(1), storage)?;
+                self.move_selected_task(false, count.unwrap_or(1), storage)?;
             }
             KeyCode::Char('j') | KeyCode::Down => self.move_task_selection(true, count),
             KeyCode::Char('k') | KeyCode::Up => self.move_task_selection(false, count),
@@ -2144,7 +2139,7 @@ impl App {
             }
             KeyCode::Char(' ') | KeyCode::Enter => {
                 if let Some(index) = self.list.selected() {
-                    self.toggle(index, storage)?;
+                    self.toggle_completion(index, storage)?;
                 }
             }
             KeyCode::Char('a' | 'o' | 'O') => {
@@ -2164,7 +2159,8 @@ impl App {
                     let labels = self.section_labels();
                     let current = labels.iter().position(|label| *label == current);
 
-                    self.completion = current.map(|current| Completion { labels, current });
+                    self.section_suggestions =
+                        current.map(|current| SectionSuggestions { labels, current });
                 }
             }
             KeyCode::Char('e') => {
@@ -2179,7 +2175,7 @@ impl App {
             KeyCode::Char('d') | KeyCode::Delete => {
                 if let Some(index) = self.list.selected() {
                     self.delete_task(index, "delete task", storage)?;
-                    self.show_status_message("Deleted task");
+                    self.show_routine_message("Deleted task");
                 }
             }
             KeyCode::Char('D')
@@ -2196,11 +2192,11 @@ impl App {
         Ok(false)
     }
 
-    pub fn paste(&mut self, text: &str) {
+    pub fn handle_paste(&mut self, text: &str) {
         self.status_message = None;
         self.pending_count = None;
         self.pending_section_jump = None;
-        self.accept_completion();
+        self.accept_section_suggestion();
         let previous_query = self.search_query().map(str::to_owned);
 
         if let Some(input) = self.mode.text_input_mut() {
@@ -2218,7 +2214,7 @@ impl App {
         self.explain_rename_problem();
     }
 
-    pub fn mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
+    pub fn handle_mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
         self.status_message = None;
         self.pending_count = None;
         self.pending_section_jump = None;
@@ -2263,7 +2259,7 @@ impl App {
                     .copied()
                     .flatten()
                 {
-                    self.toggle(index, storage)?;
+                    self.toggle_completion(index, storage)?;
                 }
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {

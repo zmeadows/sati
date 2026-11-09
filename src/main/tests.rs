@@ -1,13 +1,13 @@
 use super::*;
 
 // Parses arguments as if typed after `sati`, keeping only the interactive options.
-fn parse_cli(arguments: &[&str]) -> std::result::Result<CliOptions, clap::Error> {
+fn parse_cli(arguments: &[&str]) -> std::result::Result<InteractiveOptions, clap::Error> {
     let arguments = std::iter::once("sati").chain(arguments.iter().copied());
 
     Cli::try_parse_arguments(arguments).map(|cli| cli.options)
 }
 
-fn resolve_defaults(arguments: &[&str]) -> Options {
+fn resolve_defaults(arguments: &[&str]) -> EffectiveOptions {
     parse_cli(arguments)
         .unwrap()
         .resolve(config::Config::default())
@@ -220,7 +220,7 @@ fn runtime_themes_synchronize_resolved_backgrounds_and_leave_config_unchanged() 
                 .chain(changes.map(|(key, theme)| (Some(key), theme)))
             {
                 if let Some(key) = key {
-                    app.key(KeyCode::Char(key).into(), &fixture.storage)
+                    app.handle_key(KeyCode::Char(key).into(), &fixture.storage)
                         .unwrap();
                     assert_eq!(
                         app.status_message.as_ref().unwrap().message(),
@@ -412,7 +412,7 @@ fn display_precedence_and_last_flag_of_a_pair_cover_both_boolean_directions() {
         ("--status-messages", "--no-status-messages"),
     ];
 
-    let values = |options: Options| [options.wrap, options.status_messages];
+    let values = |options: EffectiveOptions| [options.wrap, options.status_messages];
 
     for (index, (yes, no)) in flags.into_iter().enumerate() {
         for configured in [true, false] {
@@ -445,7 +445,7 @@ fn style_options_take_precedence_over_config_which_takes_precedence_over_default
     use config::{BorderStyle, TaskMarkerStyle};
 
     let config = |text: &str| toml::from_str::<config::Config>(text).unwrap();
-    let styles = |options: Options| (options.border_style, options.task_markers);
+    let styles = |options: EffectiveOptions| (options.border_style, options.task_markers);
 
     assert_eq!(
         styles(resolve_defaults(&[])),
@@ -932,7 +932,7 @@ fn mouse_capture_defaults_on_and_cli_overrides_toml_in_both_directions() {
     assert!(resolve_defaults(&["--no-mouse", "--mouse"]).mouse);
     assert_eq!(
         resolve_defaults(&["--no-mouse"]),
-        Options {
+        EffectiveOptions {
             mouse: false,
             ..resolve_defaults(&[])
         }

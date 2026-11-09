@@ -92,7 +92,7 @@ The following are architectural invariants, not a complete shortcut specificatio
 
 - Build a proposed new state, **persist it first**, then accept it in memory and update undo/redo history. Never present a failed save as a successful mutation. Use the existing `commit_task_change` / `commit_checklist_change` path unless there is a concrete reason to modify it.
 - Undo/redo use bounded (256-entry), session-only snapshots of tasks, section order, selection, and view. Successful mutations produce coherent undo steps and clear redo; navigation, cancellation, and no-ops do not. Undo/redo also persist their result before committing it. Do not restore legacy `history.json` persistence.
-- Maintain the existing distinction between ordinary status feedback and important errors/validation feedback. A disabled routine-status-message option must not hide meaningful errors.
+- Maintain the existing distinction between routine status messages (`show_routine_message`) and important errors/validation feedback (`show_important_message`). A disabled routine-status-message option must not hide meaningful errors.
 
 ### Durable storage
 

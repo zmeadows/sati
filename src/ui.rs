@@ -191,9 +191,9 @@ fn draw_section_tabs(
 ) -> Vec<(Rect, SectionView)> {
     let styles = *app.appearance.styles();
     let mut tabs = tabs.to_vec();
-    let picking = matches!(app.mode, Mode::FuzzySection { .. });
+    let picking = matches!(app.mode, Mode::PickingSectionTab { .. });
 
-    if let Mode::FuzzySection { input, matches, .. } = &app.mode {
+    if let Mode::PickingSectionTab { input, matches, .. } = &app.mode {
         let width = usize::from(strip.width);
         let prompt_width = 2 + Line::raw("› ").width() + 1;
         let wanted = prompt_width + input.text().width();
@@ -524,7 +524,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
             task.section.as_deref()
         };
 
-        let tag_end = section_prefix.map_or(0, |prefix| {
+        let section_heading_end = section_prefix.map_or(0, |prefix| {
             let end = prefix.len();
             text.grapheme_indices(true)
                 .take_while(|(index, _)| *index <= end)
@@ -620,7 +620,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
             line.spans.extend(task_spans(
                 text,
                 source.start,
-                tag_end,
+                section_heading_end,
                 &matches,
                 text_style,
                 heading_style,
@@ -724,7 +724,7 @@ fn draw_inline_input(
             app.appearance.styles(),
             true,
             true,
-            app.completion_ghost().as_deref(),
+            app.section_suggestion_suffix().as_deref(),
         );
     }
 }
@@ -823,7 +823,7 @@ fn wrap_text(text: &str, width: usize) -> Vec<(Range<usize>, &str)> {
 fn task_spans(
     text: &str,
     offset: usize,
-    tag_end: usize,
+    section_heading_end: usize,
     matches: &[Range<usize>],
     base: Style,
     heading: Style,
@@ -852,7 +852,7 @@ fn task_spans(
         let in_match = matches
             .get(matching)
             .is_some_and(|range| range.contains(&source));
-        let in_heading = source < tag_end;
+        let in_heading = source < section_heading_end;
 
         let mut next = if in_match {
             highlight
@@ -888,7 +888,7 @@ fn draw_input_line(
     styles: &Styles,
     show_cursor: bool,
     bold_section_prefix: bool,
-    ghost: Option<&str>,
+    suggestion_suffix: Option<&str>,
 ) {
     if area.is_empty() {
         return;
@@ -970,11 +970,11 @@ fn draw_input_line(
     line.push_span(Span::styled(&text[bold_end..end], styles.normal));
 
     // A suggested section follows the cursor in dim text, cut to the remaining cells.
-    if let Some(ghost) = ghost {
+    if let Some(suffix) = suggestion_suffix {
         let mut room = usize::from(area.width).saturating_sub(prefix_width + visible_width);
         let mut shown = String::new();
 
-        for grapheme in ghost.graphemes(true) {
+        for grapheme in suffix.graphemes(true) {
             if grapheme.width() > room {
                 break;
             }

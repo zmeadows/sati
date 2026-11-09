@@ -72,8 +72,10 @@ const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
         .union(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
         .union(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS);
 
+// The settings an interactive session runs with: command-line options over config.toml over
+// defaults; see `InteractiveOptions::resolve`.
 #[derive(Debug, PartialEq)]
-struct Options {
+struct EffectiveOptions {
     wrap: bool,
     status_messages: bool,
     status_message_duration: std::time::Duration,
@@ -105,7 +107,7 @@ struct Cli {
     data_dir: Option<PathBuf>,
 
     #[command(flatten)]
-    options: CliOptions,
+    options: InteractiveOptions,
 }
 
 impl Cli {
@@ -162,7 +164,7 @@ enum CliCommand {
 
 // Each on/off pair overrides the other, so the last flag given wins.
 #[derive(Debug, Args)]
-struct CliOptions {
+struct InteractiveOptions {
     /// Read settings from this file instead of the default config.toml
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
@@ -228,9 +230,9 @@ struct CliOptions {
     no_mouse: bool,
 }
 
-impl CliOptions {
-    fn resolve(&self, config: config::Config) -> Options {
-        Options {
+impl InteractiveOptions {
+    fn resolve(&self, config: config::Config) -> EffectiveOptions {
+        EffectiveOptions {
             wrap: chosen_flag(self.wrap, self.no_wrap)
                 .or(config.display.wrap)
                 .unwrap_or(true),
@@ -421,12 +423,12 @@ fn run() -> Result<()> {
 
             match event::read()? {
                 Event::Key(key) => {
-                    if app.key(key, &storage)? {
+                    if app.handle_key(key, &storage)? {
                         break;
                     }
                 }
-                Event::Mouse(mouse) => app.mouse(mouse, rows, &storage)?,
-                Event::Paste(text) => app.paste(&text),
+                Event::Mouse(mouse) => app.handle_mouse(mouse, rows, &storage)?,
+                Event::Paste(text) => app.handle_paste(&text),
                 Event::Resize(_, _) => app.status_message = None,
                 _ => {}
             }
