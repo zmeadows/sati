@@ -51,7 +51,55 @@ fn session_moves_the_selection_and_exits_cleanly() {
     // ConPTY turns each character into a press and a release; Sati ignores releases.
     session.send("jq");
     session.wait_for_successful_exit();
-    session.verify_saved_checklist();
+    session.verify_saved_checklist(&task_document(1));
+}
+
+#[test]
+fn session_modifies_a_task_and_reloads_its_status_and_selection() {
+    let mut session = Session::start("", &[]);
+    session.wait_for_first_frame();
+    session.send("j q");
+    session.wait_for_successful_exit();
+
+    let mut completed = task_document(1);
+    completed["tasks"][1]["status"] = "completed".into();
+    session.verify_saved_checklist(&completed);
+
+    session = session.restart(&[]);
+    session.wait_for_first_frame();
+    // No navigation: this must uncomplete the Laundry task selected by the previous process.
+    session.send(" q");
+    session.wait_for_successful_exit();
+    session.verify_saved_checklist(&task_document(1));
+}
+
+#[test]
+fn session_resizes_and_remains_responsive() {
+    let mut session = Session::start("", &[]);
+    session.wait_for_first_frame();
+    session.send("?");
+    session.wait_for("the keyboard reference", |output| {
+        find(output, "shortcuts", 0).is_some()
+    });
+
+    // The short viewport produces text that cannot occur at the original size. This proves
+    // Sati handled the resize, without interpreting cursor positions or ConPTY's rendering.
+    session.terminal.resize(60, 4);
+    session.wait_for("the small-terminal message", |output| {
+        find(output, "Enlarge", 0).is_some()
+    });
+
+    // Output is ordered: once the small-terminal message arrives, earlier reference output
+    // cannot satisfy this milestone. Growing must render the usable reference again.
+    let from = session.output.len();
+    session.terminal.resize(60, 20);
+    session.wait_for("the reference after growing the terminal", |output| {
+        find(output, "Sections", from).is_some()
+    });
+
+    session.send("?jq");
+    session.wait_for_successful_exit();
+    session.verify_saved_checklist(&task_document(1));
 }
 
 #[test]
@@ -145,6 +193,10 @@ struct Session {
 impl Session {
     fn start(config: &str, arguments: &[&str]) -> Self {
         let directory = TemporaryDirectory::new(config);
+        Self::in_directory(directory, arguments)
+    }
+
+    fn in_directory(directory: TemporaryDirectory, arguments: &[&str]) -> Self {
         let (terminal, chunks) = Terminal::start(&directory.0, arguments);
         Self {
             terminal,
@@ -152,6 +204,21 @@ impl Session {
             output: Vec::new(),
             directory,
         }
+    }
+
+    fn restart(mut self, arguments: &[&str]) -> Self {
+        self.wait_for_successful_exit();
+        let Self {
+            terminal,
+            chunks,
+            directory,
+            ..
+        } = self;
+        // Close the previous PTY/ConPTY before opening another. The directory moves to the
+        // new session without rewriting its fixture; output collection starts afresh.
+        drop(terminal);
+        drop(chunks);
+        Self::in_directory(directory, arguments)
     }
 
     fn send(&mut self, input: &str) {
@@ -232,13 +299,13 @@ impl Session {
         }
     }
 
-    fn verify_saved_checklist(&self) {
+    fn verify_saved_checklist(&self, expected: &serde_json::Value) {
         let data = self.directory.0.join("data");
         let saved: serde_json::Value =
             serde_json::from_slice(&fs::read(data.join("tasks.json")).unwrap()).unwrap();
 
-        // Only the selection changes; tasks, identities, statuses, and order are untouched.
-        assert_eq!(saved, task_document(1));
+        // Compare the whole document, including identities, timestamps, statuses, and order.
+        assert_eq!(&saved, expected, "{}", excerpt(&self.output));
 
         let lock = File::open(data.join("tasks.lock")).unwrap();
 

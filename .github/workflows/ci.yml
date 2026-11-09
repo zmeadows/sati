@@ -37,6 +37,8 @@ jobs:
         run: >-
           cargo test --locked --
           --skip session_moves_the_selection_and_exits_cleanly
+          --skip session_modifies_a_task_and_reloads_its_status_and_selection
+          --skip session_resizes_and_remains_responsive
           --skip restores_the_terminal
       # Storage/terminal unit failures must not prevent Windows locking coverage.
       - name: Verify Windows process locking

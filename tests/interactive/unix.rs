@@ -219,7 +219,7 @@ fn run_session(config: &str, arguments: &[&str], answers: &[(&str, &str)], keys:
 
     session.read_remaining_output();
 
-    session.verify_saved_checklist();
+    session.verify_saved_checklist(&super::task_document(1));
 
     std::mem::take(&mut session.output)
 }
@@ -276,6 +276,16 @@ impl Terminal {
 
     pub(super) fn send(&mut self, input: &str) {
         self.master.write_all(input.as_bytes()).unwrap();
+    }
+
+    pub(super) fn resize(&self, columns: u16, rows: u16) {
+        let size = Winsize {
+            ws_row: rows,
+            ws_col: columns,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        rustix::termios::tcsetwinsize(&self.master, size).unwrap();
     }
 
     // Linux keeps separate settings for the master, so they are read through the test's slave

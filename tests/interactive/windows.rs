@@ -22,7 +22,7 @@ use windows_sys::{
     Win32::{
         Foundation::{INVALID_HANDLE_VALUE, S_OK, WAIT_OBJECT_0, WAIT_TIMEOUT},
         System::{
-            Console::{COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON},
+            Console::{COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole},
             Pipes::CreatePipe,
             Threading::{
                 CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
@@ -53,8 +53,7 @@ impl Drop for PseudoConsole {
 // instance after a failed assertion, then closes the pseudoconsole before fixture cleanup.
 pub(super) struct Terminal {
     process: OwnedHandle,
-    // Held only to be closed, after `process` has ended.
-    _console: PseudoConsole,
+    console: PseudoConsole,
     input: File,
 }
 
@@ -101,7 +100,7 @@ impl Terminal {
         (
             Self {
                 process,
-                _console: console,
+                console,
                 input: File::from(input_write),
             },
             chunks,
@@ -110,6 +109,20 @@ impl Terminal {
 
     pub(super) fn send(&mut self, input: &str) {
         self.input.write_all(input.as_bytes()).unwrap();
+    }
+
+    pub(super) fn resize(&self, columns: u16, rows: u16) {
+        let size = COORD {
+            X: columns as i16,
+            Y: rows as i16,
+        };
+        // SAFETY: the pseudoconsole is open and owned by this terminal.
+        let result = unsafe { ResizePseudoConsole(self.console.0, size) };
+        assert!(
+            result == S_OK,
+            "could not resize the pseudoconsole: HRESULT {:#010x}",
+            result as u32
+        );
     }
 
     // Sati's exit code once it has exited.
