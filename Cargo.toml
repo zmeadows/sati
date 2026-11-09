@@ -25,12 +25,12 @@ time = { version = "0.3.55", features = ["serde-well-known"] }
 atomic-write-file = "0.3.1"
 clap = { version = "4.6.7", features = ["derive", "wrap_help"] }
 
-# For the Linux and macOS pseudo-terminal check in tests/interactive_pty.rs. Crossterm already
+# For the Linux and macOS backend in tests/interactive/unix.rs. Crossterm already
 # depends on rustix; these features add its safe PTY, termios, and session calls without a new crate.
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dev-dependencies]
 rustix = { version = "1.1", features = ["process", "pty", "stdio", "termios"] }
 
-# For the Windows pseudoconsole check in tests/interactive_conpty.rs. Clap and mio already depend
+# For the Windows backend in tests/interactive/windows.rs. Clap and mio already depend
 # on windows-sys; these features add the ConPTY, pipe, and process calls without a new crate.
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61", features = [

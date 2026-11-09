@@ -32,21 +32,26 @@ jobs:
         run: cargo check --locked --all-targets
       - name: Test
         if: ${{ !cancelled() }}
-        run: cargo test --locked
+        # The three interactive scenarios run in the independent step below. Keep them in
+        # ordinary local `cargo test` runs, but avoid running them twice in CI.
+        run: >-
+          cargo test --locked --
+          --skip session_moves_the_selection_and_exits_cleanly
+          --skip restores_the_terminal
       # Storage/terminal unit failures must not prevent Windows locking coverage.
       - name: Verify Windows process locking
         if: ${{ !cancelled() && matrix.os == 'windows-latest' }}
         run: cargo test --locked --test locking
-      # Like the locking check, independent of other test failures. Each platform's harness
-      # compiles to no tests elsewhere, so an empty list fails rather than passing vacuously.
+      # Like the locking check, independent of other test failures. Require the shared baseline
+      # on every platform, rather than passing vacuously with no executable scenario.
       - name: Verify interactive terminal session
         if: ${{ !cancelled() }}
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = Windows ]; then test=interactive_conpty; else test=interactive_pty; fi
-          cargo test --locked --test "$test" -- --list | grep -q ': test$' \
-            || { echo "::error::no $test tests were built for $RUNNER_OS"; exit 1; }
-          cargo test --locked --test "$test"
+          cargo test --locked --test interactive -- --list \
+            | grep -q '^session_moves_the_selection_and_exits_cleanly: test$' \
+            || { echo "::error::no interactive baseline was built for $RUNNER_OS"; exit 1; }
+          cargo test --locked --test interactive
       - name: Build release
         if: ${{ !cancelled() }}
         run: cargo build --release --locked
