@@ -413,7 +413,7 @@ fn copy_key_remains_text_or_is_ignored_outside_normal_mode() {
             original: Some(0),
         },
         Mode::RenamingSection { input: "".into() },
-        Mode::ConfirmClear,
+        Mode::ConfirmClearNonCarried,
         Mode::Help {
             scroll: 0,
             max_scroll: 0,
@@ -429,7 +429,7 @@ fn copy_key_remains_text_or_is_ignored_outside_normal_mode() {
             | Mode::Searching { input, .. }
             | Mode::RenamingSection { input }
             | Mode::FuzzySection { input, .. } => assert_eq!(input.text(), "c"),
-            Mode::ConfirmClear | Mode::Help { .. } => {}
+            Mode::ConfirmClearNonCarried | Mode::Help { .. } => {}
             Mode::Normal => panic!("copy changed mode"),
         }
 
@@ -442,7 +442,7 @@ fn copy_key_remains_text_or_is_ignored_outside_normal_mode() {
 }
 
 #[test]
-fn task_register_copies_literal_text_and_pastes_unmarked_with_shared_placement() {
+fn task_register_copies_literal_text_and_pastes_pending_tasks_with_shared_placement() {
     let fixture = Fixture::new();
     let text = "Work: *日本語* [literal]";
 
@@ -696,7 +696,7 @@ fn theme_keys_remain_text_or_are_ignored_in_other_modes() {
             input: "".into(),
             original: Some(0),
         },
-        Mode::ConfirmClear,
+        Mode::ConfirmClearNonCarried,
     ] {
         app.mode = mode;
         press(&mut app, &fixture, KeyCode::Char('t'));
@@ -709,7 +709,7 @@ fn theme_keys_remain_text_or_are_ignored_in_other_modes() {
             Mode::Adding(input, _)
             | Mode::Editing { input, .. }
             | Mode::Searching { input, .. } => assert_eq!(input.text(), "tT"),
-            Mode::ConfirmClear => {}
+            Mode::ConfirmClearNonCarried => {}
             _ => panic!("unexpected mode change"),
         }
     }
@@ -1651,7 +1651,7 @@ fn clearing_completed_in_a_section_affects_only_that_section() {
 }
 
 #[test]
-fn clearing_unmarked_in_a_section_keeps_other_sections_and_carried_tasks() {
+fn clearing_except_carried_in_a_section_keeps_other_sections_and_carried_tasks() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c", "Work: d"]);
     app.tasks[2].status = TaskStatus::Carried;
@@ -1666,7 +1666,7 @@ fn clearing_unmarked_in_a_section_keeps_other_sections_and_carried_tasks() {
     assert_eq!(app.view, SectionView::Named("work".into()));
     assert_eq!(notice(&app), Some("Cleared 2 Work tasks, kept 1 carried"));
 
-    // Nothing unmarked is left in this tab, so D does not ask.
+    // Only carried tasks are left in this tab, so D does not ask.
     press(&mut app, &fixture, KeyCode::Char('D'));
     assert_eq!(app.mode, Mode::Normal);
 
@@ -2376,7 +2376,7 @@ fn control_p_n_match_arrow_navigation_and_preserve_task_state() {
             input: "text".into(),
             original: Some(0),
         },
-        Mode::ConfirmClear,
+        Mode::ConfirmClearNonCarried,
     ] {
         let mut app = app_with_tasks(1);
         app.mode = mode;
@@ -2539,7 +2539,7 @@ fn control_g_cancels_each_mode_through_esc_without_persisting() {
             input: "task".into(),
             original: Some(1),
         },
-        Mode::ConfirmClear,
+        Mode::ConfirmClearNonCarried,
     ] {
         let search = matches!(mode, Mode::Searching { .. });
         let mut app = app_with_tasks(2);
@@ -2994,7 +2994,7 @@ fn section_tab_keys_do_nothing_outside_normal_mode() {
             input: "text".into(),
             original: Some(0),
         },
-        Mode::ConfirmClear,
+        Mode::ConfirmClearNonCarried,
     ] {
         app.mode = mode;
         let before = format!("{:?}", app.mode);
@@ -3138,7 +3138,7 @@ fn clearing_preserves_carried_order_selection_and_repeated_resets() {
         let survivors = vec![original[1].clone(), original[3].clone()];
         press(&mut app, &fixture, KeyCode::Char('D'));
 
-        assert_eq!(app.mode, Mode::ConfirmClear);
+        assert_eq!(app.mode, Mode::ConfirmClearNonCarried);
         assert_eq!(app.tasks, original);
 
         press(&mut app, &fixture, KeyCode::Enter);
@@ -3247,7 +3247,7 @@ fn carryover_survives_other_operations_and_failed_saves_preserve_history() {
             input: "".into(),
             original: None,
         },
-        Mode::ConfirmClear,
+        Mode::ConfirmClearNonCarried,
     ] {
         app.mode = mode;
         press(&mut app, &fixture, KeyCode::Char('m'));
@@ -3344,7 +3344,7 @@ fn conventional_aliases_do_not_leak_into_other_modes_or_replace_text_delete() {
             input: "abc".into(),
             original: Some(0),
         },
-        Mode::ConfirmClear,
+        Mode::ConfirmClearNonCarried,
     ] {
         let mut app = app_with_tasks(2);
         app.toggle(0, &fixture.storage).unwrap();
@@ -3559,7 +3559,7 @@ fn input_shortcuts_dispatch_without_leaking_modified_characters() {
         assert_eq!(format!("{:?}", app.mode), original_mode);
     }
 
-    for mode in [Mode::Normal, Mode::ConfirmClear] {
+    for mode in [Mode::Normal, Mode::ConfirmClearNonCarried] {
         let mut app = app_with_tasks(1);
         app.mode = mode;
         let original_mode = format!("{:?}", app.mode);
@@ -3916,7 +3916,7 @@ fn altgr_characters_are_windows_input_only_and_respect_event_kinds() {
         }
     }
 
-    for mode in [Mode::Normal, Mode::ConfirmClear] {
+    for mode in [Mode::Normal, Mode::ConfirmClearNonCarried] {
         let mut app = app_with_tasks(1);
         app.mode = mode;
         let original = format!("{:?}", app.mode);
@@ -4113,7 +4113,7 @@ fn paste_in_normal_or_confirmation_mode_cannot_act_or_consume_undo() {
         assert_eq!(
             app.mode,
             if confirm {
-                Mode::ConfirmClear
+                Mode::ConfirmClearNonCarried
             } else {
                 Mode::Normal
             }
@@ -4154,7 +4154,7 @@ fn page_keys_are_safe_at_boundaries_and_in_input_modes() {
                 index: 0,
                 input: "input".into(),
             },
-            Mode::ConfirmClear,
+            Mode::ConfirmClearNonCarried,
         ] {
             app.mode = mode;
             let selected = app.list.selected();
@@ -4167,7 +4167,7 @@ fn page_keys_are_safe_at_boundaries_and_in_input_modes() {
                 Mode::Adding(input, _) | Mode::Editing { input, .. } => {
                     assert_eq!(input.text(), "input")
                 }
-                mode => assert_eq!(*mode, Mode::ConfirmClear),
+                mode => assert_eq!(*mode, Mode::ConfirmClearNonCarried),
             }
         }
     }
@@ -4241,7 +4241,7 @@ fn first_and_last_navigation_preserves_tasks_and_undo_and_is_modal() {
         assert_eq!(app.list.selected(), Some(1));
     }
 
-    app.mode = Mode::ConfirmClear;
+    app.mode = Mode::ConfirmClearNonCarried;
 
     for code in [
         KeyCode::Char('g'),
@@ -4252,7 +4252,7 @@ fn first_and_last_navigation_preserves_tasks_and_undo_and_is_modal() {
         press(&mut app, &fixture, code);
     }
 
-    assert_eq!(app.mode, Mode::ConfirmClear);
+    assert_eq!(app.mode, Mode::ConfirmClearNonCarried);
     assert_eq!(app.tasks, original);
     assert_eq!(app.list.selected(), Some(1));
 }
@@ -4854,7 +4854,7 @@ fn clear_dialog_requires_a_pressed_enter() {
     repeat(&mut app, &fixture, KeyCode::Enter, KeyModifiers::NONE);
     repeat(&mut app, &fixture, KeyCode::Esc, KeyModifiers::NONE);
 
-    assert_eq!(app.mode, Mode::ConfirmClear);
+    assert_eq!(app.mode, Mode::ConfirmClearNonCarried);
     assert_eq!(app.tasks, original);
     assert!(!fixture.task_path().exists());
 
@@ -4939,7 +4939,7 @@ fn clear_completed_does_not_activate_in_input_or_confirmation_modes() {
             index: 0,
             input: "task 0".into(),
         },
-        Mode::ConfirmClear,
+        Mode::ConfirmClearNonCarried,
     ] {
         app.mode = mode;
         press(&mut app, &fixture, KeyCode::Char('X'));
@@ -4949,7 +4949,7 @@ fn clear_completed_does_not_activate_in_input_or_confirmation_modes() {
             Mode::Adding(input, _) | Mode::Editing { input, .. } => {
                 assert!(input.text().ends_with('X'))
             }
-            mode => assert_eq!(*mode, Mode::ConfirmClear),
+            mode => assert_eq!(*mode, Mode::ConfirmClearNonCarried),
         }
 
         assert!(!fixture.task_path().exists());
@@ -5270,7 +5270,7 @@ fn redo_shortcut_is_normal_mode_only_and_ignores_repeats_and_releases() {
             input: "task".into(),
             original: Some(0),
         },
-        Mode::ConfirmClear,
+        Mode::ConfirmClearNonCarried,
     ] {
         app.mode = mode;
         let before = format!("{:?}", app.mode);
@@ -5669,7 +5669,7 @@ fn move_shortcuts_are_isolated_from_input_and_confirmation() {
 
     for mode in [
         Mode::Adding(TextInput::default(), AddPlacement::End),
-        Mode::ConfirmClear,
+        Mode::ConfirmClearNonCarried,
     ] {
         app.mode = mode;
 
@@ -5956,7 +5956,7 @@ fn only_enter_confirms_clear() {
     ] {
         assert!(!press(&mut app, &fixture, code));
         assert_eq!(app.tasks.len(), 2);
-        assert_eq!(app.mode, Mode::ConfirmClear);
+        assert_eq!(app.mode, Mode::ConfirmClearNonCarried);
     }
 
     press(&mut app, &fixture, KeyCode::Esc);

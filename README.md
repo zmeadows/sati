@@ -27,7 +27,7 @@ It should also feel familiar if you already use Vim or Emacs. Most checklist act
 - **Sections.** Start a task with `Name: ` to group it; a tab bar then lets you focus on one section at a time.
 - **Carryover.** Mark unfinished tasks with `m` (`[↪]`) to keep them when clearing the list.
 - **Undo and redo.** Up to 256 changes in either direction during the current session.
-- **Display options.** Wrap long tasks, pick a theme, and adjust borders, markers, and colors with command-line flags or a configuration file. When tasks don't fit, a scrollbar on the right border shows where you are.
+- **Display options.** Wrap long tasks, pick a theme, and adjust borders, task markers, and colors with command-line flags or a configuration file. When tasks don't fit, a scrollbar on the right border shows where you are.
 
 ## Suggested usage
 
@@ -98,7 +98,7 @@ and terminal or OS shortcuts can intercept key combinations before sati receives
 | Delete task | `d`, `Delete` |
 | Toggle carryover | `m` |
 | Clear completed | `X` |
-| Clear unmarked tasks (preserve carried) | `D` |
+| Clear except carried | `D` |
 | Undo | `u`, `Ctrl+Z` |
 | Redo | `Ctrl+R` |
 | Search | `/`, `Ctrl+F`, `Ctrl+S` |
@@ -134,11 +134,14 @@ below), as does `Ctrl+K`, which does nothing in the checklist itself.
 sati turns off XON/XOFF flow control while it runs, so `Ctrl+S` reaches it; if your
 terminal or multiplexer binds `Ctrl+S` itself, use `/` or `Ctrl+F`.
 
+`X` clears the current tab's completed tasks. `D` asks first, then clears every task in
+the current tab, completed or not, except those marked for carryover with `m`.
+
 Task copies use one in-memory register, separate from the system clipboard. `y` (or
 `Alt+W`) puts the selected task's text in the register, and `p`, `P`, or `Ctrl+Y` paste
-it as a new task. Pasted tasks start incomplete and unmarked; the register remains
-available for repeated pastes until exit. `c` sends the current tab's tasks as
-Markdown to the terminal using OSC 52 (see [Export](#export)).
+it as a new task. Pasted tasks start unchecked and not marked for carryover; the
+register remains available for repeated pastes until exit. `c` sends the current tab's
+tasks as Markdown to the terminal using OSC 52 (see [Export](#export)).
 
 ### Sections
 
@@ -244,8 +247,8 @@ This upstream limitation has not been reproduced in Sati through native Windows 
 | `--data-dir PATH` | Keep `tasks.json` and `tasks.lock` in this directory (see [Data](#data)). Also works with `export`. |
 | `--wrap` / `--no-wrap` | Enable / disable task wrapping. |
 | `--border-style square\|rounded` | Draw square (default) or rounded border corners. |
-| `--marker-style unicode\|ascii` | Use Unicode (default) or ASCII task markers. |
-| `--status-messages` / `--no-status-messages` | Show / hide brief status messages on the border. |
+| `--task-markers unicode\|ascii` | Draw the focus marker and checkboxes with Unicode (default) or ASCII symbols. |
+| `--status-messages` / `--no-status-messages` | Show / hide routine status messages; errors and validation notices are always shown. |
 | `--mouse` / `--no-mouse` | Enable (default) / disable mouse capture. |
 | `--accent COLOR` | Override the theme/TOML accent foreground: ANSI name, hex RGB, or palette index 0–255. |
 
@@ -253,11 +256,11 @@ Display and input flags override the matching [configuration](#configuration) se
 `--data-dir` is global: it can go before or after `export`. The other options apply only
 to the interactive checklist.
 
-Task markers default to `›`, `[ ]`, `[✓]`, and `[↪]`. `--marker-style ascii` uses `>`, `[ ]`, `[x]`, and `[>]`; it changes only task markers, and other UI symbols remain Unicode.
+Task markers are the focus marker and checkboxes: `›`, `[ ]`, `[✓]`, and `[↪]` by default. `--task-markers ascii` uses `>`, `[ ]`, `[x]`, and `[>]` instead. Other symbols, such as borders, prompts, and search markers, are unaffected.
 
 The `default` theme uses your terminal’s foreground and background, with dimming for muted
 items, ANSI bright yellow (`lightyellow`) for its accent, bright cyan (`lightcyan`) for
-headings, and yellow for the carried arrow. Named themes supply their own colors; TOML
+headings, and yellow for the carryover marker. Named themes supply their own colors; TOML
 styles can override them, followed by CLI `--accent` for the accent foreground only.
 
 ```sh
@@ -297,12 +300,19 @@ mouse = false
 with the accepted values and commented-out style examples. Copy it as a starting point and keep
 only the lines you change.
 
+Status messages appear briefly on the border. `status_messages = false` (or
+`--no-status-messages`) hides the routine ones, such as undo/redo descriptions,
+confirmations like “Cleared 3 tasks”, and hints like “Nothing to undo”. Errors, such as a
+failed copy, and validation notices, such as why a section name can't be used, are always
+shown.
+
 Two display preferences exist only in the configuration file, without command-line flags:
 
 - `status_message_duration_ms` (default `3560`) is how long each status message stays on
   the border, in milliseconds. It must be a positive integer. A message is accented for its
   first 300 ms (or all of it, if shorter), then drawn in the normal style. It applies to every
-  status message, including errors that are shown even with `status_messages = false`.
+  status message, including the errors and validation notices that `status_messages = false`
+  doesn't hide.
 - `show_help_hint` (default `true`) shows the muted `? for help` in the bottom-right corner.
   Set it to `false` to hide that hint; `?` still opens the keyboard reference.
 
@@ -351,18 +361,18 @@ Seven style roles color the interface, each configurable as `[styles.ROLE]`:
 | `border` | Window and dialog borders | `muted` |
 | `accent` | Focus marker, current tab, prompts, and new status messages | `normal` |
 | `heading` | Section prefixes such as `Work:`, and the keyboard reference's titles | `normal` |
-| `carried` | The arrow in a carried task's checkbox (`↪` or `>`) | `normal` |
+| `carryover_marker` | The arrow in a carried task's checkbox (`↪` or `>`), not the task's text | `normal` |
 
 Each role starts from its parent's resolved style and keeps whatever the theme or an
 override doesn't change. In the `default` theme, muted adds DIM to normal; completed and
-border are muted unchanged; accent, heading, and carried change only the foreground, to
-`lightyellow`, `lightcyan`, and `yellow` from the terminal's palette. The RGB themes
-instead supply explicit foregrounds and empty base modifier sets for each role, and their
-background reaches every role through normal.
+border are muted unchanged; accent, heading, and carryover_marker change only the
+foreground, to `lightyellow`, `lightcyan`, and `yellow` from the terminal's palette. The
+RGB themes instead supply explicit foregrounds and empty base modifier sets for each role,
+and their background reaches every role through normal.
 
 Explicit `[styles.*]` settings override the chosen theme, and
 `--accent` takes final precedence for the accent foreground only, preserving
-configured background and modifiers; it never changes heading or carried.
+configured background and modifiers; it never changes heading or carryover_marker.
 
 Every role supports `fg`, `bg`, and `modifiers`. Foregrounds accept Ratatui ANSI
 names, hex RGB, and palette indices (as strings). `reset` inherits the terminal
@@ -370,7 +380,7 @@ foreground and is allowed except for accent.
 
 Omitted properties retain those inherited values. A modifier array **replaces**
 inherited modifiers; `modifiers = []` clears them. Supported names are `bold`,
-`dim`, `italic`, `underlined`, and `crossed_out`, without duplicates. Completion
+`dim`, `italic`, `underline`, and `strikethrough`, without duplicates. Completion
 strikethrough, focus/prefix boldness, and search highlighting remain contextual: they are
 not roles, and they apply on top of the role styles. A search match inside a section
 prefix is highlighted like any other match.
@@ -396,10 +406,10 @@ themes and adapted to sati's seven style roles:
 - `modus-operandi-tritanopia` and `modus-vivendi-tritanopia`: designed with blue-yellow
   color-vision deficiencies in mind.
 
-Their text, accent, heading, and carried colors reach at least 7:1 contrast against the
-background. That helps many readers but can't suit everyone; completed tasks, focus, and
-search matches also keep their non-color cues (strikethrough, the `›` marker, and reversed
-highlighting).
+Their text, accent, heading, and carryover-marker colors reach at least 7:1 contrast
+against the background. That helps many readers but can't suit everyone; completed tasks,
+focus, and search matches also keep their non-color cues (strikethrough, the `›` marker,
+and reversed highlighting).
 
 ## Export
 
@@ -428,9 +438,8 @@ tab, to the terminal using OSC 52. The brief “Copy sent to terminal” message
 clears on subsequent activity or after `status_message_duration_ms`; it confirms sending,
 not that the system clipboard changed. The terminal must accept clipboard writes,
 and any multiplexer must pass them through; sati cannot confirm acceptance.
-`--no-status-messages` (or `status_messages = false`) hides this and sati's other brief
-status messages (undo/redo descriptions, wrap, delete and clear confirmations, and hints such as
-“Nothing to undo”), but a failed copy is still reported.
+Like other routine status messages, it is hidden by `--no-status-messages` (or
+`status_messages = false`); a failed copy is always reported.
 
 If OSC 52 does not work, pipe `sati export` into a clipboard utility in your local
 desktop session (install `wl-copy` or `xclip` separately if needed):

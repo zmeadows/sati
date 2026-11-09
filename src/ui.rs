@@ -11,7 +11,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Mode};
-use crate::config::{BorderStyle, MarkerStyle};
+use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
 use crate::model::{SectionView, Task, TaskStatus, task_prefix};
 use crate::styles::Styles;
@@ -136,9 +136,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         }
     }
 
-    if app.mode == Mode::ConfirmClear {
-        let section = app.scope_label().map(|label| format!("{label} "));
-        let question = format!("Clear unmarked {}tasks?", section.unwrap_or_default());
+    if app.mode == Mode::ConfirmClearNonCarried {
+        // Without "tasks", even "Clear unsectioned except carried?" fits the 40-column dialog.
+        let scope = app.scope_label().unwrap_or_else(|| "all".to_owned());
+        let question = format!("Clear {scope} except carried?");
         draw_confirmation(frame, area, &styles, app.border_style, &question);
     }
 
@@ -571,10 +572,10 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
                     "  ■  "
                 }
             } else {
-                task_checkbox(task, app.marker_style)
+                task_checkbox(task, app.task_markers)
             };
 
-            let marker_style = if searching {
+            let checkbox_style = if searching {
                 if matches.is_empty() {
                     styles.muted
                 } else {
@@ -590,15 +591,15 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
 
             let mut line = Line::from(vec![Span::styled(
                 if row == 0 && selected == Some(index) {
-                    focus_marker(app.marker_style)
+                    focus_marker(app.task_markers)
                 } else {
                     " "
                 },
                 styles.accent.add_modifier(Modifier::BOLD),
             )]);
 
-            // Only the arrow of a carried checkbox takes the carried color, so its brackets
-            // still show selection like any other checkbox. Search markers replace it.
+            // Only the arrow of a carried checkbox takes the carryover-marker color, so its
+            // brackets still show selection like any other checkbox. Search markers replace it.
             let carried_arrow = if row == 0 && !searching && task.status == TaskStatus::Carried {
                 prefix
                     .strip_prefix(" [")
@@ -608,11 +609,11 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
             };
 
             if let Some(arrow) = carried_arrow {
-                line.push_span(Span::styled(" [", marker_style));
-                line.push_span(Span::styled(arrow, styles.carried));
-                line.push_span(Span::styled("] ", marker_style));
+                line.push_span(Span::styled(" [", checkbox_style));
+                line.push_span(Span::styled(arrow, styles.carryover_marker));
+                line.push_span(Span::styled("] ", checkbox_style));
             } else {
-                line.push_span(Span::styled(prefix, marker_style));
+                line.push_span(Span::styled(prefix, checkbox_style));
             }
 
             line.spans.extend(task_spans(
@@ -734,20 +735,20 @@ fn border_type(style: BorderStyle) -> BorderType {
     }
 }
 
-fn focus_marker(style: MarkerStyle) -> &'static str {
+fn focus_marker(style: TaskMarkerStyle) -> &'static str {
     match style {
-        MarkerStyle::Unicode => "›",
-        MarkerStyle::Ascii => ">",
+        TaskMarkerStyle::Unicode => "›",
+        TaskMarkerStyle::Ascii => ">",
     }
 }
 
-fn task_checkbox(task: &Task, style: MarkerStyle) -> &'static str {
+fn task_checkbox(task: &Task, style: TaskMarkerStyle) -> &'static str {
     match (task.status, style) {
         (TaskStatus::Pending, _) => " [ ] ",
-        (TaskStatus::Completed, MarkerStyle::Unicode) => " [✓] ",
-        (TaskStatus::Completed, MarkerStyle::Ascii) => " [x] ",
-        (TaskStatus::Carried, MarkerStyle::Unicode) => " [↪] ",
-        (TaskStatus::Carried, MarkerStyle::Ascii) => " [>] ",
+        (TaskStatus::Completed, TaskMarkerStyle::Unicode) => " [✓] ",
+        (TaskStatus::Completed, TaskMarkerStyle::Ascii) => " [x] ",
+        (TaskStatus::Carried, TaskMarkerStyle::Unicode) => " [↪] ",
+        (TaskStatus::Carried, TaskMarkerStyle::Ascii) => " [>] ",
     }
 }
 
@@ -1073,7 +1074,7 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
         ("Toggle carryover", "m", ""),
         ("Delete task", "d, Delete", ""),
         ("Clear completed", "X", ""),
-        ("Clear unmarked", "D", ""),
+        ("Clear except carried", "D", ""),
     ]),
     ("Copy and undo", &[
         ("Copy task", "y", "Alt+W"),

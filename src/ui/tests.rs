@@ -241,24 +241,39 @@ fn overflowing_tabs_scroll_only_to_keep_the_active_tab_visible() {
 }
 
 #[test]
-fn the_clear_confirmation_names_the_current_tab() {
+fn the_clear_confirmation_names_the_current_tab_and_the_carryover_exception() {
+    use crate::model::SectionView;
+
     let fixture = crate::storage::tests::Fixture::new();
-    let mut app = app_with_texts(&["Work: a", "Home: b"]);
+    let mut app = app_with_texts(&["Work: a", "Home: b", "plain"]);
     app.tasks[1].status = TaskStatus::Completed;
     let mut terminal = test_terminal(80, 14);
 
-    app.show_section(crate::model::SectionView::Named("work".into()));
-    app.key(
-        ratatui::crossterm::event::KeyEvent::new(
-            ratatui::crossterm::event::KeyCode::Char('D'),
-            ratatui::crossterm::event::KeyModifiers::NONE,
+    for (view, question) in [
+        (
+            SectionView::Named("work".into()),
+            "Clear Work except carried?",
         ),
-        &fixture.storage,
-    )
-    .unwrap();
-    render(&mut terminal, &mut app);
+        (
+            SectionView::Unsectioned,
+            "Clear unsectioned except carried?",
+        ),
+        (SectionView::All, "Clear all except carried?"),
+    ] {
+        app.mode = Mode::Normal;
+        app.show_section(view);
+        app.key(
+            ratatui::crossterm::event::KeyEvent::new(
+                ratatui::crossterm::event::KeyCode::Char('D'),
+                ratatui::crossterm::event::KeyModifiers::NONE,
+            ),
+            &fixture.storage,
+        )
+        .unwrap();
+        render(&mut terminal, &mut app);
 
-    assert!(screen(&terminal).contains("Clear unmarked Work tasks?"));
+        assert!(screen(&terminal).contains(question), "{question}");
+    }
 }
 
 #[test]
@@ -269,7 +284,7 @@ fn the_clear_confirmation_uses_the_configured_border_style() {
     ] {
         let mut app = app_with_texts(&["a"]);
         app.border_style = border_style;
-        app.mode = Mode::ConfirmClear;
+        app.mode = Mode::ConfirmClearNonCarried;
         let mut terminal = test_terminal(80, 20);
 
         render(&mut terminal, &mut app);
@@ -281,7 +296,7 @@ fn the_clear_confirmation_uses_the_configured_border_style() {
             .filter(|c| corners.contains(c))
             .count();
 
-        assert!(screen(&terminal).contains("Clear unmarked tasks?"));
+        assert!(screen(&terminal).contains("Clear all except carried?"));
         assert_eq!(dialog_corners, 4, "{border_style:?}");
     }
 }
@@ -819,17 +834,17 @@ fn semantic_styles_and_reverse_highlights_preserve_modifier_hierarchy() {
 
 #[test]
 fn focus_is_bold_accented_in_both_marker_modes_without_bolding_task() {
-    for marker_style in [MarkerStyle::Ascii, MarkerStyle::Unicode] {
+    for task_markers in [TaskMarkerStyle::Ascii, TaskMarkerStyle::Unicode] {
         for accent in [DEFAULT_ACCENT, Color::Indexed(3), Color::Rgb(12, 34, 56)] {
             let mut app = App::new(vec![Task::new("ordinary text")]);
-            app.marker_style = marker_style;
+            app.task_markers = task_markers;
             app.appearance.styles_mut().accent.fg = Some(accent);
             let mut terminal = test_terminal(40, 10);
             render(&mut terminal, &mut app);
             let buffer = terminal.backend().buffer();
             let focus = &buffer[(1, 1)];
 
-            assert_eq!(focus.symbol(), focus_marker(marker_style));
+            assert_eq!(focus.symbol(), focus_marker(task_markers));
             assert_eq!(focus.fg, accent);
             assert!(focus.modifier.contains(Modifier::BOLD));
 
@@ -890,7 +905,7 @@ fn rendering_uses_resolved_roles_without_reconstructing_defaults() {
 #[test]
 fn configured_styles_preserve_mandatory_focus_completion_and_search_modifiers() {
     for modifiers in ["[]", "['dim']"] {
-        let config: crate::config::Config = toml::from_str(&format!("[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nmodifiers=['italic']\n[styles.completed]\nfg='red'\nmodifiers={modifiers}\n[styles.accent]\nfg='blue'\nmodifiers=['italic','underlined']")).unwrap();
+        let config: crate::config::Config = toml::from_str(&format!("[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nmodifiers=['italic']\n[styles.completed]\nfg='red'\nmodifiers={modifiers}\n[styles.accent]\nfg='blue'\nmodifiers=['italic','underline']")).unwrap();
 
         let mut app = App::new(vec![Task {
             status: TaskStatus::Completed,
@@ -964,7 +979,7 @@ fn themed_background_fills_every_cell_including_empty_regions_and_dialogs() {
                     input: "".into(),
                     original: Some(0),
                 },
-                5 => Mode::ConfirmClear,
+                5 => Mode::ConfirmClearNonCarried,
                 6 => Mode::Help {
                     scroll: 3,
                     max_scroll: 0,
@@ -1177,8 +1192,8 @@ fn unicode_checkboxes_are_single_cell_and_preserve_rendering_and_search() {
         assert_eq!(glyph.width(), 1);
     }
 
-    assert_eq!(focus_marker(MarkerStyle::Ascii), ">");
-    assert_eq!(focus_marker(MarkerStyle::Unicode), "\u{203a}");
+    assert_eq!(focus_marker(TaskMarkerStyle::Ascii), ">");
+    assert_eq!(focus_marker(TaskMarkerStyle::Unicode), "\u{203a}");
 
     let tasks = vec![
         Task::new("ordinary task wraps here"),
@@ -1197,8 +1212,8 @@ fn unicode_checkboxes_are_single_cell_and_preserve_rendering_and_search() {
         (&tasks[1], " [x] ", " [\u{2713}] "),
         (&tasks[2], " [>] ", " [\u{21aa}] "),
     ] {
-        assert_eq!(task_checkbox(task, MarkerStyle::Ascii), ascii);
-        assert_eq!(task_checkbox(task, MarkerStyle::Unicode), unicode);
+        assert_eq!(task_checkbox(task, TaskMarkerStyle::Ascii), ascii);
+        assert_eq!(task_checkbox(task, TaskMarkerStyle::Unicode), unicode);
         assert_eq!(ascii.width(), 5);
         assert_eq!(unicode.width(), 5);
     }
@@ -1214,9 +1229,9 @@ fn unicode_checkboxes_are_single_cell_and_preserve_rendering_and_search() {
             ] {
                 let searching = mode != Mode::Normal;
                 let mut app = App::new(tasks.clone());
-                assert_eq!(app.marker_style, MarkerStyle::Unicode);
+                assert_eq!(app.task_markers, TaskMarkerStyle::Unicode);
 
-                app.marker_style = MarkerStyle::Ascii;
+                app.task_markers = TaskMarkerStyle::Ascii;
                 app.mode = mode;
                 app.list.select(Some(1));
                 app.wrap = wrap;
@@ -1226,7 +1241,7 @@ fn unicode_checkboxes_are_single_cell_and_preserve_rendering_and_search() {
                 let ascii = terminal.backend().buffer().clone();
                 let mapping = app.viewport.row_tasks.clone();
                 let scroll = app.viewport.scroll;
-                app.marker_style = MarkerStyle::Unicode;
+                app.task_markers = TaskMarkerStyle::Unicode;
                 let unicode_rows = render(&mut terminal, &mut app);
 
                 assert_eq!(rows, unicode_rows);
@@ -1279,7 +1294,7 @@ fn carryover_checkboxes_preserve_layout_and_search_markers() {
     let styles = app.appearance.styles();
     assert_eq!(buffer[(1, 1)].fg, styles.accent.fg.unwrap());
     assert_eq!(buffer[(3, 1)].fg, styles.accent.fg.unwrap());
-    assert_eq!(buffer[(4, 1)].fg, styles.carried.fg.unwrap());
+    assert_eq!(buffer[(4, 1)].fg, styles.carryover_marker.fg.unwrap());
     assert_eq!(buffer[(5, 1)].fg, styles.accent.fg.unwrap());
 
     // Continuation rows leave the marker columns blank.
@@ -1318,11 +1333,11 @@ fn carryover_checkboxes_preserve_layout_and_search_markers() {
 }
 
 #[test]
-fn only_the_carried_arrow_takes_the_carried_color() {
+fn only_the_carried_arrow_takes_the_carryover_marker_color() {
     let accent = Color::Rgb(169, 182, 101);
     let carried = Color::Rgb(216, 166, 87);
 
-    for marker_style in [MarkerStyle::Unicode, MarkerStyle::Ascii] {
+    for task_markers in [TaskMarkerStyle::Unicode, TaskMarkerStyle::Ascii] {
         for selected in 0..3 {
             let mut app = App::new(vec![
                 Task {
@@ -1335,9 +1350,9 @@ fn only_the_carried_arrow_takes_the_carried_color() {
                     ..Task::new("completed")
                 },
             ]);
-            app.marker_style = marker_style;
+            app.task_markers = task_markers;
             app.appearance.styles_mut().accent.fg = Some(accent);
-            app.appearance.styles_mut().carried.fg = Some(carried);
+            app.appearance.styles_mut().carryover_marker.fg = Some(carried);
             app.list.select(Some(selected));
             let mut terminal = test_terminal(30, 8);
             render(&mut terminal, &mut app);
@@ -2170,7 +2185,7 @@ fn tiny_terminals_and_resizing_are_safe_in_every_mode() {
                     input: "Long search 日本語 🪷".into(),
                     original: Some(0),
                 },
-                Mode::ConfirmClear,
+                Mode::ConfirmClearNonCarried,
                 Mode::Help {
                     scroll: usize::MAX,
                     max_scroll: usize::MAX,
@@ -3327,7 +3342,7 @@ fn the_help_hint_sits_in_the_bottom_right_corner_only_on_the_plain_checklist() {
             input: "a".into(),
             original: Some(0),
         },
-        Mode::ConfirmClear,
+        Mode::ConfirmClearNonCarried,
     ] {
         app.mode = mode;
         render(&mut terminal, &mut app);

@@ -61,7 +61,7 @@ pub struct Styles {
     pub border: Style,
     pub accent: Style,
     pub heading: Style,
-    pub carried: Style,
+    pub carryover_marker: Style,
 }
 
 impl Styles {
@@ -100,7 +100,10 @@ impl Styles {
         let border = apply(muted.patch(bases.border), &overrides.border);
         let mut accent = apply(normal.patch(bases.accent), &overrides.accent);
         let heading = apply(normal.patch(bases.heading), &overrides.heading);
-        let carried = apply(normal.patch(bases.carried), &overrides.carried);
+        let carryover_marker = apply(
+            normal.patch(bases.carryover_marker),
+            &overrides.carryover_marker,
+        );
 
         if let Some(fg) = cli_accent {
             accent = accent.fg(fg);
@@ -113,7 +116,7 @@ impl Styles {
             border,
             accent,
             heading,
-            carried,
+            carryover_marker,
         }
     }
 }
@@ -146,7 +149,7 @@ mod tests {
         assert_eq!(styles.accent.fg, Some(DEFAULT_ACCENT));
         assert_eq!(styles.accent.add_modifier, Modifier::BOLD);
         assert_eq!(styles.heading, styles.normal.fg(Color::LightCyan));
-        assert_eq!(styles.carried, styles.normal.fg(Color::Yellow));
+        assert_eq!(styles.carryover_marker, styles.normal.fg(Color::Yellow));
 
         for (text, modifiers) in [("['italic']", Modifier::ITALIC), ("[]", Modifier::empty())] {
             let styles = resolve(&format!(
@@ -162,7 +165,7 @@ mod tests {
         }
 
         let styles = resolve(
-            "[styles.completed]\nfg='red'\nmodifiers=[]\n[styles.border]\nfg='3'\nmodifiers=['underlined','crossed_out']",
+            "[styles.completed]\nfg='red'\nmodifiers=[]\n[styles.border]\nfg='3'\nmodifiers=['underline','strikethrough']",
         );
 
         assert_eq!(styles.completed.fg, Some(Color::Red));
@@ -187,7 +190,7 @@ mod tests {
         assert_eq!(styles.border, styles.muted);
         assert_eq!(styles.accent, styles.normal.fg(Color::LightYellow));
         assert_eq!(styles.heading, styles.normal.fg(Color::LightCyan));
-        assert_eq!(styles.carried, styles.normal.fg(Color::Yellow));
+        assert_eq!(styles.carryover_marker, styles.normal.fg(Color::Yellow));
         assert!(
             !styles
                 .completed
@@ -216,25 +219,25 @@ mod tests {
     }
 
     #[test]
-    fn heading_and_carried_patch_normal_independently_of_accent_and_completed() {
+    fn heading_and_carryover_marker_patch_normal_independently_of_accent_and_completed() {
         let styles = resolve(
             "[styles.normal]\nbg='#102030'\nmodifiers=['italic']\n[styles.muted]\nfg='green'\n[styles.completed]\nfg='blue'\nmodifiers=['dim']\n[styles.accent]\nfg='red'\nmodifiers=['bold']",
         );
 
         assert_eq!(styles.heading, styles.normal.fg(Color::LightCyan));
-        assert_eq!(styles.carried, styles.normal.fg(Color::Yellow));
+        assert_eq!(styles.carryover_marker, styles.normal.fg(Color::Yellow));
         assert_eq!(styles.heading.bg, Some(Color::Rgb(16, 32, 48)));
-        assert_eq!(styles.carried.add_modifier, Modifier::ITALIC);
+        assert_eq!(styles.carryover_marker.add_modifier, Modifier::ITALIC);
 
         let styles = resolve(
-            "[styles.heading]\nfg='#a9b665'\nbg='#000000'\nmodifiers=[]\n[styles.carried]\nfg='reset'\nmodifiers=['underlined']",
+            "[styles.heading]\nfg='#a9b665'\nbg='#000000'\nmodifiers=[]\n[styles.carryover_marker]\nfg='reset'\nmodifiers=['underline']",
         );
 
         assert_eq!(styles.heading.fg, Some(Color::Rgb(169, 182, 101)));
         assert_eq!(styles.heading.bg, Some(Color::Rgb(0, 0, 0)));
         assert!(styles.heading.add_modifier.is_empty());
-        assert_eq!(styles.carried.fg, Some(Color::Reset));
-        assert_eq!(styles.carried.add_modifier, Modifier::UNDERLINED);
+        assert_eq!(styles.carryover_marker.fg, Some(Color::Reset));
+        assert_eq!(styles.carryover_marker.add_modifier, Modifier::UNDERLINED);
 
         let unchanged = Styles::default();
         assert_eq!(

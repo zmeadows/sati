@@ -357,7 +357,7 @@ fn theme_selection_keeps_cascading_and_final_accent_precedence() {
         styles.normal.fg(ratatui::style::Color::LightCyan)
     );
     assert_eq!(
-        styles.carried,
+        styles.carryover_marker,
         styles.normal.fg(ratatui::style::Color::Yellow)
     );
 
@@ -442,37 +442,37 @@ fn display_precedence_and_last_flag_of_a_pair_cover_both_boolean_directions() {
 
 #[test]
 fn style_options_take_precedence_over_config_which_takes_precedence_over_defaults() {
-    use config::{BorderStyle, MarkerStyle};
+    use config::{BorderStyle, TaskMarkerStyle};
 
     let config = |text: &str| toml::from_str::<config::Config>(text).unwrap();
-    let styles = |options: Options| (options.border_style, options.marker_style);
+    let styles = |options: Options| (options.border_style, options.task_markers);
 
     assert_eq!(
         styles(resolve_defaults(&[])),
-        (BorderStyle::Square, MarkerStyle::Unicode)
+        (BorderStyle::Square, TaskMarkerStyle::Unicode)
     );
 
-    let configured = "[display]\nborder_style = 'rounded'\nmarker_style = 'ascii'";
+    let configured = "[display]\nborder_style = 'rounded'\ntask_markers = 'ascii'";
 
     assert_eq!(
         styles(parse_cli(&[]).unwrap().resolve(config(configured))),
-        (BorderStyle::Rounded, MarkerStyle::Ascii)
+        (BorderStyle::Rounded, TaskMarkerStyle::Ascii)
     );
 
-    let overridden = parse_cli(&["--border-style", "square", "--marker-style", "unicode"])
+    let overridden = parse_cli(&["--border-style", "square", "--task-markers", "unicode"])
         .unwrap()
         .resolve(config(configured));
 
     assert_eq!(
         styles(overridden),
-        (BorderStyle::Square, MarkerStyle::Unicode)
+        (BorderStyle::Square, TaskMarkerStyle::Unicode)
     );
 
-    let from_defaults = resolve_defaults(&["--border-style=rounded", "--marker-style=ascii"]);
+    let from_defaults = resolve_defaults(&["--border-style=rounded", "--task-markers=ascii"]);
 
     assert_eq!(
         styles(from_defaults),
-        (BorderStyle::Rounded, MarkerStyle::Ascii)
+        (BorderStyle::Rounded, TaskMarkerStyle::Ascii)
     );
 }
 
@@ -482,8 +482,9 @@ fn style_options_reject_unknown_missing_and_removed_values() {
         vec!["--border-style", "round"],
         vec!["--border-style", "Rounded"],
         vec!["--border-style"],
-        vec!["--marker-style", "emoji"],
-        vec!["--marker-style"],
+        vec!["--task-markers", "emoji"],
+        vec!["--task-markers"],
+        vec!["--marker-style", "ascii"],
         vec!["--round-corners"],
         vec!["--square-corners"],
         vec!["--ascii-markers"],
@@ -980,14 +981,14 @@ fn the_defaults_file_lists_every_option_at_its_built_in_default() {
     let config::Display {
         wrap,
         border_style,
-        marker_style,
+        task_markers,
         status_messages,
         status_message_duration_ms,
         show_help_hint,
     } = &config.display;
     let config::Input { mouse } = &config.input;
 
-    assert!(wrap.is_some() && border_style.is_some() && marker_style.is_some());
+    assert!(wrap.is_some() && border_style.is_some() && task_markers.is_some());
     assert!(status_messages.is_some() && status_message_duration_ms.is_some());
     assert!(show_help_hint.is_some() && mouse.is_some());
 
@@ -1002,16 +1003,16 @@ fn wrapping_is_enabled_by_default_and_can_be_disabled() {
     let defaults = resolve_defaults(&[]);
     assert!(defaults.wrap);
     assert_eq!(defaults.border_style, config::BorderStyle::Square);
-    assert_eq!(defaults.marker_style, config::MarkerStyle::Unicode);
+    assert_eq!(defaults.task_markers, config::TaskMarkerStyle::Unicode);
     assert!(defaults.status_messages);
     assert_eq!(
         defaults.appearance.styles().accent.fg,
         Some(styles::DEFAULT_ACCENT)
     );
 
-    let options = resolve_defaults(&["--marker-style", "ascii", "--no-wrap"]);
+    let options = resolve_defaults(&["--task-markers", "ascii", "--no-wrap"]);
 
-    assert_eq!(options.marker_style, config::MarkerStyle::Ascii);
+    assert_eq!(options.task_markers, config::TaskMarkerStyle::Ascii);
     assert!(!options.wrap);
 
     for removed in ["--keybinds", "--no-keybinds", "--unknown"] {

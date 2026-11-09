@@ -138,7 +138,7 @@ impl BuiltinTheme {
                 border: Style::default(),
                 accent: Style::default().fg(DEFAULT_ACCENT),
                 heading: Style::default().fg(Color::LightCyan),
-                carried: Style::default().fg(Color::Yellow),
+                carryover_marker: Style::default().fg(Color::Yellow),
             },
             Self::GruvboxMaterial => {
                 // Each palette role explicitly clears inherited modifiers.
@@ -150,7 +150,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(90, 82, 76)),
                     accent: plain.fg(Color::Rgb(231, 138, 78)),
                     heading: plain.fg(Color::Rgb(169, 182, 101)),
-                    carried: plain.fg(Color::Rgb(216, 166, 87)),
+                    carryover_marker: plain.fg(Color::Rgb(216, 166, 87)),
                 }
             }
             Self::CatppuccinMocha => {
@@ -162,7 +162,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(88, 91, 112)),
                     accent: plain.fg(Color::Rgb(203, 166, 247)),
                     heading: plain.fg(Color::Rgb(148, 226, 213)),
-                    carried: plain.fg(Color::Rgb(250, 179, 135)),
+                    carryover_marker: plain.fg(Color::Rgb(250, 179, 135)),
                 }
             }
             Self::TokyoNightStorm => {
@@ -174,7 +174,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(84, 92, 126)),
                     accent: plain.fg(Color::Rgb(122, 162, 247)),
                     heading: plain.fg(Color::Rgb(158, 206, 106)),
-                    carried: plain.fg(Color::Rgb(224, 175, 104)),
+                    carryover_marker: plain.fg(Color::Rgb(224, 175, 104)),
                 }
             }
             Self::KanagawaWave => {
@@ -186,7 +186,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(84, 84, 109)),
                     accent: plain.fg(Color::Rgb(126, 156, 216)),
                     heading: plain.fg(Color::Rgb(152, 187, 108)),
-                    carried: plain.fg(Color::Rgb(230, 195, 132)),
+                    carryover_marker: plain.fg(Color::Rgb(230, 195, 132)),
                 }
             }
             Self::RosePine => {
@@ -198,7 +198,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(82, 79, 103)),
                     accent: plain.fg(Color::Rgb(235, 188, 186)),
                     heading: plain.fg(Color::Rgb(156, 207, 216)),
-                    carried: plain.fg(Color::Rgb(246, 193, 119)),
+                    carryover_marker: plain.fg(Color::Rgb(246, 193, 119)),
                 }
             }
             Self::Nightfox => {
@@ -210,7 +210,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(57, 80, 109)),
                     accent: plain.fg(Color::Rgb(113, 156, 214)),
                     heading: plain.fg(Color::Rgb(129, 178, 154)),
-                    carried: plain.fg(Color::Rgb(219, 192, 116)),
+                    carryover_marker: plain.fg(Color::Rgb(219, 192, 116)),
                 }
             }
             Self::OneDark => {
@@ -222,7 +222,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(57, 63, 74)),
                     accent: plain.fg(Color::Rgb(97, 175, 239)),
                     heading: plain.fg(Color::Rgb(152, 195, 121)),
-                    carried: plain.fg(Color::Rgb(229, 192, 123)),
+                    carryover_marker: plain.fg(Color::Rgb(229, 192, 123)),
                 }
             }
             Self::GithubDark => {
@@ -234,7 +234,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(48, 54, 61)),
                     accent: plain.fg(Color::Rgb(88, 166, 255)),
                     heading: plain.fg(Color::Rgb(63, 185, 80)),
-                    carried: plain.fg(Color::Rgb(210, 153, 34)),
+                    carryover_marker: plain.fg(Color::Rgb(210, 153, 34)),
                 }
             }
             Self::EverforestMedium => {
@@ -246,7 +246,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(79, 88, 94)),
                     accent: plain.fg(Color::Rgb(167, 192, 128)),
                     heading: plain.fg(Color::Rgb(127, 187, 179)),
-                    carried: plain.fg(Color::Rgb(219, 188, 127)),
+                    carryover_marker: plain.fg(Color::Rgb(219, 188, 127)),
                 }
             }
             Self::CyberdreamMuted => {
@@ -258,7 +258,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(60, 64, 72)),
                     accent: plain.fg(Color::Rgb(120, 168, 232)),
                     heading: plain.fg(Color::Rgb(126, 224, 136)),
-                    carried: plain.fg(Color::Rgb(227, 200, 117)),
+                    carryover_marker: plain.fg(Color::Rgb(227, 200, 117)),
                 }
             }
             Self::Nord => {
@@ -270,7 +270,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(67, 76, 94)),
                     accent: plain.fg(Color::Rgb(136, 192, 208)),
                     heading: plain.fg(Color::Rgb(163, 190, 140)),
-                    carried: plain.fg(Color::Rgb(235, 203, 139)),
+                    carryover_marker: plain.fg(Color::Rgb(235, 203, 139)),
                 }
             }
             Self::Dracula => {
@@ -282,7 +282,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(68, 71, 90)),
                     accent: plain.fg(Color::Rgb(189, 147, 249)),
                     heading: plain.fg(Color::Rgb(139, 233, 253)),
-                    carried: plain.fg(Color::Rgb(255, 184, 108)),
+                    carryover_marker: plain.fg(Color::Rgb(255, 184, 108)),
                 }
             }
             Self::Darcula => {
@@ -294,7 +294,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(96, 96, 96)),
                     accent: plain.fg(Color::Rgb(255, 198, 109)),
                     heading: plain.fg(Color::Rgb(104, 151, 187)),
-                    carried: plain.fg(Color::Rgb(204, 120, 50)),
+                    carryover_marker: plain.fg(Color::Rgb(204, 120, 50)),
                 }
             }
             Self::Gruvbox => {
@@ -306,7 +306,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(102, 92, 84)),
                     accent: plain.fg(Color::Rgb(254, 128, 25)),
                     heading: plain.fg(Color::Rgb(142, 192, 124)),
-                    carried: plain.fg(Color::Rgb(250, 189, 47)),
+                    carryover_marker: plain.fg(Color::Rgb(250, 189, 47)),
                 }
             }
             Self::SolarizedDark => {
@@ -318,7 +318,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(88, 110, 117)),
                     accent: plain.fg(Color::Rgb(38, 139, 210)),
                     heading: plain.fg(Color::Rgb(42, 161, 152)),
-                    carried: plain.fg(Color::Rgb(181, 137, 0)),
+                    carryover_marker: plain.fg(Color::Rgb(181, 137, 0)),
                 }
             }
             Self::SolarizedLight => {
@@ -330,7 +330,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(147, 161, 161)),
                     accent: plain.fg(Color::Rgb(38, 139, 210)),
                     heading: plain.fg(Color::Rgb(42, 161, 152)),
-                    carried: plain.fg(Color::Rgb(181, 137, 0)),
+                    carryover_marker: plain.fg(Color::Rgb(181, 137, 0)),
                 }
             }
             Self::GruvboxLight => {
@@ -342,7 +342,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(168, 153, 132)),
                     accent: plain.fg(Color::Rgb(175, 58, 3)),
                     heading: plain.fg(Color::Rgb(66, 123, 88)),
-                    carried: plain.fg(Color::Rgb(181, 118, 20)),
+                    carryover_marker: plain.fg(Color::Rgb(181, 118, 20)),
                 }
             }
             Self::CatppuccinLatte => {
@@ -354,7 +354,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(172, 176, 190)),
                     accent: plain.fg(Color::Rgb(136, 57, 239)),
                     heading: plain.fg(Color::Rgb(30, 102, 245)),
-                    carried: plain.fg(Color::Rgb(254, 100, 11)),
+                    carryover_marker: plain.fg(Color::Rgb(254, 100, 11)),
                 }
             }
             Self::GithubLight => {
@@ -366,7 +366,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(208, 215, 222)),
                     accent: plain.fg(Color::Rgb(9, 105, 218)),
                     heading: plain.fg(Color::Rgb(26, 127, 55)),
-                    carried: plain.fg(Color::Rgb(154, 103, 0)),
+                    carryover_marker: plain.fg(Color::Rgb(154, 103, 0)),
                 }
             }
             Self::RosePineDawn => {
@@ -378,7 +378,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(206, 202, 205)),
                     accent: plain.fg(Color::Rgb(180, 99, 122)),
                     heading: plain.fg(Color::Rgb(40, 105, 131)),
-                    carried: plain.fg(Color::Rgb(144, 122, 169)),
+                    carryover_marker: plain.fg(Color::Rgb(144, 122, 169)),
                 }
             }
             Self::EverforestLight => {
@@ -390,7 +390,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(147, 159, 145)),
                     accent: plain.fg(Color::Rgb(141, 161, 1)),
                     heading: plain.fg(Color::Rgb(53, 167, 124)),
-                    carried: plain.fg(Color::Rgb(245, 125, 38)),
+                    carryover_marker: plain.fg(Color::Rgb(245, 125, 38)),
                 }
             }
             Self::ModusOperandi => {
@@ -402,7 +402,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(159, 159, 159)),
                     accent: plain.fg(Color::Rgb(0, 49, 169)),
                     heading: plain.fg(Color::Rgb(114, 16, 69)),
-                    carried: plain.fg(Color::Rgb(111, 85, 0)),
+                    carryover_marker: plain.fg(Color::Rgb(111, 85, 0)),
                 }
             }
             Self::EfSummer => {
@@ -414,7 +414,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(198, 187, 198)),
                     accent: plain.fg(Color::Rgb(203, 26, 170)),
                     heading: plain.fg(Color::Rgb(15, 123, 143)),
-                    carried: plain.fg(Color::Rgb(164, 95, 34)),
+                    carryover_marker: plain.fg(Color::Rgb(164, 95, 34)),
                 }
             }
             Self::Monokai => {
@@ -426,7 +426,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(100, 100, 94)),
                     accent: plain.fg(Color::Rgb(249, 38, 114)),
                     heading: plain.fg(Color::Rgb(102, 217, 239)),
-                    carried: plain.fg(Color::Rgb(253, 151, 31)),
+                    carryover_marker: plain.fg(Color::Rgb(253, 151, 31)),
                 }
             }
             Self::ModusVivendi => {
@@ -438,7 +438,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(100, 100, 100)),
                     accent: plain.fg(Color::Rgb(47, 175, 255)),
                     heading: plain.fg(Color::Rgb(254, 172, 208)),
-                    carried: plain.fg(Color::Rgb(208, 188, 0)),
+                    carryover_marker: plain.fg(Color::Rgb(208, 188, 0)),
                 }
             }
             Self::ModusOperandiDeuteranopia => {
@@ -450,7 +450,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(89, 89, 89)),
                     accent: plain.fg(Color::Rgb(0, 49, 169)),
                     heading: plain.fg(Color::Rgb(83, 26, 182)),
-                    carried: plain.fg(Color::Rgb(105, 85, 0)),
+                    carryover_marker: plain.fg(Color::Rgb(105, 85, 0)),
                 }
             }
             Self::ModusVivendiDeuteranopia => {
@@ -462,7 +462,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(100, 100, 100)),
                     accent: plain.fg(Color::Rgb(47, 175, 255)),
                     heading: plain.fg(Color::Rgb(182, 160, 255)),
-                    carried: plain.fg(Color::Rgb(202, 191, 0)),
+                    carryover_marker: plain.fg(Color::Rgb(202, 191, 0)),
                 }
             }
             Self::ModusOperandiTritanopia => {
@@ -474,7 +474,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(89, 89, 89)),
                     accent: plain.fg(Color::Rgb(0, 94, 139)),
                     heading: plain.fg(Color::Rgb(166, 0, 0)),
-                    carried: plain.fg(Color::Rgb(160, 19, 47)),
+                    carryover_marker: plain.fg(Color::Rgb(160, 19, 47)),
                 }
             }
             Self::ModusVivendiTritanopia => {
@@ -486,7 +486,7 @@ impl BuiltinTheme {
                     border: plain.fg(Color::Rgb(100, 100, 100)),
                     accent: plain.fg(Color::Rgb(0, 211, 208)),
                     heading: plain.fg(Color::Rgb(255, 95, 89)),
-                    carried: plain.fg(Color::Rgb(255, 127, 134)),
+                    carryover_marker: plain.fg(Color::Rgb(255, 127, 134)),
                 }
             }
         }
@@ -520,7 +520,7 @@ mod tests {
     #[test]
     fn named_themes_resolve_to_their_exact_palettes() {
         // In registry order: background, then normal, muted, completed, border, accent,
-        // heading, and carried foregrounds.
+        // heading, and carryover-marker foregrounds.
         #[rustfmt::skip]
         let palettes = [
             ("gruvbox-material", ["#282828", "#d4be98", "#a89984", "#928374", "#5a524c", "#e78a4e", "#a9b665", "#d8a657"]),
@@ -567,7 +567,7 @@ mod tests {
                 border,
                 accent,
                 heading,
-                carried,
+                carryover_marker,
             ] = colors.map(|hex| hex.parse::<Color>().unwrap());
             let styles = Styles::resolve(*theme, &crate::config::StyleOverrides::default(), None);
 
@@ -578,7 +578,7 @@ mod tests {
                 (styles.border, border),
                 (styles.accent, accent),
                 (styles.heading, heading),
-                (styles.carried, carried),
+                (styles.carryover_marker, carryover_marker),
             ] {
                 assert!(matches!(color, Color::Rgb(..)), "{name}");
                 assert_eq!(role.fg, Some(color), "{name}");
@@ -629,7 +629,7 @@ mod tests {
 
             let defaults = Styles::resolve(theme, &config.styles, None);
 
-            let config: crate::config::Config = toml::from_str(&format!("theme='{name}'\n[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers=['italic']\n[styles.accent]\nfg='red'\nmodifiers=['bold']\n[styles.heading]\nfg='cyan'\n[styles.carried]\nmodifiers=['underlined']")).unwrap();
+            let config: crate::config::Config = toml::from_str(&format!("theme='{name}'\n[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers=['italic']\n[styles.accent]\nfg='red'\nmodifiers=['bold']\n[styles.heading]\nfg='cyan'\n[styles.carryover_marker]\nmodifiers=['underline']")).unwrap();
             let resolved = Styles::resolve(config.theme, &config.styles, Some(Color::Blue));
             assert_eq!(resolved.normal.add_modifier, Modifier::BOLD);
             assert_eq!(resolved.muted.fg, Some(Color::Green));
@@ -637,8 +637,8 @@ mod tests {
             assert_eq!(resolved.accent.fg, Some(Color::Blue));
             assert_eq!(resolved.accent.add_modifier, Modifier::BOLD);
             assert_eq!(resolved.heading.fg, Some(Color::Cyan));
-            assert_eq!(resolved.carried.fg, defaults.carried.fg);
-            assert_eq!(resolved.carried.add_modifier, Modifier::UNDERLINED);
+            assert_eq!(resolved.carryover_marker.fg, defaults.carryover_marker.fg);
+            assert_eq!(resolved.carryover_marker.add_modifier, Modifier::UNDERLINED);
 
             // The default theme inherits normal's modifiers; named themes clear them.
             if theme == BuiltinTheme::Default {
@@ -674,12 +674,12 @@ mod tests {
             inherited.border,
             inherited.accent,
             inherited.heading,
-            inherited.carried,
+            inherited.carryover_marker,
         ] {
             assert!(role.add_modifier.is_empty());
         }
 
-        let config: crate::config::Config = toml::from_str("theme='gruvbox-material'\n[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers=['italic']\n[styles.completed]\nmodifiers=['dim']\n[styles.border]\nmodifiers=[]\n[styles.accent]\nfg='blue'\nmodifiers=['bold']\n[styles.heading]\nbg='#102030'\nmodifiers=['italic']\n[styles.carried]\nfg='reset'").unwrap();
+        let config: crate::config::Config = toml::from_str("theme='gruvbox-material'\n[styles.normal]\nmodifiers=['bold']\n[styles.muted]\nfg='green'\nmodifiers=['italic']\n[styles.completed]\nmodifiers=['dim']\n[styles.border]\nmodifiers=[]\n[styles.accent]\nfg='blue'\nmodifiers=['bold']\n[styles.heading]\nbg='#102030'\nmodifiers=['italic']\n[styles.carryover_marker]\nfg='reset'").unwrap();
         let styles = Styles::resolve(config.theme, &config.styles, Some(Color::Red));
         assert_eq!(styles.normal.add_modifier, Modifier::BOLD);
         assert_eq!(styles.muted.fg, Some(Color::Green));
@@ -691,9 +691,9 @@ mod tests {
         assert_eq!(styles.heading.fg, Some(Color::Rgb(169, 182, 101)));
         assert_eq!(styles.heading.bg, Some(Color::Rgb(16, 32, 48)));
         assert_eq!(styles.heading.add_modifier, Modifier::ITALIC);
-        assert_eq!(styles.carried.fg, Some(Color::Reset));
-        assert_eq!(styles.carried.bg, Some(Color::Rgb(40, 40, 40)));
-        assert!(styles.carried.add_modifier.is_empty());
+        assert_eq!(styles.carryover_marker.fg, Some(Color::Reset));
+        assert_eq!(styles.carryover_marker.bg, Some(Color::Rgb(40, 40, 40)));
+        assert!(styles.carryover_marker.add_modifier.is_empty());
     }
 
     #[test]
@@ -728,7 +728,7 @@ mod tests {
                 border: muted,
                 accent: normal.fg(Color::LightYellow),
                 heading: normal.fg(Color::LightCyan),
-                carried: normal.fg(Color::Yellow),
+                carryover_marker: normal.fg(Color::Yellow),
             }
         );
         assert_eq!(normal.bg, None);

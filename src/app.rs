@@ -10,7 +10,7 @@ use ratatui::{layout::Rect, widgets::ListState};
 use uuid::Uuid;
 
 use crate::Result;
-use crate::config::{BorderStyle, MarkerStyle};
+use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
 use crate::model::{
     SectionView, Task, TaskStatus, invalid_section_name, section_body, section_tabs_of,
@@ -75,7 +75,7 @@ pub enum Mode {
         matched_query: String,
         original: NavigationCheckpoint,
     },
-    ConfirmClear,
+    ConfirmClearNonCarried,
     // The read-only keyboard reference opened with `?`. Drawing keeps `scroll` within
     // `max_scroll` (the offset that shows the last line) and records `page`, the content rows
     // that fit, so the scroll keys never depend on the terminal size directly.
@@ -95,7 +95,7 @@ impl Mode {
             | Mode::Searching { input, .. }
             | Mode::RenamingSection { input }
             | Mode::FuzzySection { input, .. } => Some(input),
-            Mode::Normal | Mode::ConfirmClear | Mode::Help { .. } => None,
+            Mode::Normal | Mode::ConfirmClearNonCarried | Mode::Help { .. } => None,
         }
     }
 }
@@ -207,7 +207,7 @@ pub struct App {
     pub status_message_duration: Duration,
     pub show_help_hint: bool,
     pub border_style: BorderStyle,
-    pub marker_style: MarkerStyle,
+    pub task_markers: TaskMarkerStyle,
     pub appearance: crate::styles::Appearance,
     pub status_message: Option<StatusMessage>,
     pub view: SectionView,
@@ -248,7 +248,7 @@ impl App {
             status_message_duration: crate::status_message::DEFAULT_DURATION,
             show_help_hint: true,
             border_style: BorderStyle::default(),
-            marker_style: MarkerStyle::default(),
+            task_markers: TaskMarkerStyle::default(),
             appearance: crate::styles::Appearance::default(),
             status_message: None,
             view: SectionView::All,
@@ -1157,8 +1157,9 @@ impl App {
         self.replace(tasks, Some(index), label, storage)
     }
 
-    fn clear_unmarked(&mut self, storage: &Storage) -> Result<()> {
-        // Only the current tab's unmarked tasks are cleared; other tabs are untouched.
+    fn clear_non_carried(&mut self, storage: &Storage) -> Result<()> {
+        // Pending and completed tasks in the current tab are cleared; carried tasks and other
+        // tabs are untouched.
         let survivors: Vec<usize> = (0..self.tasks.len())
             .filter(|&index| {
                 !self.is_visible(index) || self.tasks[index].status == TaskStatus::Carried
@@ -1564,8 +1565,8 @@ impl App {
                     self.handle_text_input_key(key, storage)?;
                     false
                 }
-                Mode::ConfirmClear => {
-                    self.handle_confirm_clear_key(key, storage)?;
+                Mode::ConfirmClearNonCarried => {
+                    self.handle_confirm_clear_non_carried_key(key, storage)?;
                     false
                 }
                 Mode::Help { .. } => {
@@ -1699,7 +1700,7 @@ impl App {
                         | KeyCode::End
                 )
             }
-            Mode::ConfirmClear => false,
+            Mode::ConfirmClearNonCarried => false,
             // Holding a scroll key keeps scrolling; `?` and Esc open or close once per press.
             Mode::Help { .. } => {
                 key.modifiers.is_empty()
@@ -1950,7 +1951,7 @@ impl App {
             Mode::Searching { .. }
             | Mode::FuzzySection { .. }
             | Mode::Normal
-            | Mode::ConfirmClear
+            | Mode::ConfirmClearNonCarried
             | Mode::Help { .. } => return Ok(()),
         }
 
@@ -1960,10 +1961,14 @@ impl App {
         Ok(())
     }
 
-    fn handle_confirm_clear_key(&mut self, key: KeyEvent, storage: &Storage) -> Result<()> {
+    fn handle_confirm_clear_non_carried_key(
+        &mut self,
+        key: KeyEvent,
+        storage: &Storage,
+    ) -> Result<()> {
         match key.code {
             KeyCode::Enter => {
-                self.clear_unmarked(storage)?;
+                self.clear_non_carried(storage)?;
                 self.mode = Mode::Normal;
             }
             KeyCode::Esc => self.mode = Mode::Normal,
@@ -2153,7 +2158,7 @@ impl App {
                     self.is_visible(index) && self.tasks[index].status != TaskStatus::Carried
                 }) =>
             {
-                self.mode = Mode::ConfirmClear
+                self.mode = Mode::ConfirmClearNonCarried
             }
             _ => {}
         }

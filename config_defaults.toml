@@ -10,9 +10,9 @@ theme = "default"
 [display]
 wrap = true                       # true or false
 border_style = "square"           # "square" or "rounded"
-marker_style = "unicode"          # "unicode" (›, [✓], [↪]) or "ascii" (>, [x], [>])
-status_messages = true            # true or false; errors are always shown
-status_message_duration_ms = 3560 # milliseconds, a positive integer
+task_markers = "unicode"          # "unicode" (›, [✓], [↪]) or "ascii" (>, [x], [>])
+status_messages = true            # true or false; false hides routine messages, never errors
+status_message_duration_ms = 3560 # milliseconds per message (errors too), a positive integer
 show_help_hint = true             # true or false
 
 [input]
@@ -23,11 +23,11 @@ mouse = true                      # true or false; false leaves the mouse to the
 #
 # Roles: normal (task text and background), muted (secondary text), completed (completed
 #     tasks), border, accent (focus, current tab, prompts), heading (section prefixes and
-#     reference titles), and carried (the arrow in a carried task's checkbox).
+#     reference titles), and carryover_marker (the arrow in a carried task's checkbox).
 # fg: an ANSI color name such as "lightyellow", "#RRGGBB", a palette index such as "208",
 #     or "reset" for the terminal foreground (not allowed for accent).
 # bg: "#RRGGBB" or "reset" only.
-# modifiers: any of "bold", "dim", "italic", "underlined", "crossed_out"; the list replaces
+# modifiers: any of "bold", "dim", "italic", "underline", "strikethrough"; the list replaces
 #     the inherited modifiers, and [] clears them.
 # See "Configuration" in README.md for how roles inherit from one another.
 
@@ -53,6 +53,6 @@ mouse = true                      # true or false; false leaves the mouse to the
 # fg = "#a9b665"
 # modifiers = []
 
-# [styles.carried]
+# [styles.carryover_marker]
 # fg = "#d8a657"
 # modifiers = []

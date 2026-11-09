@@ -79,7 +79,7 @@ struct Options {
     status_message_duration: std::time::Duration,
     show_help_hint: bool,
     border_style: config::BorderStyle,
-    marker_style: config::MarkerStyle,
+    task_markers: config::TaskMarkerStyle,
     appearance: styles::Appearance,
     mouse: bool,
 }
@@ -202,15 +202,20 @@ struct CliOptions {
     #[arg(long, value_name = "STYLE", help_heading = DISPLAY_HEADING)]
     border_style: Option<config::BorderStyle>,
 
-    /// Mark tasks with Unicode or ASCII symbols
+    /// Draw the focus marker and task checkboxes with Unicode or ASCII symbols
+    ///
+    /// Other symbols, such as borders, prompts, and search markers, are unaffected.
     #[arg(long, value_name = "STYLE", help_heading = DISPLAY_HEADING)]
-    marker_style: Option<config::MarkerStyle>,
+    task_markers: Option<config::TaskMarkerStyle>,
 
-    /// Show brief status messages on the border (default)
+    /// Show routine status messages, such as undo and clear confirmations (default)
+    ///
+    /// Errors and validation notices are shown either way. How long every message stays,
+    /// errors included, is set by status_message_duration_ms in config.toml.
     #[arg(long, overrides_with = "no_status_messages", help_heading = DISPLAY_HEADING)]
     status_messages: bool,
 
-    /// Hide brief status messages; errors are still shown
+    /// Hide routine status messages; errors and validation notices are still shown
     #[arg(long, overrides_with = "status_messages", help_heading = DISPLAY_HEADING)]
     no_status_messages: bool,
 
@@ -244,9 +249,9 @@ impl CliOptions {
                 .border_style
                 .or(config.display.border_style)
                 .unwrap_or_default(),
-            marker_style: self
-                .marker_style
-                .or(config.display.marker_style)
+            task_markers: self
+                .task_markers
+                .or(config.display.task_markers)
                 .unwrap_or_default(),
             appearance: styles::Appearance::new(
                 self.theme.unwrap_or(config.theme),
@@ -335,7 +340,7 @@ fn run() -> Result<()> {
     app.status_message_duration = options.status_message_duration;
     app.show_help_hint = options.show_help_hint;
     app.border_style = options.border_style;
-    app.marker_style = options.marker_style;
+    app.task_markers = options.task_markers;
     app.appearance = options.appearance;
 
     // Atomics let the panic hook clean up without locking state held by setup.

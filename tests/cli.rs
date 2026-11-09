@@ -73,9 +73,9 @@ fn invalid_arguments_fail_with_usage_before_startup() {
 }
 
 #[test]
-fn marker_styles_are_documented_and_combine_with_existing_options() {
+fn task_markers_are_documented_and_combine_with_existing_options() {
     let output = Command::new(env!("CARGO_BIN_EXE_sati"))
-        .args(["--marker-style", "ascii", "--help"])
+        .args(["--task-markers", "ascii", "--help"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -83,14 +83,14 @@ fn marker_styles_are_documented_and_combine_with_existing_options() {
     assert!(output.status.success());
 
     let help = String::from_utf8(output.stdout).unwrap();
-    assert!(help.contains("--marker-style") && help.contains("[x]") && help.contains("[>]"));
+    assert!(help.contains("--task-markers") && help.contains("[x]") && help.contains("[>]"));
     assert!(help.contains("--border-style") && help.contains("rounded"));
     assert!(help.contains("--status-messages") && help.contains("--no-status-messages"));
     assert!(help.contains("Input:") && help.contains("--mouse") && help.contains("--no-mouse"));
     assert!(help.contains("--data-dir <PATH>") && help.contains("tasks.json"));
 
     let output = Command::new(env!("CARGO_BIN_EXE_sati"))
-        .args(["--marker-style", "ascii", "--no-wrap", "--version"])
+        .args(["--task-markers", "ascii", "--no-wrap", "--version"])
         .stdin(Stdio::null())
         .output()
         .unwrap();

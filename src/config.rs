@@ -27,7 +27,7 @@ pub struct Config {
 pub struct Display {
     pub wrap: Option<bool>,
     pub border_style: Option<BorderStyle>,
-    pub marker_style: Option<MarkerStyle>,
+    pub task_markers: Option<TaskMarkerStyle>,
     pub status_messages: Option<bool>,
     // Total lifetime of a status message; serde rejects zero, negatives, and non-integers.
     pub status_message_duration_ms: Option<NonZeroU64>,
@@ -51,9 +51,10 @@ pub enum BorderStyle {
     Rounded,
 }
 
+// The symbols for the focus marker and task checkboxes; the rest of the interface is unaffected.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
-pub enum MarkerStyle {
+pub enum TaskMarkerStyle {
     /// ›, [ ], [✓], [↪] (default)
     #[default]
     Unicode,
@@ -71,7 +72,7 @@ pub struct StyleOverrides {
     #[serde(deserialize_with = "accent_style")]
     pub accent: StyleOverride,
     pub heading: StyleOverride,
-    pub carried: StyleOverride,
+    pub carryover_marker: StyleOverride,
 }
 
 #[derive(Debug, Default, PartialEq, Deserialize)]
@@ -118,9 +119,12 @@ fn modifiers<'de, D: Deserializer<'de>>(
             "bold" => Modifier::BOLD,
             "dim" => Modifier::DIM,
             "italic" => Modifier::ITALIC,
-            "underlined" => Modifier::UNDERLINED,
-            "crossed_out" => Modifier::CROSSED_OUT,
-            _ => return Err(D::Error::custom(format!("unknown modifier: {name}"))),
+            "underline" => Modifier::UNDERLINED,
+            "strikethrough" => Modifier::CROSSED_OUT,
+            _ => {
+                let expected = &["bold", "dim", "italic", "underline", "strikethrough"];
+                return Err(D::Error::unknown_variant(&name, expected));
+            }
         };
 
         if modifiers.contains(modifier) {
@@ -224,7 +228,7 @@ mod tests {
             "border",
             "accent",
             "heading",
-            "carried",
+            "carryover_marker",
         ] {
             for value in ["'#123456'", "'reset'"] {
                 assert!(toml::from_str::<Config>(&format!("[styles.{role}]\nbg={value}")).is_ok());
@@ -245,7 +249,7 @@ mod tests {
             "border",
             "accent",
             "heading",
-            "carried",
+            "carryover_marker",
         ] {
             for value in ["yellow", "lightyellow", "darkgray", "3", "#e78a4e"] {
                 assert!(
@@ -259,6 +263,8 @@ mod tests {
                 "modifiers='dim'",
                 "modifiers=[1]",
                 "modifiers=['unknown']",
+                "modifiers=['underlined']",
+                "modifiers=['crossed_out']",
                 "modifiers=['bold','bold']",
                 "bg='blue'",
                 "unknown=true",
@@ -276,18 +282,26 @@ mod tests {
             "completed",
             "border",
             "heading",
-            "carried",
+            "carryover_marker",
         ] {
             assert!(toml::from_str::<Config>(&format!("[styles.{role}]\nfg='reset'")).is_ok());
         }
 
         assert!(toml::from_str::<Config>("[styles.unknown]").is_err());
+        assert!(toml::from_str::<Config>("[styles.carried]").is_err());
+
+        let error = toml::from_str::<Config>("[styles.normal]\nmodifiers=['underlined']")
+            .unwrap_err()
+            .to_string();
+
+        let expected = "expected one of `bold`, `dim`, `italic`, `underline`, `strikethrough`";
+        assert!(error.contains(expected), "{error}");
     }
 
     #[test]
-    fn heading_and_carried_overrides_parse_like_the_other_roles() {
+    fn heading_and_carryover_marker_overrides_parse_like_the_other_roles() {
         let config: Config = toml::from_str(
-            "[styles.heading]\nfg = '#a9b665'\nmodifiers = []\n\n[styles.carried]\nfg = '#d8a657'\nmodifiers = []",
+            "[styles.heading]\nfg = '#a9b665'\nmodifiers = []\n\n[styles.carryover_marker]\nfg = '#d8a657'\nmodifiers = ['underline', 'strikethrough']",
         )
         .unwrap();
 
@@ -300,11 +314,11 @@ mod tests {
             }
         );
         assert_eq!(
-            config.styles.carried,
+            config.styles.carryover_marker,
             StyleOverride {
                 fg: Some(Color::Rgb(216, 166, 87)),
                 bg: None,
-                modifiers: Some(Modifier::empty()),
+                modifiers: Some(Modifier::UNDERLINED | Modifier::CROSSED_OUT),
             }
         );
         assert_eq!(config.styles.accent, StyleOverride::default());
@@ -336,22 +350,23 @@ mod tests {
     #[test]
     fn display_styles_parse_lowercase_names_and_reject_anything_else() {
         let config: Config =
-            toml::from_str("[display]\nborder_style = 'rounded'\nmarker_style = 'ascii'").unwrap();
+            toml::from_str("[display]\nborder_style = 'rounded'\ntask_markers = 'ascii'").unwrap();
 
         assert_eq!(config.display.border_style, Some(BorderStyle::Rounded));
-        assert_eq!(config.display.marker_style, Some(MarkerStyle::Ascii));
+        assert_eq!(config.display.task_markers, Some(TaskMarkerStyle::Ascii));
 
         let config: Config =
-            toml::from_str("[display]\nborder_style = 'square'\nmarker_style = 'unicode'").unwrap();
+            toml::from_str("[display]\nborder_style = 'square'\ntask_markers = 'unicode'").unwrap();
 
         assert_eq!(config.display.border_style, Some(BorderStyle::Square));
-        assert_eq!(config.display.marker_style, Some(MarkerStyle::Unicode));
+        assert_eq!(config.display.task_markers, Some(TaskMarkerStyle::Unicode));
 
         for text in [
             "[display]\nborder_style = 'round'",
             "[display]\nborder_style = 'Rounded'",
             "[display]\nborder_style = true",
-            "[display]\nmarker_style = 'emoji'",
+            "[display]\ntask_markers = 'emoji'",
+            "[display]\nmarker_style = 'ascii'",
             "[display]\nrounded_corners = true",
             "[display]\nascii_markers = true",
             "[display]\nnotifications = false",
