@@ -647,6 +647,41 @@ fn windows_backend_does_not_enable_kitty_protocol() {
 
 #[test]
 #[cfg(unix)]
+fn partial_mouse_enable_is_disabled_even_when_queuing_fails() {
+    let mut mouse = String::new();
+    EnableMouseCapture.write_ansi(&mut mouse).unwrap();
+    let mut disable_mouse = String::new();
+    DisableMouseCapture.write_ansi(&mut disable_mouse).unwrap();
+
+    // Each complete prefix can already enable reporting before a later write fails.
+    for written in ["\x1b[?1000h".len(), mouse.len() - 1] {
+        let modes = TerminalModes::default();
+        let mut output = FailOnce {
+            write_remaining: Some(written),
+            ..FailOnce::default()
+        };
+
+        assert_eq!(
+            modes
+                .enable_input(&mut output, true, true)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        assert_eq!(output.bytes, mouse.as_bytes()[..written]);
+
+        output.bytes.clear();
+        modes.restore(&mut output).unwrap();
+        assert_eq!(output.bytes, disable_mouse.as_bytes());
+
+        output.bytes.clear();
+        modes.restore(&mut output).unwrap();
+        assert!(output.bytes.is_empty());
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn partial_setup_and_cleanup_failures_do_not_leave_other_modes_enabled() {
     let mut mouse = String::new();
     EnableMouseCapture.write_ansi(&mut mouse).unwrap();

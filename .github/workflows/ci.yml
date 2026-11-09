@@ -32,7 +32,7 @@ jobs:
         run: cargo check --locked --all-targets
       - name: Test
         if: ${{ !cancelled() }}
-        # The three interactive scenarios run in the independent step below. Keep them in
+        # The interactive scenarios run in the independent step below. Keep them in
         # ordinary local `cargo test` runs, but avoid running them twice in CI.
         run: >-
           cargo test --locked --

@@ -509,6 +509,10 @@ impl TerminalModes {
     ) -> io::Result<()> {
         // With mouse capture off, `self.mouse` stays false, so cleanup never disables it either.
         if mouse {
+            // Unix sends several mode switches; a partial write can enable some of them.
+            // Windows uses one console API call, so keep its success-based tracking.
+            #[cfg(unix)]
+            self.mouse.store(true, Ordering::Relaxed);
             enable_optional(output, &self.mouse, EnableMouseCapture)?;
         }
 

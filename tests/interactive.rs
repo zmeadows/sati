@@ -5,6 +5,7 @@
 use std::{
     fs::{self, File},
     path::PathBuf,
+    process::ExitStatus,
     sync::{
         atomic::{AtomicUsize, Ordering},
         mpsc::{Receiver, RecvTimeoutError},
@@ -51,6 +52,31 @@ fn session_moves_the_selection_and_exits_cleanly() {
     session.send("jq");
     session.wait_for_successful_exit();
     session.verify_saved_checklist();
+}
+
+#[test]
+fn failed_task_save_restores_the_terminal() {
+    let mut session = Session::start("", &[]);
+    session.wait_for_first_frame();
+
+    // A directory at the destination makes atomic replacement fail on every platform,
+    // including when tests run with permission to write read-only files.
+    let data = session.directory.0.join("data");
+    let original = fs::read(data.join("tasks.json")).unwrap();
+    fs::rename(data.join("tasks.json"), data.join("original.json")).unwrap();
+    fs::create_dir(data.join("tasks.json")).unwrap();
+    session.send(" ");
+
+    if session.wait_for_exit().success() {
+        session.fail("a failed save should report failure after restoring the terminal");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    session.verify_error_cleanup();
+
+    assert_eq!(fs::read(data.join("original.json")).unwrap(), original);
+    let lock = File::open(data.join("tasks.lock")).unwrap();
+    assert!(lock.try_lock().is_ok(), "Sati should release tasks.lock");
 }
 
 fn task_document(selected: usize) -> serde_json::Value {
@@ -176,15 +202,19 @@ impl Session {
     }
 
     fn wait_for_successful_exit(&mut self) {
+        let status = self.wait_for_exit();
+        // Sati also reports terminal restoration failures through its exit status.
+        if !status.success() {
+            self.fail(&format!("Sati exited with {status}"));
+        }
+    }
+
+    fn wait_for_exit(&mut self) -> ExitStatus {
         let deadline = Instant::now() + TIMEOUT;
 
         loop {
             if let Some(status) = self.terminal.exit_status().unwrap() {
-                // Sati also reports terminal restoration failures through its exit status.
-                if !status.success() {
-                    self.fail(&format!("Sati exited with {status}"));
-                }
-                return;
+                return status;
             }
 
             if Instant::now() >= deadline {

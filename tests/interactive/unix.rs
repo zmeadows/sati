@@ -98,6 +98,34 @@ fn themed_session_with_mouse_and_keyboard_enhancement_restores_the_terminal() {
 }
 
 #[test]
+fn primary_attributes_without_keyboard_enhancement_restores_the_terminal() {
+    let output = run_session(
+        "",
+        &["--no-mouse"],
+        // A terminal can reject the kitty query simply by answering primary attributes.
+        &[(KEYBOARD_PROBE, "\x1b[?62c")],
+        "jq",
+    );
+
+    assert_counts(
+        &output,
+        &[
+            (KEYBOARD_PROBE, 1),
+            (PUSH_KEYBOARD, 0),
+            (POP_KEYBOARD, 0),
+            (ENABLE_PASTE, 1),
+            (DISABLE_PASTE, 1),
+            (ENABLE_MOUSE, 0),
+            (DISABLE_MOUSE, 0),
+        ],
+    );
+    assert_ends_with(
+        &output,
+        &[DISABLE_PASTE, SHOW_CURSOR, LEAVE_ALTERNATE_SCREEN],
+    );
+}
+
+#[test]
 fn plain_session_without_mouse_or_keyboard_enhancement_restores_the_terminal() {
     let output = run_session(
         "",
@@ -276,6 +304,29 @@ impl Drop for Terminal {
 }
 
 impl Session {
+    pub(super) fn verify_error_cleanup(&mut self) {
+        assert_eq!(
+            self.terminal.current_settings(),
+            self.terminal.initial_settings,
+            "Sati should restore raw mode after a save error"
+        );
+        self.read_remaining_output();
+        assert_in_order(
+            &self.output,
+            &[
+                ENABLE_MOUSE,
+                ENABLE_PASTE,
+                TASKS[0].1,
+                DISABLE_PASTE,
+                DISABLE_MOUSE,
+                SHOW_CURSOR,
+                LEAVE_ALTERNATE_SCREEN,
+                "sati: could not save",
+            ],
+        );
+        assert!(find(&self.output, "could not restore terminal", 0).is_none());
+    }
+
     // Closes the test's slave descriptor, then collects output until the PTY reports its end,
     // which it does only after everything Sati wrote. On macOS, that end may already have come.
     fn read_remaining_output(&mut self) {
