@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/zmeadows/sati/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zmeadows/sati/actions/workflows/ci.yml?query=branch%3Amain) [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **sati** (Pāli) — mindfulness, recollection; the act of remembering or keeping something in mind.
-
 A small, persistent checklist for the terminal on Linux, macOS, and Windows.
+
+> **sati** (Pāli) — mindfulness, recollection; the act of remembering or keeping something in mind.
 
 <p align="center">
   <img src="assets/demo/demo.gif" alt="sati demo: adding, checking off, and organizing tasks in the terminal">

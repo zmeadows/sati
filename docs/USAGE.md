@@ -46,6 +46,12 @@ alias work='sati --data-dir ~/checklists/work'
 sati export --data-dir ~/checklists/work > work.md
 ```
 
+### Backup and restore
+
+`tasks.json` is the whole checklist, so to back one up, copy that file, whether it is in the default directory or a `--data-dir` directory. To restore, quit sati first, then put the copy back as `tasks.json` in the same directory. While sati is open, it would save over the restored file on your next change or when it quits.
+
+`sati export` is for reading, not backup: it drops carryover marks and tab order, and sati can't import it. A backup written by a newer sati may not open in an older one.
+
 ## Export and clipboard
 
 `sati export` writes Markdown to stdout and errors to stderr. It only reads `tasks.json`, so it is safe to run while sati is open. Completed tasks become `- [x]` items; pending and carried tasks become `- [ ]`. When exporting a section, its tasks are written without their prefix.
