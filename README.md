@@ -221,6 +221,11 @@ adds nothing.
 
 **Pasting on Windows:** Sati's current Crossterm Windows input backend does not report bracketed-paste events, so pasted text can arrive as ordinary keystrokes. Open a prompt (`a`, `e`, or `/`) before pasting; in the checklist itself, pasted letters act as shortcuts. A line break acts as `Enter`, potentially submitting the prompt and letting subsequent text execute shortcuts; a tab acts as `Tab`. Paste one line at a time. Windows Terminal asks before pasting multiple lines by default; keep that warning on. `u` or `Ctrl+Z` undoes accidental changes only while sati stays open: if a pasted `q` exits sati, its undo history is lost.
 
+Crossterm 0.29.0 may also silently drop certain Unicode characters on Windows,
+particularly emoji entered through the Windows emoji panel (`Win+.`); see
+[upstream issue #1072](https://github.com/crossterm-rs/crossterm/issues/1072).
+This upstream limitation has not been reproduced in Sati through native Windows testing.
+
 ## Options
 
 | Flag | Effect |
