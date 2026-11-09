@@ -37,6 +37,11 @@ pub enum BuiltinTheme {
     ModusOperandi,
     EfSummer,
     Monokai,
+    ModusVivendi,
+    ModusOperandiDeuteranopia,
+    ModusVivendiDeuteranopia,
+    ModusOperandiTritanopia,
+    ModusVivendiTritanopia,
 }
 
 impl FromStr for BuiltinTheme {
@@ -91,6 +96,11 @@ impl BuiltinTheme {
         (Self::ModusOperandi, "modus-operandi", "Modus Operandi"),
         (Self::EfSummer, "ef-summer", "Ef Summer"),
         (Self::Monokai, "monokai", "Monokai"),
+        (Self::ModusVivendi, "modus-vivendi", "Modus Vivendi"),
+        (Self::ModusOperandiDeuteranopia, "modus-operandi-deuteranopia", "Modus Operandi Deuteranopia"),
+        (Self::ModusVivendiDeuteranopia, "modus-vivendi-deuteranopia", "Modus Vivendi Deuteranopia"),
+        (Self::ModusOperandiTritanopia, "modus-operandi-tritanopia", "Modus Operandi Tritanopia"),
+        (Self::ModusVivendiTritanopia, "modus-vivendi-tritanopia", "Modus Vivendi Tritanopia"),
     ];
 
     pub fn id(self) -> &'static str {
@@ -427,6 +437,66 @@ impl BuiltinTheme {
                     carried: plain.fg(Color::Rgb(253, 151, 31)),
                 }
             }
+            Self::ModusVivendi => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(255, 255, 255)).bg(Color::Rgb(0, 0, 0)),
+                    muted: plain.fg(Color::Rgb(152, 152, 152)),
+                    completed: plain.fg(Color::Rgb(152, 152, 152)),
+                    border: plain.fg(Color::Rgb(100, 100, 100)),
+                    accent: plain.fg(Color::Rgb(47, 175, 255)),
+                    heading: plain.fg(Color::Rgb(254, 172, 208)),
+                    carried: plain.fg(Color::Rgb(208, 188, 0)),
+                }
+            }
+            Self::ModusOperandiDeuteranopia => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(0, 0, 0)).bg(Color::Rgb(255, 255, 255)),
+                    muted: plain.fg(Color::Rgb(89, 89, 89)),
+                    completed: plain.fg(Color::Rgb(89, 89, 89)),
+                    border: plain.fg(Color::Rgb(89, 89, 89)),
+                    accent: plain.fg(Color::Rgb(0, 49, 169)),
+                    heading: plain.fg(Color::Rgb(83, 26, 182)),
+                    carried: plain.fg(Color::Rgb(105, 85, 0)),
+                }
+            }
+            Self::ModusVivendiDeuteranopia => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(255, 255, 255)).bg(Color::Rgb(0, 0, 0)),
+                    muted: plain.fg(Color::Rgb(152, 152, 152)),
+                    completed: plain.fg(Color::Rgb(152, 152, 152)),
+                    border: plain.fg(Color::Rgb(100, 100, 100)),
+                    accent: plain.fg(Color::Rgb(47, 175, 255)),
+                    heading: plain.fg(Color::Rgb(182, 160, 255)),
+                    carried: plain.fg(Color::Rgb(202, 191, 0)),
+                }
+            }
+            Self::ModusOperandiTritanopia => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(0, 0, 0)).bg(Color::Rgb(255, 255, 255)),
+                    muted: plain.fg(Color::Rgb(89, 89, 89)),
+                    completed: plain.fg(Color::Rgb(89, 89, 89)),
+                    border: plain.fg(Color::Rgb(89, 89, 89)),
+                    accent: plain.fg(Color::Rgb(0, 94, 139)),
+                    heading: plain.fg(Color::Rgb(166, 0, 0)),
+                    carried: plain.fg(Color::Rgb(160, 19, 47)),
+                }
+            }
+            Self::ModusVivendiTritanopia => {
+                let plain = Style::default().remove_modifier(Modifier::all());
+                Styles {
+                    normal: plain.fg(Color::Rgb(255, 255, 255)).bg(Color::Rgb(0, 0, 0)),
+                    muted: plain.fg(Color::Rgb(152, 152, 152)),
+                    completed: plain.fg(Color::Rgb(152, 152, 152)),
+                    border: plain.fg(Color::Rgb(100, 100, 100)),
+                    accent: plain.fg(Color::Rgb(0, 211, 208)),
+                    heading: plain.fg(Color::Rgb(255, 95, 89)),
+                    carried: plain.fg(Color::Rgb(255, 127, 134)),
+                }
+            }
         }
     }
 }
@@ -485,6 +555,11 @@ mod tests {
             ("modus-operandi", ["#ffffff", "#000000", "#595959", "#595959", "#9f9f9f", "#0031a9", "#721045", "#6f5500"]),
             ("ef-summer", ["#fff2f3", "#4f4073", "#786e74", "#786e74", "#c6bbc6", "#cb1aaa", "#0f7b8f", "#a45f22"]),
             ("monokai", ["#272822", "#f8f8f2", "#90908a", "#75715e", "#64645e", "#f92672", "#66d9ef", "#fd971f"]),
+            ("modus-vivendi", ["#000000", "#ffffff", "#989898", "#989898", "#646464", "#2fafff", "#feacd0", "#d0bc00"]),
+            ("modus-operandi-deuteranopia", ["#ffffff", "#000000", "#595959", "#595959", "#595959", "#0031a9", "#531ab6", "#695500"]),
+            ("modus-vivendi-deuteranopia", ["#000000", "#ffffff", "#989898", "#989898", "#646464", "#2fafff", "#b6a0ff", "#cabf00"]),
+            ("modus-operandi-tritanopia", ["#ffffff", "#000000", "#595959", "#595959", "#595959", "#005e8b", "#a60000", "#a0132f"]),
+            ("modus-vivendi-tritanopia", ["#000000", "#ffffff", "#989898", "#989898", "#646464", "#00d3d0", "#ff5f59", "#ff7f86"]),
         ];
 
         assert_eq!(palettes.len(), BuiltinTheme::ALL.len() - 1);
@@ -536,16 +611,23 @@ mod tests {
             assert_eq!(theme.cycle(false).cycle(true), theme);
         }
 
-        assert_eq!(BuiltinTheme::Default.cycle(false), BuiltinTheme::Monokai);
+        assert_eq!(
+            BuiltinTheme::Default.cycle(false),
+            BuiltinTheme::ModusVivendiTritanopia
+        );
+        assert_eq!(
+            BuiltinTheme::Monokai.cycle(true),
+            BuiltinTheme::ModusVivendi
+        );
     }
 
     #[test]
     fn all_available_themes_parse_and_preserve_overrides_and_modifier_resets() {
         let names: Vec<_> = BuiltinTheme::ALL.iter().map(|(_, name, _)| *name).collect();
-        assert_eq!(names.len(), 25);
+        assert_eq!(names.len(), 30);
         assert_eq!(
             names.iter().collect::<std::collections::HashSet<_>>().len(),
-            25
+            30
         );
 
         for name in names {

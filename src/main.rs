@@ -792,7 +792,17 @@ mod tests {
                 "monokai",
                 None,
                 Monokai,
-                [('t', Default), ('T', Monokai), ('t', Default)],
+                [('t', ModusVivendi), ('T', Monokai), ('t', ModusVivendi)],
+            ),
+            (
+                "modus-vivendi-tritanopia",
+                None,
+                ModusVivendiTritanopia,
+                [
+                    ('t', Default),
+                    ('T', ModusVivendiTritanopia),
+                    ('t', Default),
+                ],
             ),
             (
                 "solarized-dark",

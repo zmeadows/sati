@@ -355,6 +355,22 @@ terminal background, if Sati changed it, on exit or when switching to a theme wi
 effective background. It cannot recover a temporary OSC override that existed before
 Sati started.
 
+### Accessibility-oriented themes
+
+Five more themes join `modus-operandi` with palettes derived from the GNU Emacs Modus
+themes and adapted to sati's seven style roles:
+
+- `modus-operandi` and `modus-vivendi`: high-contrast light and dark appearances.
+- `modus-operandi-deuteranopia` and `modus-vivendi-deuteranopia`: designed with red-green
+  color-vision deficiencies in mind.
+- `modus-operandi-tritanopia` and `modus-vivendi-tritanopia`: designed with blue-yellow
+  color-vision deficiencies in mind.
+
+Their text, accent, heading, and carried colors reach at least 7:1 contrast against the
+background. That helps many readers but can't suit everyone; completed tasks, focus, and
+search matches also keep their non-color cues (strikethrough, the `›` marker, and reversed
+highlighting).
+
 ## Export
 
 Export Markdown to stdout, even while the TUI is running:
