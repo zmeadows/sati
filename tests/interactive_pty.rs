@@ -475,7 +475,9 @@ fn terminal_settings(slave: &OwnedFd) -> TerminalSettings {
         input: termios.input_modes,
         output: termios.output_modes,
         control: termios.control_modes,
-        local: termios.local_modes,
+        // PENDIN and FLUSHO are kernel state kept among the flags, not settings. macOS sets
+        // PENDIN whenever canonical mode is turned back on, as restoring the terminal does.
+        local: termios.local_modes - (LocalModes::PENDIN | LocalModes::FLUSHO),
     }
 }
 
