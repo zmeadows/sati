@@ -650,7 +650,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
 }
 
 fn update_task_viewport(app: &mut App, layout: &TaskLayout, height: u16) -> Range<usize> {
-    app.viewport.viewport_height = height;
+    app.viewport.height = height;
 
     if layout.lines.is_empty() {
         app.viewport.scroll = 0;

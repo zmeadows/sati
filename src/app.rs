@@ -169,7 +169,7 @@ pub(crate) struct ViewportState {
     // The task on each list row, for paging and clicks; an inline add row has none.
     pub(crate) row_tasks: Vec<Option<usize>>,
     // The list rows that fit, for paging.
-    pub(crate) viewport_height: u16,
+    pub(crate) height: u16,
     // Clickable tab regions.
     pub(crate) tab_targets: Vec<(Rect, SectionView)>,
     // The first visible tab when they overflow; kept between draws so tabs don't slide.
@@ -239,7 +239,7 @@ impl App {
                 scroll: 0,
                 reveal_selection: true,
                 row_tasks: Vec::new(),
-                viewport_height: 0,
+                height: 0,
                 tab_targets: Vec::new(),
                 tab_scroll: 0,
             },
@@ -1628,7 +1628,7 @@ impl App {
         self.completion = None;
 
         if self.mode == Mode::Normal {
-            let half_page = usize::from(self.viewport.viewport_height / 2);
+            let half_page = usize::from(self.viewport.height / 2);
 
             // Alt+B/F switch sections the way they move between words in text inputs, where
             // Ctrl+D/U delete text instead of moving half a page.
@@ -1990,8 +1990,8 @@ impl App {
                     None,
                 );
             }
-            KeyCode::PageUp => self.page(false, usize::from(self.viewport.viewport_height)),
-            KeyCode::PageDown => self.page(true, usize::from(self.viewport.viewport_height)),
+            KeyCode::PageUp => self.page(false, usize::from(self.viewport.height)),
+            KeyCode::PageDown => self.page(true, usize::from(self.viewport.height)),
             KeyCode::Char('g' | 'G') | KeyCode::Home | KeyCode::End if !self.tasks.is_empty() => {
                 let first = key.code == KeyCode::Home
                     || (key.code == KeyCode::Char('g')

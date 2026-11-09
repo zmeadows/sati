@@ -3988,7 +3988,7 @@ fn page_keys_are_safe_at_boundaries_and_in_input_modes() {
     for count in [0, 1, 3] {
         let mut app = app_with_tasks(count);
         app.viewport.row_tasks = (0..count).map(Some).collect();
-        app.viewport.viewport_height = 2;
+        app.viewport.height = 2;
         let original = app.tasks.clone();
 
         for code in [
@@ -6010,7 +6010,7 @@ fn emacs_aliases_match_their_normal_mode_keys() {
             app.show_section(SectionView::Named("work".into()));
             app.list.select(Some(1));
             app.viewport.row_tasks = (0..5).map(Some).collect();
-            app.viewport.viewport_height = 2;
+            app.viewport.height = 2;
         }
 
         let [aliased, plain] = &mut apps;
@@ -6044,7 +6044,7 @@ fn emacs_aliases_leave_text_inputs_unchanged() {
     for start in [KeyCode::Char('a'), KeyCode::Char('e'), KeyCode::Char('/')] {
         let mut app = app_with_tasks(3);
         app.viewport.row_tasks = (0..3).map(Some).collect();
-        app.viewport.viewport_height = 1;
+        app.viewport.height = 1;
         press(&mut app, &fixture, start);
         let selected = app.list.selected();
         let text = app.search_query().map(str::to_owned);
@@ -6073,7 +6073,7 @@ fn page_aliases_repeat_while_mode_changing_aliases_fire_once() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(6);
     app.viewport.row_tasks = (0..6).map(Some).collect();
-    app.viewport.viewport_height = 2;
+    app.viewport.height = 2;
     app.list.select(Some(0));
 
     repeat(
@@ -6149,7 +6149,7 @@ fn ctrl_d_and_ctrl_u_move_half_a_page_and_stop_at_the_ends() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(10);
     app.viewport.row_tasks = (0..10).map(Some).collect();
-    app.viewport.viewport_height = 4;
+    app.viewport.height = 4;
     app.list.select(Some(0));
     let original = app.tasks.clone();
 
@@ -6185,7 +6185,7 @@ fn half_pages_move_at_least_one_row_in_tiny_or_undrawn_viewports() {
     for height in [0, 1] {
         let mut app = app_with_tasks(3);
         app.viewport.row_tasks = (0..3).map(Some).collect();
-        app.viewport.viewport_height = height;
+        app.viewport.height = height;
         app.list.select(Some(0));
 
         press(
@@ -6217,7 +6217,7 @@ fn held_ctrl_d_and_ctrl_u_keep_moving() {
     let fixture = Fixture::new();
     let mut app = app_with_tasks(6);
     app.viewport.row_tasks = (0..6).map(Some).collect();
-    app.viewport.viewport_height = 4;
+    app.viewport.height = 4;
     app.list.select(Some(0));
 
     repeat(

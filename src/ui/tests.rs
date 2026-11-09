@@ -2000,8 +2000,8 @@ fn search_spanning_wrapped_rows_preserves_mapping_and_reveals_results_after_resi
         render(&mut terminal, &mut app);
         let selected = app.list.selected().unwrap();
 
-        if app.viewport.viewport_height > 0 {
-            let end = (app.viewport.scroll + usize::from(app.viewport.viewport_height))
+        if app.viewport.height > 0 {
+            let end = (app.viewport.scroll + usize::from(app.viewport.height))
                 .min(app.viewport.row_tasks.len());
             assert!(app.viewport.row_tasks[app.viewport.scroll..end].contains(&Some(selected)));
         }
@@ -2309,7 +2309,7 @@ fn page_navigation_uses_current_viewport_wrapping_and_resize() {
 
     // Page size excludes the borders.
     let mut rows = render(&mut terminal, &mut app);
-    assert_eq!(app.viewport.viewport_height, rows.height);
+    assert_eq!(app.viewport.height, rows.height);
     assert_eq!(rows.height, 10);
 
     let original = app.tasks.clone();
@@ -2323,7 +2323,7 @@ fn page_navigation_uses_current_viewport_wrapping_and_resize() {
         rows = render(&mut terminal, app);
     };
 
-    let height = usize::from(app.viewport.viewport_height);
+    let height = usize::from(app.viewport.height);
     press(&mut app, KeyCode::PageDown, KeyEventKind::Press);
     assert_eq!(app.list.selected(), Some(height));
     assert_eq!(app.viewport.scroll, height);
@@ -2393,7 +2393,7 @@ fn page_navigation_uses_current_viewport_wrapping_and_resize() {
         app.viewport.scroll = 0;
         terminal.backend_mut().resize(width, height);
         render(&mut terminal, &mut app);
-        let expected = usize::from(app.viewport.viewport_height.max(1));
+        let expected = usize::from(app.viewport.height.max(1));
         app.key(page, &fixture.storage).unwrap();
 
         // Only task 1 wraps: with wrapping off, or a one-cell width, each task has one row.
