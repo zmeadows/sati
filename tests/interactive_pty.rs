@@ -493,6 +493,14 @@ fn spawn_sati(root: &Path, arguments: &[&str], slave: &OwnedFd) -> Child {
         .stdout(Stdio::from(slave.try_clone().unwrap()))
         .stderr(Stdio::from(slave.try_clone().unwrap()));
 
+    // Coverage tools such as cargo-llvm-cov collect subprocess profiles through this variable.
+    // Sati runs in the temporary directory, so a relative path is anchored to ours; joining
+    // keeps an absolute path as is, and LLVM still expands patterns such as %p and %m.
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        let profile = std::env::current_dir().unwrap().join(profile);
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
+
     // SAFETY: the closure runs between fork and exec, where only async-signal-safe operations
     // are allowed. It makes two system calls and allocates nothing.
     unsafe {
