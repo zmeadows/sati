@@ -16,6 +16,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # The interactive tests bound their own waits; this catches anything else that hangs.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -35,6 +37,16 @@ jobs:
       - name: Verify Windows process locking
         if: ${{ !cancelled() && matrix.os == 'windows-latest' }}
         run: cargo test --locked --test locking
+      # Like the locking check, independent of other test failures. Each platform's harness
+      # compiles to no tests elsewhere, so an empty list fails rather than passing vacuously.
+      - name: Verify interactive terminal session
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then test=interactive_conpty; else test=interactive_pty; fi
+          cargo test --locked --test "$test" -- --list | grep -q ': test$' \
+            || { echo "::error::no $test tests were built for $RUNNER_OS"; exit 1; }
+          cargo test --locked --test "$test"
       - name: Build release
         if: ${{ !cancelled() }}
         run: cargo build --release --locked

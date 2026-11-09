@@ -3,8 +3,9 @@
 //!
 //! The harness never involves the invoking terminal or real Sati data. Sati runs in its own
 //! session with the PTY as its controlling terminal, a cleared environment, and temporary
-//! configuration and data directories. Linux only: PTY and session handling differ elsewhere.
-#![cfg(target_os = "linux")]
+//! configuration and data directories. Linux and macOS only; Windows has no PTY, so
+//! tests/interactive_conpty.rs covers it with a pseudoconsole instead.
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::{
     fs::{self, File},
@@ -22,7 +23,6 @@ use std::{
 
 use rustix::{
     fs::{Mode, OFlags},
-    pty::OpenptFlags,
     termios::{ControlModes, InputModes, LocalModes, OutputModes, Termios, Winsize},
 };
 
@@ -286,7 +286,7 @@ struct Session {
     child: Child,
     master: File,
     // The test's own slave descriptor keeps terminal settings observable after Sati exits.
-    // Linux reports the end of output only once every slave descriptor is closed.
+    // The PTY reports the end of output only once every slave descriptor is closed.
     slave: Option<OwnedFd>,
     initial_settings: TerminalSettings,
     chunks: Receiver<Vec<u8>>,
@@ -303,24 +303,26 @@ impl Session {
         )));
         let root = &directory.0;
         fs::create_dir(root).unwrap();
-        fs::create_dir_all(root.join("config/sati")).unwrap();
-        fs::write(root.join("config/sati/config.toml"), config).unwrap();
+        // Where Sati looks for config.toml with the environment that `spawn_sati` sets.
+        let config_directory = if cfg!(target_os = "macos") {
+            root.join("home/Library/Application Support/sati")
+        } else {
+            root.join("config/sati")
+        };
+        fs::create_dir_all(&config_directory).unwrap();
+        fs::write(config_directory.join("config.toml"), config).unwrap();
         fs::create_dir(root.join("data")).unwrap();
         fs::write(root.join("data/tasks.json"), task_document(0).to_string()).unwrap();
 
         // Every descriptor is close-on-exec, so concurrently spawned processes never keep the
-        // PTY open; Sati receives only the standard streams below.
-        let cloexec = OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC;
-        let master = rustix::pty::openpt(cloexec).unwrap();
+        // PTY open; Sati receives only the standard streams below. Opening /dev/ptmx is what
+        // `posix_openpt` does on both platforms, but only `open` takes O_CLOEXEC on macOS.
+        let cloexec = OFlags::RDWR | OFlags::NOCTTY | OFlags::CLOEXEC;
+        let master = rustix::fs::open("/dev/ptmx", cloexec, Mode::empty()).unwrap();
         rustix::pty::grantpt(&master).unwrap();
         rustix::pty::unlockpt(&master).unwrap();
         let slave_path = rustix::pty::ptsname(&master, Vec::new()).unwrap();
-        let slave = rustix::fs::open(
-            slave_path.as_c_str(),
-            OFlags::RDWR | OFlags::NOCTTY | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .unwrap();
+        let slave = rustix::fs::open(slave_path.as_c_str(), cloexec, Mode::empty()).unwrap();
         let size = Winsize {
             ws_row: ROWS,
             ws_col: COLUMNS,
@@ -415,7 +417,8 @@ impl Session {
     }
 
     // Closes the test's slave descriptor, then collects output until the PTY reports its end.
-    // Linux delivers everything Sati wrote before it reports EIO.
+    // Everything Sati wrote is delivered first: Linux keeps it readable until reporting EIO,
+    // and macOS waits for it to be read before completing the last close of the slave.
     fn read_remaining_output(&mut self) {
         drop(self.slave.take());
         let deadline = Instant::now() + TIMEOUT;
@@ -531,7 +534,7 @@ fn read_continuously(mut master: File, chunks: mpsc::Sender<Vec<u8>>) {
                     return;
                 }
             }
-            // Linux reports EIO, rather than end of file, once no slave descriptor is open.
+            // Linux reports EIO, and macOS end of file, once no slave descriptor is open.
             Err(error) if error.raw_os_error() == Some(rustix::io::Errno::IO.raw_os_error()) => {
                 return;
             }
