@@ -6731,3 +6731,235 @@ fn mouse_clicks_are_ignored_and_the_wheel_scrolls_while_the_reference_is_open() 
     assert_eq!(app.viewport.scroll, 0);
     assert!(!fixture.task_path().exists());
 }
+
+fn apostrophe(app: &mut App, fixture: &Fixture) {
+    press(app, fixture, KeyCode::Char('\''));
+}
+
+#[test]
+fn apostrophe_toggles_between_the_tab_and_task_before_the_last_jump() {
+    let fixture = Fixture::new();
+    let mut app = picker_app();
+    app.list.select(Some(2));
+
+    press(&mut app, &fixture, KeyCode::Char('l'));
+    assert_eq!(app.view, SectionView::Unsectioned);
+    assert_eq!(app.list.selected(), Some(3));
+
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.view, SectionView::All);
+    assert_eq!(app.list.selected(), Some(2));
+
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.view, SectionView::Unsectioned);
+    assert_eq!(app.list.selected(), Some(3));
+
+    // Each switch remembers the tab it left, so stepping A, B, C returns to B.
+    press(&mut app, &fixture, KeyCode::Char('l'));
+    press(&mut app, &fixture, KeyCode::Tab);
+    assert_eq!(app.view, named("wishlist"));
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.view, named("home"));
+    assert_eq!(app.list.selected(), Some(1));
+
+    // A counted switch is one jump; so is a numbered one.
+    press(&mut app, &fixture, KeyCode::Char('2'));
+    press(&mut app, &fixture, KeyCode::Char('l'));
+    assert_eq!(app.view, named("work"));
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.view, named("home"));
+
+    press(&mut app, &fixture, KeyCode::Char('s'));
+    press(&mut app, &fixture, KeyCode::Char('1'));
+    assert_eq!(app.view, SectionView::All);
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.view, named("home"));
+
+    let alt_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT);
+    press(&mut app, &fixture, alt_f);
+    assert_eq!(app.view, named("wishlist"));
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.view, named("home"));
+
+    // Navigation only: nothing is saved and nothing enters undo history.
+    assert!(!app.can_undo());
+    assert!(!fixture.task_path().exists());
+}
+
+#[test]
+fn apostrophe_without_a_previous_position_reports_it_and_stays() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["a", "b", "c"]);
+
+    // Neither a tab switch without tabs nor `g` on the first task moves anywhere.
+    press(&mut app, &fixture, KeyCode::Char('l'));
+    press(&mut app, &fixture, KeyCode::Char('g'));
+    apostrophe(&mut app, &fixture);
+
+    assert_eq!(notice(&app), Some("No previous position"));
+    assert_eq!(app.list.selected(), Some(0));
+}
+
+#[test]
+fn first_and_last_task_jumps_are_remembered_but_ordinary_moves_are_not() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["a", "b", "c", "d"]);
+    app.list.select(Some(1));
+
+    press(&mut app, &fixture, KeyCode::Char('G'));
+    assert_eq!(app.list.selected(), Some(3));
+    press(&mut app, &fixture, KeyCode::Char('k'));
+
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.list.selected(), Some(1));
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.list.selected(), Some(2));
+
+    press(&mut app, &fixture, KeyCode::Home);
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.list.selected(), Some(2));
+
+    // Holding the key does not flick back and forth.
+    repeat(&mut app, &fixture, KeyCode::Char('\''), KeyModifiers::NONE);
+    assert_eq!(app.list.selected(), Some(2));
+}
+
+#[test]
+fn accepted_searches_are_remembered_and_cancelled_ones_are_not() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["a", "b", "target"]);
+
+    press(&mut app, &fixture, KeyCode::Char('/'));
+    app.paste("b");
+    press(&mut app, &fixture, KeyCode::Esc);
+    apostrophe(&mut app, &fixture);
+    assert_eq!(notice(&app), Some("No previous position"));
+
+    press(&mut app, &fixture, KeyCode::Char('/'));
+    app.paste("target");
+    press(&mut app, &fixture, KeyCode::Enter);
+    assert_eq!(app.list.selected(), Some(2));
+
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.list.selected(), Some(0));
+}
+
+#[test]
+fn the_section_picker_remembers_where_it_opened_only_when_accepted() {
+    let fixture = Fixture::new();
+    let mut app = picker_app();
+    app.list.select(Some(2));
+
+    press(&mut app, &fixture, KeyCode::Char('`'));
+    app.paste("wo");
+    press(&mut app, &fixture, KeyCode::Esc);
+    apostrophe(&mut app, &fixture);
+    assert_eq!(notice(&app), Some("No previous position"));
+
+    // Previews along the way are not jumps; the tab the picker opened on is.
+    press(&mut app, &fixture, KeyCode::Char('`'));
+    press(&mut app, &fixture, KeyCode::Tab);
+    press(&mut app, &fixture, KeyCode::Tab);
+    app.paste("wo");
+    press(&mut app, &fixture, KeyCode::Enter);
+    assert_eq!(app.view, named("work"));
+
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.view, SectionView::All);
+    assert_eq!(app.list.selected(), Some(2));
+}
+
+#[test]
+fn clicking_a_tab_is_remembered() {
+    let fixture = Fixture::new();
+    let mut app = picker_app();
+    app.viewport.tab_targets = vec![(Rect::new(0, 0, 6, 1), named("work"))];
+
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 2,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.mouse(click, Rect::new(0, 1, 20, 5), &fixture.storage)
+        .unwrap();
+    assert_eq!(app.view, named("work"));
+
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.view, SectionView::All);
+}
+
+#[test]
+fn apostrophe_opens_the_tab_without_a_missing_task_and_reports_a_missing_tab() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["Work: a", "Work: b", "Home: c", "plain"]);
+
+    // Leave Work from task b, then delete b from [*].
+    press(&mut app, &fixture, KeyCode::Char('s'));
+    press(&mut app, &fixture, KeyCode::Char('4'));
+    assert_eq!(app.view, named("work"));
+    press(&mut app, &fixture, KeyCode::Char('j'));
+    press(&mut app, &fixture, KeyCode::Char('s'));
+    press(&mut app, &fixture, KeyCode::Char('1'));
+    assert_eq!(app.list.selected(), Some(1));
+    press(&mut app, &fixture, KeyCode::Char('d'));
+    assert_eq!(app.view, SectionView::All);
+
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.view, named("work"));
+    assert_eq!(app.list.selected(), Some(0));
+
+    // Leave Home from [*], then delete its only task.
+    press(&mut app, &fixture, KeyCode::Char('s'));
+    press(&mut app, &fixture, KeyCode::Char('3'));
+    assert_eq!(app.view, named("home"));
+    press(&mut app, &fixture, KeyCode::Char('s'));
+    press(&mut app, &fixture, KeyCode::Char('1'));
+    press(&mut app, &fixture, KeyCode::Char('d'));
+    assert_eq!(texts(&app), ["Work: a", "plain"]);
+
+    apostrophe(&mut app, &fixture);
+    assert_eq!(notice(&app), Some("Previous section no longer exists"));
+    assert_eq!(app.view, SectionView::All);
+
+    apostrophe(&mut app, &fixture);
+    assert_eq!(notice(&app), Some("No previous position"));
+}
+
+#[test]
+fn changes_and_undo_that_move_to_another_tab_are_remembered() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["Work: a", "plain", "other"]);
+
+    press(&mut app, &fixture, KeyCode::Char('l'));
+    assert_eq!(app.view, SectionView::Unsectioned);
+    assert_eq!(app.list.selected(), Some(1));
+
+    // Moving the task into Work follows it there.
+    press(&mut app, &fixture, KeyCode::Char('e'));
+    press(
+        &mut app,
+        &fixture,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+    app.paste("Work: plain");
+    press(&mut app, &fixture, KeyCode::Enter);
+    assert_eq!(app.view, named("work"));
+
+    // Undo returns to [-], which is itself a jump away from Work.
+    press(&mut app, &fixture, KeyCode::Char('u'));
+    assert_eq!(app.view, SectionView::Unsectioned);
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.view, named("work"));
+
+    // Redo stays on Work, so `'` still returns to [-]; the task has left it again, so the tab
+    // opens on its first task.
+    press(
+        &mut app,
+        &fixture,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+    );
+    apostrophe(&mut app, &fixture);
+    assert_eq!(app.view, SectionView::Unsectioned);
+    assert_eq!(app.list.selected(), Some(2));
+}

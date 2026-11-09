@@ -7,6 +7,7 @@ use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::{layout::Rect, widgets::ListState};
+use uuid::Uuid;
 
 use crate::Result;
 use crate::config::{BorderStyle, MarkerStyle};
@@ -110,6 +111,24 @@ pub struct NavigationCheckpoint {
     reveal_selection: bool,
 }
 
+// A tab and the task selected in it, for `'` to return to. The task is kept by id rather than
+// index, so it is still found after tasks are added, removed, or reordered.
+#[derive(Debug, Clone, PartialEq)]
+struct Position {
+    view: SectionView,
+    task: Option<Uuid>,
+}
+
+impl Position {
+    fn new(view: SectionView, tasks: &[Task], selected: Option<usize>) -> Self {
+        let task = selected
+            .and_then(|index| tasks.get(index))
+            .map(|task| task.id);
+
+        Self { view, task }
+    }
+}
+
 // A pending section suggestion while adding or editing, shown as dim text after the
 // cursor. It only exists while the input is a single partial word with the cursor at its end.
 struct Completion {
@@ -203,6 +222,9 @@ pub struct App {
     pending_section_jump: Option<Instant>,
     completion: Option<Completion>,
     task_register: Option<String>,
+    // Where navigation stood before the latest jump: a tab switch, a first/last-task or search
+    // jump, or a change that moved the view. Session-only: never saved, and not part of undo.
+    previous_position: Option<Position>,
     history: VecDeque<UndoState>,
     redo_history: VecDeque<UndoState>,
     persisted: Persisted,
@@ -242,6 +264,7 @@ impl App {
             pending_section_jump: None,
             completion: None,
             task_register: None,
+            previous_position: None,
             history: VecDeque::new(),
             redo_history: VecDeque::new(),
             persisted: Persisted {
@@ -327,6 +350,55 @@ impl App {
         );
     }
 
+    fn position(&self) -> Position {
+        Position::new(self.view.clone(), &self.tasks, self.list.selected())
+    }
+
+    // Remember `from` for `'` once a jump has moved away from it. A jump that went nowhere,
+    // such as `h` with a single tab, keeps the position remembered before it.
+    fn record_jump(&mut self, from: Position) {
+        if self.position() != from {
+            self.previous_position = Some(from);
+        }
+    }
+
+    // `'` swaps the current position with the remembered one, so pressing it again returns.
+    fn return_to_previous_position(&mut self) {
+        let Some(target) = self.previous_position.clone() else {
+            self.show_status_message("No previous position");
+
+            return;
+        };
+
+        let tab_exists = target.view == SectionView::All
+            || self
+                .section_tabs()
+                .iter()
+                .any(|(view, _)| *view == target.view);
+
+        if !tab_exists {
+            self.previous_position = None;
+            self.show_status_message("Previous section no longer exists");
+
+            return;
+        }
+
+        let from = self.position();
+        self.show_section(target.view);
+
+        // A task deleted or moved out of the tab since leaves `show_section`'s choice.
+        if let Some(index) = target
+            .task
+            .and_then(|id| self.tasks.iter().position(|task| task.id == id))
+            && self.is_visible(index)
+        {
+            self.list.select(Some(index));
+        }
+
+        self.previous_position = Some(from);
+    }
+
+    // Previews in the section picker call this too, so it does not record a jump itself.
     pub fn show_section(&mut self, view: SectionView) {
         self.view = view;
 
@@ -367,7 +439,9 @@ impl App {
             (None, false) => current - 1,
         };
 
+        let from = self.position();
         self.show_section(tabs[next].0.clone());
+        self.record_jump(from);
     }
 
     // `s1` through `s9` pick the first nine tabs in display order and `s0` the tenth.
@@ -379,7 +453,9 @@ impl App {
         };
 
         if let Some((view, _)) = self.section_tabs().get(position) {
+            let from = self.position();
             self.show_section(view.clone());
+            self.record_jump(from);
         }
     }
 
@@ -519,6 +595,9 @@ impl App {
         };
 
         if accept {
+            let from = Position::new(original.view, &self.tasks, original.selected);
+            self.record_jump(from);
+
             return;
         }
 
@@ -815,6 +894,12 @@ impl App {
         self.list.select(selected);
         self.viewport.reveal_selection = true;
 
+        // A change that moves to another tab is a jump that `'` can return from.
+        if previous_view != self.view {
+            let from = Position::new(previous_view.clone(), &previous_tasks, previous_selected);
+            self.previous_position = Some(from);
+        }
+
         if self.history.len() == HISTORY_LIMIT {
             self.history.pop_front();
         }
@@ -922,7 +1007,10 @@ impl App {
         let mode = std::mem::replace(&mut self.mode, Mode::Normal);
 
         if let Mode::Searching { original, .. } = mode {
-            if !accept {
+            if accept {
+                let from = Position::new(self.view.clone(), &self.tasks, original);
+                self.record_jump(from);
+            } else {
                 self.list.select(original);
             }
 
@@ -1004,6 +1092,11 @@ impl App {
         let current_view = std::mem::replace(&mut self.view, view);
         self.list.select(selected);
         self.viewport.reveal_selection = true;
+
+        if current_view != self.view {
+            let from = Position::new(current_view.clone(), &current_tasks, current_selected);
+            self.previous_position = Some(from);
+        }
 
         // No eviction is needed: mutations cap undo history and clear redo history, and undo
         // and redo only move one entry, so both together never exceed HISTORY_LIMIT.
@@ -1932,6 +2025,7 @@ impl App {
             }
             KeyCode::Char('/') => self.start_search(),
             KeyCode::Char('`') => self.start_section_picker(),
+            KeyCode::Char('\'') => self.return_to_previous_position(),
             // Terminals may report `?` with or without Shift; nothing else reaches here.
             KeyCode::Char('?') => {
                 self.mode = Mode::Help {
@@ -2008,8 +2102,11 @@ impl App {
                 } else {
                     visible.last()
                 };
+
+                let from = self.position();
                 self.list.select(index.copied());
                 self.viewport.reveal_selection = true;
+                self.record_jump(from);
             }
             KeyCode::Char(' ') | KeyCode::Enter => {
                 if let Some(index) = self.list.selected() {
@@ -2111,7 +2208,9 @@ impl App {
                 .iter()
                 .find(|(area, _)| area.contains((event.column, event.row).into()))
         {
+            let from = self.position();
             self.show_section(view.clone());
+            self.record_jump(from);
 
             return Ok(());
         }

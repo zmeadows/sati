@@ -1059,6 +1059,7 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
         ("Next / previous tab", "l / h, Tab / Shift+Tab", "Alt+F / Alt+B"),
         ("Go to tab 1–10", "s1 … s9, s0", "Alt+S, digit"),
         ("Find tab by name", "`", "Alt+G"),
+        ("Back to last position", "'", ""),
         ("Move tab right / left", "L / H", "Alt+N / Alt+P"),
         ("Rename section", "E", ""),
     ]),

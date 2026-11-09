@@ -80,6 +80,7 @@ and terminal or OS shortcuts can intercept key combinations before sati receives
 | Next / previous section tab (wraps) | `l` / `h`, `Tab` / `Shift+Tab`, `Alt+F` / `Alt+B` |
 | Go to section tab 1–10 | `s1` … `s9`, `s0`; `Alt+S` then a digit |
 | Find section tab by name | `` ` ``, `Alt+G` |
+| Back to previous tab and task | `'` |
 | Move current section right / left | `L` / `H`, `Alt+N` / `Alt+P` |
 | First / last task | `g` / `G`, `Home` / `End` |
 | Move one page | `PageDown` / `PageUp`, `Ctrl+V` / `Alt+V` |
@@ -189,6 +190,13 @@ is already used by another section, or isn't one word without colons, it is show
 struck through, a notice explains why, and `Enter` does nothing. Changing only the case
 (`work` to `Work`) is allowed and gives every task the same spelling. `u` undoes the
 whole rename at once.
+
+Press `'` to go back to the tab and task you were on before your last jump. Switching tabs
+any way, `g` / `G` / `Home` / `End`, accepting a search, and changes that move to another
+tab all count as jumps; ordinary movement such as `j` / `k` and paging doesn't. Press `'`
+again to return, so it toggles between two places. If the task has since been deleted or
+moved out of that tab, the tab still opens; if the tab no longer exists, `'` says so and
+stays put. The previous position lasts only for the session.
 
 ### While typing
 
