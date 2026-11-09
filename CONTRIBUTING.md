@@ -19,7 +19,7 @@ sati needs Rust 1.89 or newer. Build and run it with Cargo, using a scratch data
 
 ```sh
 cargo build
-cargo run -- --data-dir /tmp/sati-dev
+cargo run -- --data-dir target/sati-dev
 ```
 
 Before opening a pull request, run the same checks as CI:
@@ -30,7 +30,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-The tests use their own temporary directories. CI also builds a release binary and checks Rust 1.89 compatibility on Linux, macOS, and Windows.
+The tests use their own temporary directories. CI also builds release binaries on Linux, macOS, and Windows, and checks Rust 1.89 compatibility on Linux.
 
 ## Pull requests
 
