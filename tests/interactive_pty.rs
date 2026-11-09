@@ -10,7 +10,10 @@
 use std::{
     fs::{self, File},
     io::{self, Read, Write},
-    os::{fd::OwnedFd, unix::process::CommandExt},
+    os::{
+        fd::{AsFd, OwnedFd},
+        unix::process::CommandExt,
+    },
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
@@ -218,7 +221,7 @@ fn run_session(config: &str, arguments: &[&str], answers: &[(&str, &str)], keys:
         session.fail(&format!("Sati exited with {status}"));
     }
 
-    // Read from the test's own slave descriptor: the terminal outlives Sati, as a real one does.
+    // The test's PTY outlives Sati, as a real terminal does.
     assert_eq!(
         session.current_settings(),
         original,
@@ -285,8 +288,8 @@ impl Drop for TemporaryDirectory {
 struct Session {
     child: Child,
     master: File,
-    // The test's own slave descriptor keeps terminal settings observable after Sati exits.
-    // The PTY reports the end of output only once every slave descriptor is closed.
+    // The test's own slave descriptor keeps the PTY open on Linux after Sati exits, until all
+    // output has been read.
     slave: Option<OwnedFd>,
     initial_settings: TerminalSettings,
     chunks: Receiver<Vec<u8>>,
@@ -359,8 +362,16 @@ impl Session {
         self.master.write_all(input.as_bytes()).unwrap();
     }
 
+    // Linux keeps separate settings for the master, so they are read through the test's slave
+    // descriptor. macOS hangs up the terminal when Sati, its session leader, exits, so that
+    // descriptor cannot be relied on afterwards; there, both sides share one set of settings.
     fn current_settings(&self) -> TerminalSettings {
-        terminal_settings(self.slave.as_ref().expect("slave is open"))
+        #[cfg(target_os = "linux")]
+        let side = self.slave.as_ref().expect("slave is open").as_fd();
+        #[cfg(target_os = "macos")]
+        let side = self.master.as_fd();
+
+        terminal_settings(side)
     }
 
     // Waits up to `timeout` for output; false once the PTY has closed.
@@ -410,15 +421,15 @@ impl Session {
                 self.fail("timed out waiting for Sati to exit");
             }
 
+            // The macOS hangup as Sati exits can close the PTY just before Sati can be reaped.
             if !self.receive(POLL_INTERVAL) {
-                self.fail("the PTY closed while Sati was running");
+                thread::sleep(POLL_INTERVAL);
             }
         }
     }
 
-    // Closes the test's slave descriptor, then collects output until the PTY reports its end.
-    // Everything Sati wrote is delivered first: Linux keeps it readable until reporting EIO,
-    // and macOS waits for it to be read before completing the last close of the slave.
+    // Closes the test's slave descriptor, then collects output until the PTY reports its end,
+    // which it does only after everything Sati wrote. On macOS, that end may already have come.
     fn read_remaining_output(&mut self) {
         drop(self.slave.take());
         let deadline = Instant::now() + TIMEOUT;
@@ -468,8 +479,8 @@ struct TerminalSettings {
     local: LocalModes,
 }
 
-fn terminal_settings(slave: &OwnedFd) -> TerminalSettings {
-    let termios: Termios = rustix::termios::tcgetattr(slave).unwrap();
+fn terminal_settings(terminal: impl AsFd) -> TerminalSettings {
+    let termios: Termios = rustix::termios::tcgetattr(terminal).unwrap();
 
     TerminalSettings {
         input: termios.input_modes,
@@ -536,7 +547,8 @@ fn read_continuously(mut master: File, chunks: mpsc::Sender<Vec<u8>>) {
                     return;
                 }
             }
-            // Linux reports EIO, and macOS end of file, once no slave descriptor is open.
+            // Linux reports EIO, rather than end of file, once no slave descriptor is open;
+            // macOS may report either once the terminal is hung up.
             Err(error) if error.raw_os_error() == Some(rustix::io::Errno::IO.raw_os_error()) => {
                 return;
             }
