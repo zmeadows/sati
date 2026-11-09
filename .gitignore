@@ -10,3 +10,5 @@ CLAUDE.md
 # Claude Code: personal settings and internal state. Shared .claude/settings.json stays committable.
 .claude/settings.local.json
 .claude/.cc-writes/
+
+assets/demo/data

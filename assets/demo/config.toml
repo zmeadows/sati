@@ -1,0 +1,12 @@
+theme = "gruvbox-material"
+
+[display]
+wrap = true
+border_style = "square"
+task_markers = "unicode"
+status_messages = true
+status_message_duration_ms = 3560
+show_help_hint = true
+
+[input]
+mouse = true
