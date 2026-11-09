@@ -6,6 +6,12 @@ rust-version = "1.89"
 description = "A quiet, persistent terminal checklist"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/zmeadows/sati"
+keywords = ["todo", "checklist", "tui", "terminal"]
+categories = ["command-line-utilities"]
+# crates.io resolves the README's relative links and demo image against the repository,
+# so the demo recording and repository automation do not belong in the source package.
+exclude = ["/.github/", "/assets/", "/.editorconfig"]
 
 [lints.clippy]
 dbg_macro = "warn"

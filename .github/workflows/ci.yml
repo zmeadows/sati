@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The release workflow runs this suite against the tagged commit before building.
+  workflow_call:
 
 permissions:
   contents: read
@@ -57,6 +59,10 @@ jobs:
       - name: Build release
         if: ${{ !cancelled() }}
         run: cargo build --release --locked
+      # Builds the crate from the files `cargo publish` would upload, outside the Git checkout.
+      - name: Verify source package
+        if: ${{ !cancelled() && matrix.os == 'ubuntu-latest' }}
+        run: cargo package --locked
       - name: Install Rust 1.89
         if: matrix.os == 'ubuntu-latest'
         uses: dtolnay/rust-toolchain@1.89.0
