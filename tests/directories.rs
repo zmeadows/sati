@@ -41,6 +41,17 @@ fn command() -> Command {
     command
 }
 
+// The platform data directory under a HOME (or APPDATA) value.
+fn native_data(home: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/sati")
+    } else if cfg!(windows) {
+        home.join("sati")
+    } else {
+        home.join(".local/share/sati")
+    }
+}
+
 fn assert_reuses_data(command: &mut Command, data: &Path) {
     fs::create_dir_all(data).unwrap();
     let tasks = data.join("tasks.json");
@@ -72,15 +83,7 @@ fn native_directory_reuses_existing_data() {
         command.env("XDG_DATA_HOME", "ignored-relative-xdg");
     }
 
-    let data = if cfg!(target_os = "macos") {
-        fixture.0.join("Library/Application Support/sati")
-    } else if cfg!(windows) {
-        fixture.0.join("sati")
-    } else {
-        fixture.0.join(".local/share/sati")
-    };
-
-    assert_reuses_data(&mut command, &data);
+    assert_reuses_data(&mut command, &native_data(&fixture.0));
 }
 
 #[test]
@@ -97,10 +100,31 @@ fn missing_empty_or_relative_native_directory_is_an_error() {
 
     assert_discovery_error(command().output().unwrap(), missing);
     assert_discovery_error(command().env(variable, "").output().unwrap(), missing);
-    assert_discovery_error(
-        command().env(variable, "relative-home").output().unwrap(),
-        "must be an absolute path",
+
+    // An explicit configuration skips configuration discovery, which would otherwise reject
+    // the relative directory first. If storage accepted it, the invalid task file at the
+    // relative location would stop the run before terminal setup.
+    let fixture = Fixture::new();
+    let config = fixture.0.join("config.toml");
+    fs::write(&config, "").unwrap();
+    let relative_data = native_data(&fixture.0.join("relative-home"));
+    fs::create_dir_all(&relative_data).unwrap();
+    fs::write(relative_data.join("tasks.json"), "invalid json").unwrap();
+
+    let output = command()
+        .current_dir(&fixture.0)
+        .env(variable, "relative-home")
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "sati: data directory must be an absolute path\n"
     );
+    assert!(!relative_data.join("tasks.lock").exists());
 }
 
 #[test]

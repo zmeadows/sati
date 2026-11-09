@@ -119,3 +119,23 @@ fn invalid_style_values_fail_with_the_accepted_values() {
         "{error}"
     );
 }
+
+#[test]
+fn list_themes_succeeds_when_the_reader_closes_early() {
+    // Closing the read end first makes every write fail, regardless of timing or buffer size.
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let output = Command::new(env!("CARGO_BIN_EXE_sati"))
+        .arg("--list-themes")
+        .stdin(Stdio::null())
+        .stdout(writer)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+}

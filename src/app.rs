@@ -1281,15 +1281,13 @@ impl App {
         self.list.select(selected);
         self.reveal_selection = true;
 
+        // No eviction is needed: mutations cap undo history and clear redo history, and undo
+        // and redo only move one entry, so both together never exceed HISTORY_LIMIT.
         let destination = if redo {
             &mut self.history
         } else {
             &mut self.redo_history
         };
-
-        if destination.len() == HISTORY_LIMIT {
-            destination.pop_front();
-        }
 
         // The label describes the same change in either direction, so it moves with it.
         destination.push_back(UndoState {

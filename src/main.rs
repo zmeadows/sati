@@ -704,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn background_output_tracks_changes_and_restores_once_even_after_write_failure() {
+    fn background_output_tracks_changes_and_restores_once_even_after_output_failure() {
         use ratatui::style::Color;
         let modes = TerminalModes::default();
         let mut output = Vec::new();
@@ -749,28 +749,27 @@ mod tests {
 
         assert_eq!(output, b"\x1b]111\x1b\\");
 
-        struct Broken;
-        impl io::Write for Broken {
-            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-                Err(io::ErrorKind::BrokenPipe.into())
-            }
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
+        // Whether writing or flushing fails, the terminal may have applied the color.
+        for (write_remaining, flush_remaining) in [(Some(0), None), (None, Some(0))] {
+            let modes = TerminalModes::default();
+            let mut current = None;
+            let mut broken = FailOnce {
+                write_remaining,
+                flush_remaining,
+                ..FailOnce::default()
+            };
+
+            assert!(
+                modes
+                    .update_background(&mut broken, &mut current, color)
+                    .is_err()
+            );
+            assert!(current.is_none());
+
+            let mut recovery = Vec::new();
+            modes.restore(&mut recovery).unwrap();
+            assert_eq!(recovery, b"\x1b]111\x1b\\");
         }
-        let modes = TerminalModes::default();
-        let mut current = None;
-
-        assert!(
-            modes
-                .update_background(&mut Broken, &mut current, color)
-                .is_err()
-        );
-        assert!(current.is_none());
-
-        let mut recovery = Vec::new();
-        modes.restore(&mut recovery).unwrap();
-        assert_eq!(recovery, b"\x1b]111\x1b\\");
     }
 
     #[test]
@@ -1306,6 +1305,28 @@ mod tests {
         let mut repeated = Vec::new();
         modes.restore(&mut repeated).unwrap();
         assert!(repeated.is_empty());
+
+        // A failed flush after queuing mouse capture still leaves it to be disabled.
+        let mut disable_mouse = String::new();
+        DisableMouseCapture.write_ansi(&mut disable_mouse).unwrap();
+        let modes = TerminalModes::default();
+        let mut output = FailOnce {
+            flush_remaining: Some(0),
+            ..FailOnce::default()
+        };
+
+        assert_eq!(
+            modes
+                .enable_input(&mut output, true, true)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        assert_eq!(output.bytes, mouse.as_bytes());
+
+        output.bytes.clear();
+        modes.restore(&mut output).unwrap();
+        assert_eq!(output.bytes, disable_mouse.as_bytes());
     }
 
     #[test]

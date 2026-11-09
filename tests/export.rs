@@ -357,3 +357,21 @@ fn a_section_export_reports_an_invalid_task_file_without_changing_it() {
         invalid
     );
 }
+
+#[test]
+fn a_reader_that_closes_early_is_not_an_export_failure() {
+    let fixture = Fixture::new();
+    fixture.prepare();
+
+    // Closing the read end first makes every write fail, regardless of timing or buffer size.
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let output = fixture.command().stdout(writer).output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+}

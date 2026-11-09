@@ -1129,9 +1129,18 @@ pub mod tests {
     }
 
     #[test]
-    fn replacement_failure_is_reported_without_changing_the_destination() {
+    fn unreadable_or_unreplaceable_task_file_is_reported_without_changing_it() {
+        // A directory in the way fails to read and replace on every platform, even as root.
         let fixture = Fixture::new();
         fs::create_dir_all(fixture.task_path()).unwrap();
+        let kept = fixture.task_path().join("kept");
+        fs::write(&kept, "keep me").unwrap();
+
+        // Only a missing file means an empty list; any other read error stops loading.
+        let error = fixture.storage.load().unwrap_err().to_string();
+        let expected = format!("could not read {}: ", fixture.task_path().display());
+
+        assert!(error.starts_with(&expected), "{error}");
 
         let error = fixture
             .storage
@@ -1141,6 +1150,8 @@ pub mod tests {
 
         assert!(error.contains("could not save"), "{error}");
         assert!(fixture.task_path().is_dir());
+        assert_eq!(fs::read_to_string(&kept).unwrap(), "keep me");
+        assert_eq!(fs::read_dir(fixture.task_path()).unwrap().count(), 1);
     }
 
     #[test]
