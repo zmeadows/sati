@@ -62,7 +62,8 @@ const INPUT_HEADING: &str = "Input";
 
 const CONFIG_HELP: &str = concat!(
     "Settings can also come from config.toml; command-line options take precedence.\n",
-    "See the README for the configuration file and its location.",
+    "For the file's location and settings, see\n",
+    "https://github.com/zmeadows/sati/blob/main/docs/CONFIGURATION.md",
 );
 
 // Report repeats for plain characters and Enter too; alternate keys preserve shifted text.

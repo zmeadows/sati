@@ -1,8 +1,8 @@
 # sati configuration with every option at its built-in default.
 #
-# Copy this file to the default location for your platform (see "Configuration" in README.md)
-# or pass it with `--config PATH`. Every key is optional and everything below is already the
-# default, so keep only the lines you change. Command-line flags override these settings.
+# Copy this file to the location for your platform listed in docs/CONFIGURATION.md, or pass
+# it with `--config PATH`. Every key is optional and everything below is already the default,
+# so keep only the lines you change. Command-line options override these settings.
 
 # The color theme. Run `sati --list-themes` to see the built-in themes.
 theme = "default"
@@ -29,7 +29,7 @@ mouse = true                      # true or false; false leaves the mouse to the
 # bg: "#RRGGBB" or "reset" only.
 # modifiers: any of "bold", "dim", "italic", "underline", "strikethrough"; the list replaces
 #     the inherited modifiers, and [] clears them.
-# See "Configuration" in README.md for how roles inherit from one another.
+# See docs/CONFIGURATION.md for how roles inherit from one another.
 
 # [styles.normal]
 # fg = "reset"

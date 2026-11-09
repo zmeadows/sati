@@ -13,7 +13,7 @@ Prioritize, in order:
 
 Do not introduce calendars, tags, priorities, reminders, projects, synchronization, configurable keybindings, or other product features unless requested. Sections are an intentional part of the existing design. Preserve existing behavior and Linux, macOS, and Windows support unless the task explicitly changes them.
 
-Read the relevant implementation and documentation before editing. This file describes durable constraints and engineering standards; it is not an exhaustive behavior specification. `README.md` documents the user-facing interface, while the source is authoritative for implementation details.
+Read the relevant implementation and documentation before editing. This file describes durable constraints and engineering standards; it is not an exhaustive behavior specification. See *Documentation* below for where user-facing behavior is documented; the source is authoritative for implementation details.
 
 ## Code organization
 
@@ -78,7 +78,7 @@ Before finishing, read the changed path as a maintainer unfamiliar with it: Can 
 
 ## Behavior and reliability contracts
 
-The following are architectural invariants, not a complete shortcut specification. Check the README, current handlers, and the relevant help text before changing interactive behavior.
+The following are architectural invariants, not a complete shortcut specification. Check `docs/USAGE.md`, the current handlers, and `HELP_GROUPS` before changing interactive behavior.
 
 ### Tasks, sections, and selection
 
@@ -117,11 +117,25 @@ The following are architectural invariants, not a complete shortcut specificatio
 - All actions must remain keyboard-accessible. Mouse capture follows the resolved option, and no mouse enable/disable sequence should be sent when capture is off. Preserve raw-mode, alternate-screen, keyboard enhancement, bracketed-paste, background-color, and terminal restoration behavior on normal exit, errors, and panic. Optional terminal capabilities should degrade gracefully.
 - Preserve the subdued visual design, resolved theme overrides, and OSC 11/111 background application/restoration behavior when touching terminal colors. Use the existing shared enums and `ui::border_type` for style options instead of creating parallel representations.
 
+## Documentation
+
+Treat documentation as a curated user interface, not an exhaustive record of application behavior. Prefer correcting, consolidating, or shortening existing explanations over adding new ones. Document new behavior only when it materially affects onboarding, configuration, or a non-obvious user workflow.
+
+Each kind of information has one home:
+
+- `README.md` — introduction, installation, and quick start.
+- `docs/USAGE.md` — non-obvious user-facing behavior and practical limitations.
+- `docs/CONFIGURATION.md` — the configuration reference.
+- `docs/config_defaults.toml` — a complete example of the default configuration. A test parses it and requires every display and input option.
+- The built-in `?` reference (`HELP_GROUPS`) — the authoritative keyboard reference; do not reproduce it in Markdown.
+- Clap help in `src/main.rs` — the authoritative command-line reference.
+- Source code and comments — implementation details, invariants, and internal rationale; keep these out of user-facing documents.
+
 ## Working process
 
 1. Inspect the affected code and its callers before choosing an approach. Determine which data is authoritative, which invariants constrain the change, and what happens when an operation fails.
 2. Implement the simplest dependable design that meets the actual request. Reuse existing types and helpers where they help; avoid new dependencies and abstractions without demonstrated value.
-3. Review all affected paths, including alternative keybindings, failure handling, persistence, and platform differences where relevant. Update `README.md`, contextual hints, and `HELP_GROUPS` when public behavior changes, respecting deliberate omissions from on-screen help.
+3. Review all affected paths, including alternative keybindings, failure handling, persistence, and platform differences where relevant. Update `HELP_GROUPS` and contextual hints when shortcuts change, respecting deliberate omissions from on-screen help, and correct any document that the change makes inaccurate.
 4. Review the diff for accidental behavior changes, unnecessary state, new indirection, confusing naming, and unrelated churn. Report meaningful tradeoffs and any checks that could not be run.
 
 Run applicable existing repository checks after changing code (use `cargo fmt --all` to format):

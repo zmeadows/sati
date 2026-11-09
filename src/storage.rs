@@ -45,7 +45,6 @@ type Migration = fn(Value) -> std::result::Result<Value, String>;
 //    migrations with it and record the last release that can still upgrade those files.
 // 4. Test the step directly (exact input JSON to expected output JSON) and add a
 //    `load_checklist` round trip of a real version N file; see the notes in `tests.rs`.
-// 5. Update the task file section of the README.
 const MIGRATIONS: [Migration; (SCHEMA_VERSION - OLDEST_SCHEMA_VERSION) as usize] = [];
 
 // Runs the migrations that take a version `version` document to the newest version, in order.

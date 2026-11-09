@@ -975,7 +975,7 @@ fn duration_and_help_hint_come_from_config_or_defaults() {
 #[test]
 fn the_defaults_file_lists_every_option_at_its_built_in_default() {
     let config: config::Config =
-        toml::from_str(include_str!("../../config_defaults.toml")).unwrap();
+        toml::from_str(include_str!("../../docs/config_defaults.toml")).unwrap();
 
     // Exhaustive patterns: a new display or input option must be added to the file.
     let config::Display {
