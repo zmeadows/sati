@@ -208,6 +208,8 @@ adds nothing.
 
 **Search:** Press `/` and type. Each change to the query focuses the first match starting from the task that was selected when search began (that task itself if it matches), wrapping to the top. `Tab` / `Shift+Tab` (or `Ctrl+N` / `Ctrl+P`) cycle through the matches, and moving the cursor within the query keeps the focused match. `Enter` selects the focused match and returns to the checklist. `Esc` cancels and restores your previous selection. Exiting search clears highlighting; the query is not remembered.
 
+**Pasting on Windows:** Windows terminals deliver pasted text to sati as ordinary keystrokes. Open a prompt (`a`, `e`, or `/`) before pasting; in the checklist itself, pasted letters act as shortcuts. A line break in the pasted text acts as `Enter` and a tab as `Tab`, so paste one line at a time. Windows Terminal asks before pasting multiple lines by default; keep that warning on. `u` or `Ctrl+Z` undoes accidental changes.
+
 ## Options
 
 | Flag | Effect |
