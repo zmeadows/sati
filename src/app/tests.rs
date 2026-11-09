@@ -83,22 +83,18 @@ fn selection_migrates_on_clean_save_and_tracks_mutations_without_navigation_writ
 
     assert!(!fixture.task_path().exists());
 
-    // A version 5 file, which loading upgrades in memory without writing.
-    let tasks = app_with_tasks(3).tasks;
-    let version_5 = serde_json::json!({
-        "schema_version": 5,
-        "tasks": tasks,
-        "selected": 0,
-        "section_order": [],
-    });
+    // A document as loading returns it after upgrading an older file in memory.
+    let document = crate::storage::ChecklistDocument {
+        tasks: app_with_tasks(3).tasks,
+        selected: Some(0),
+        needs_migration: true,
+        ..Default::default()
+    };
     std::fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-    std::fs::write(fixture.task_path(), version_5.to_string()).unwrap();
-    let original = std::fs::read(fixture.task_path()).unwrap();
 
-    let mut app = App::from_checklist_document(fixture.storage.load_checklist().unwrap());
+    let mut app = App::from_checklist_document(document);
 
     assert!(app.persisted.needs_migration);
-    assert_eq!(std::fs::read(fixture.task_path()).unwrap(), original);
 
     block_saves(&fixture);
     assert!(app.persist_navigation_if_needed(&fixture.storage).is_err());
@@ -111,7 +107,7 @@ fn selection_migrates_on_clean_save_and_tracks_mutations_without_navigation_writ
 
     // A clean quit writes the migrated, versioned document.
     let saved = std::fs::read_to_string(fixture.task_path()).unwrap();
-    assert!(saved.contains("\"schema_version\": 6"), "{saved}");
+    assert!(saved.contains("\"schema_version\": 1"), "{saved}");
 
     app.list.select(Some(2));
     assert_eq!(fixture.storage.load_checklist().unwrap().selected, Some(0));
@@ -205,52 +201,35 @@ fn ignored_modifier_keys_keep_the_focused_match_and_dismiss_status_messages() {
 }
 
 #[test]
-fn restart_keeps_saved_tasks_but_never_restores_or_creates_history_files() {
-    for legacy in [false, true] {
-        let fixture = Fixture::new();
-        let mut app = app_with_tasks(3);
-        app.toggle_completion(0, &fixture.storage).unwrap();
-        app.toggle_completion(1, &fixture.storage).unwrap();
-        app.undo(&fixture.storage).unwrap();
+fn restart_keeps_saved_tasks_but_not_undo_history() {
+    let fixture = Fixture::new();
+    let mut app = app_with_tasks(3);
+    app.toggle_completion(0, &fixture.storage).unwrap();
+    app.toggle_completion(1, &fixture.storage).unwrap();
+    app.undo(&fixture.storage).unwrap();
 
-        assert!(app.can_undo() && app.can_redo());
+    assert!(app.can_undo() && app.can_redo());
 
-        let path = fixture.task_path().with_file_name("history.json");
-        let bytes = b"legacy history deliberately left untouched";
+    app.list.select(Some(2));
+    let tasks = app.tasks.clone();
+    drop(app);
+    let mut restarted = App::new(fixture.storage.load().unwrap());
 
-        if legacy {
-            std::fs::write(&path, bytes).unwrap();
-        }
+    assert_eq!(restarted.tasks, tasks);
+    assert_eq!(restarted.list.selected(), Some(0));
+    assert!(!restarted.can_undo() && !restarted.can_redo());
 
-        app.list.select(Some(2));
-        let tasks = app.tasks.clone();
-        drop(app);
-        let mut restarted = App::new(fixture.storage.load().unwrap());
+    press(&mut restarted, &fixture, KeyCode::Char('u'));
+    restarted.redo(&fixture.storage).unwrap();
+    assert_eq!(restarted.tasks, tasks);
+    assert_eq!(fixture.storage.load().unwrap(), tasks);
 
-        assert_eq!(restarted.tasks, tasks);
-        assert_eq!(restarted.list.selected(), Some(0));
-        assert!(!restarted.can_undo() && !restarted.can_redo());
+    restarted.toggle_completion(2, &fixture.storage).unwrap();
+    restarted.undo(&fixture.storage).unwrap();
+    assert_eq!(fixture.storage.load().unwrap(), tasks);
 
-        press(&mut restarted, &fixture, KeyCode::Char('u'));
-        restarted.redo(&fixture.storage).unwrap();
-        assert_eq!(restarted.tasks, tasks);
-        assert_eq!(fixture.storage.load().unwrap(), tasks);
-
-        restarted.toggle_completion(2, &fixture.storage).unwrap();
-        restarted.undo(&fixture.storage).unwrap();
-        assert_eq!(fixture.storage.load().unwrap(), tasks);
-
-        restarted.redo(&fixture.storage).unwrap();
-        assert_eq!(fixture.storage.load().unwrap(), restarted.tasks);
-
-        drop(restarted);
-
-        if legacy {
-            assert_eq!(std::fs::read(path).unwrap(), bytes);
-        } else {
-            assert!(!path.exists());
-        }
-    }
+    restarted.redo(&fixture.storage).unwrap();
+    assert_eq!(fixture.storage.load().unwrap(), restarted.tasks);
 }
 
 #[test]
@@ -2324,45 +2303,6 @@ fn the_section_tab_is_saved_and_restored_and_unknown_sections_fall_back_to_all()
     let restored = App::from_checklist_document(fixture.storage.load_checklist().unwrap());
 
     assert_eq!(restored.view, SectionView::All);
-}
-
-#[test]
-fn a_version_5_active_tab_is_restored_and_a_clean_exit_saves_it_as_active_view() {
-    let fixture = Fixture::new();
-    let version_5 = serde_json::json!({
-        "schema_version": 5,
-        "tasks": app_with_texts(&["plain", "Work: a"]).tasks,
-        "selected": 1,
-        "section": "work",
-        "section_order": ["work"],
-    });
-    std::fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-    std::fs::write(fixture.task_path(), version_5.to_string()).unwrap();
-
-    let mut app = App::from_checklist_document(fixture.storage.load_checklist().unwrap());
-
-    assert_eq!(app.view, SectionView::Named("work".into()));
-    assert_eq!(app.list.selected(), Some(1));
-
-    // Nothing changed since loading, but the file is still upgraded on exit.
-    app.persist_navigation_if_needed(&fixture.storage).unwrap();
-
-    let mut expected = version_5;
-    let fields = expected.as_object_mut().unwrap();
-    let active_view = fields.remove("section").unwrap();
-    fields.insert("active_view".to_owned(), active_view);
-    fields.insert("schema_version".to_owned(), 6.into());
-
-    let saved: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fixture.task_path()).unwrap()).unwrap();
-    assert_eq!(saved, expected);
-
-    let reloaded = fixture.storage.load_checklist().unwrap();
-    assert!(!reloaded.needs_migration);
-    assert_eq!(
-        App::from_checklist_document(reloaded).view,
-        SectionView::Named("work".into())
-    );
 }
 
 #[test]

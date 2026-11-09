@@ -141,7 +141,7 @@ fn task_document(selected: usize) -> serde_json::Value {
         .collect();
 
     serde_json::json!({
-        "schema_version": 6,
+        "schema_version": 1,
         "tasks": tasks,
         "selected": selected,
         "section_order": [],

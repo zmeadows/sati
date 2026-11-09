@@ -49,7 +49,7 @@ fn task_documents_load_and_normalize_selection_without_writing() {
 
     fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
     let document = |tasks: &str, selected: &str| {
-        format!(r#"{{"schema_version":6,"tasks":{tasks}{selected},"section_order":[]}}"#)
+        format!(r#"{{"schema_version":1,"tasks":{tasks}{selected},"section_order":[]}}"#)
     };
 
     for (json, selected) in [
@@ -72,8 +72,8 @@ fn task_documents_load_and_normalize_selection_without_writing() {
     }
 
     for json in [
-        r#"{"schema_version":6,"tasks":[],"selected":null,"extra":true}"#,
-        r#"{"schema_version":6,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"bad\ntext","status":"pending"}],"selected":0}"#,
+        r#"{"schema_version":1,"tasks":[],"selected":null,"extra":true}"#,
+        r#"{"schema_version":1,"tasks":[{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"bad\ntext","status":"pending"}],"selected":0}"#,
     ] {
         fs::write(fixture.task_path(), json).unwrap();
         assert!(fixture.storage.load_checklist().is_err());
@@ -109,12 +109,12 @@ fn task_documents_load_and_normalize_selection_without_writing() {
 
     assert_eq!(
         json,
-        serde_json::json!({"schema_version": 6, "tasks":[], "selected":null, "section_order":[]})
+        serde_json::json!({"schema_version": 1, "tasks":[], "selected":null, "section_order":[]})
     );
 
     // The version comes first so it is the first thing a reader sees.
     let saved = fs::read_to_string(fixture.task_path()).unwrap();
-    assert!(saved.starts_with("{\n  \"schema_version\": 6,"), "{saved}");
+    assert!(saved.starts_with("{\n  \"schema_version\": 1,"), "{saved}");
     assert!(!fixture.storage.load_checklist().unwrap().needs_migration);
 }
 
@@ -130,7 +130,7 @@ fn task_files_need_one_known_status_per_task() {
     fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
     let file = |task_fields: &str| {
         format!(
-            r#"{{"schema_version":6,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"t"{task_fields}}}],"section_order":[]}}"#
+            r#"{{"schema_version":1,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","text":"t"{task_fields}}}],"section_order":[]}}"#
         )
     };
 
@@ -179,7 +179,7 @@ fn stored_sections_are_validated_and_bodies_are_never_reparsed() {
     fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
     let task = |section: &str, text: &str| {
         format!(
-            r#"{{"schema_version":6,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":{section},"text":"{text}","status":"pending"}}],"section_order":["work"]}}"#
+            r#"{{"schema_version":1,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":{section},"text":"{text}","status":"pending"}}],"section_order":["work"]}}"#
         )
     };
 
@@ -223,7 +223,7 @@ fn duplicate_ids_and_malformed_identities_are_rejected_without_writing() {
     let time = "2026-11-07T19:24:05Z";
 
     let duplicate = format!(
-        r#"{{"schema_version":6,"tasks":[{},{},{}]}}"#,
+        r#"{{"schema_version":1,"tasks":[{},{},{}]}}"#,
         task(id, time),
         task("00000000-0000-4000-8000-000000000002", time),
         task(id, time),
@@ -245,20 +245,20 @@ fn duplicate_ids_and_malformed_identities_are_rejected_without_writing() {
 
     for json in [
         format!(
-            r#"{{"schema_version":6,"tasks":[{}]}}"#,
+            r#"{{"schema_version":1,"tasks":[{}]}}"#,
             task("not-a-uuid", time)
         ),
         format!(
-            r#"{{"schema_version":6,"tasks":[{}]}}"#,
+            r#"{{"schema_version":1,"tasks":[{}]}}"#,
             task(id, "2026-11-07")
         ),
         format!(
-            r#"{{"schema_version":6,"tasks":[{}]}}"#,
+            r#"{{"schema_version":1,"tasks":[{}]}}"#,
             task(id, "2026-02-30T00:00:00Z")
         ),
-        r#"{"schema_version":6,"tasks":[{"text":"no id","status":"pending"}]}"#.to_owned(),
-        r#"{"schema_version":6,"tasks":["not an object"]}"#.to_owned(),
-        r#"{"schema_version":6}"#.to_owned(),
+        r#"{"schema_version":1,"tasks":[{"text":"no id","status":"pending"}]}"#.to_owned(),
+        r#"{"schema_version":1,"tasks":["not an object"]}"#.to_owned(),
+        r#"{"schema_version":1}"#.to_owned(),
     ] {
         fs::write(fixture.task_path(), &json).unwrap();
         let error = fixture
@@ -279,7 +279,7 @@ fn section_order_must_list_each_task_section_once_in_lowercase() {
     fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
     let document = |order: &str| {
         format!(
-            r#"{{"schema_version":6,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Work","text":"a","status":"pending"}},{{"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:05Z","section":"Home","text":"b","status":"pending"}}],"section_order":{order}}}"#
+            r#"{{"schema_version":1,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Work","text":"a","status":"pending"}},{{"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:05Z","section":"Home","text":"b","status":"pending"}}],"section_order":{order}}}"#
         )
     };
 
@@ -312,135 +312,74 @@ fn section_order_must_list_each_task_section_once_in_lowercase() {
     assert!(!loaded.needs_migration);
 }
 
-// A version 5 file with a carried task in Work and a completed unsectioned one.
-// `active_tab` is spliced in where version 5 keeps its top-level `section` field.
-fn version_5_document(active_tab: &str) -> String {
-    format!(
-        r#"{{"schema_version":5,"tasks":[{{"id":"00000000-0000-4000-8000-000000000001","created_at":"2026-11-07T19:24:05Z","section":"Work","text":"日本語","status":"carried"}},{{"id":"00000000-0000-4000-8000-000000000002","created_at":"2026-11-07T19:24:06Z","text":"done","status":"completed"}}],"selected":1{active_tab},"section_order":["work"]}}"#
-    )
+// The migration framework, run with stand-in migrations because no released format needs one
+// yet. Each real migration also gets two tests of its own: a direct test of the step (exact
+// version N JSON in, exact next-version JSON out, plus the malformed inputs it must reject),
+// and a `load_checklist` round trip of a real version N file that checks the upgraded document,
+// `needs_migration`, that loading left the file byte-for-byte untouched, and that the next
+// `save_checklist` writes exactly the expected current-version JSON.
+
+fn rename_a_to_b(value: serde_json::Value) -> std::result::Result<serde_json::Value, String> {
+    rename_field(value, "a", "b")
+}
+
+fn rename_b_to_c(value: serde_json::Value) -> std::result::Result<serde_json::Value, String> {
+    rename_field(value, "b", "c")
+}
+
+fn reject(_: serde_json::Value) -> std::result::Result<serde_json::Value, String> {
+    Err("unsupported shape".to_owned())
+}
+
+fn rename_field(
+    mut value: serde_json::Value,
+    from: &str,
+    to: &str,
+) -> std::result::Result<serde_json::Value, String> {
+    let fields = value.as_object_mut().ok_or("expected an object")?;
+    let field = fields
+        .remove(from)
+        .ok_or(format!("missing field `{from}`"))?;
+    fields.insert(to.to_owned(), field);
+
+    Ok(value)
 }
 
 #[test]
-fn version_5_files_upgrade_in_memory_and_save_their_section_as_active_view() {
-    let fixture = Fixture::new();
-    fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
+fn upgrade_runs_the_remaining_migrations_in_order() {
+    // An `oldest` other than 0 or 1 exercises the offset between versions and indices.
+    let oldest = 3;
+    let migrations: [Migration; 2] = [rename_a_to_b, rename_b_to_c];
 
-    for (active_tab, active_view) in [
-        (r#","section":"work""#, Some("work")),
-        (r#","section":"""#, Some("")),
-        (r#","section":null"#, None),
-        ("", None),
-    ] {
-        let json = version_5_document(active_tab);
-        fs::write(fixture.task_path(), &json).unwrap();
+    let from_oldest = upgrade(serde_json::json!({"a": 1}), oldest, oldest, &migrations);
+    assert_eq!(from_oldest, Ok(serde_json::json!({"c": 1})));
 
-        let document = fixture.storage.load_checklist().unwrap();
+    let from_middle = upgrade(serde_json::json!({"b": 1}), oldest + 1, oldest, &migrations);
+    assert_eq!(from_middle, Ok(serde_json::json!({"c": 1})));
 
-        assert!(document.needs_migration, "{json}");
-        assert_eq!(document.active_view.as_deref(), active_view, "{json}");
-        assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
-
-        // The next save writes version 6 with everything else exactly as it was.
-        fixture
-            .storage
-            .save_checklist(
-                &document.tasks,
-                &document.section_order,
-                document.selected,
-                document.active_view.as_deref(),
-            )
-            .unwrap();
-
-        let mut expected: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let fields = expected.as_object_mut().unwrap();
-        fields.remove("section");
-        fields.insert("schema_version".to_owned(), 6.into());
-
-        if let Some(active_view) = active_view {
-            fields.insert("active_view".to_owned(), active_view.into());
-        }
-
-        let saved: serde_json::Value =
-            serde_json::from_slice(&fs::read(fixture.task_path()).unwrap()).unwrap();
-
-        assert_eq!(saved, expected, "{json}");
-        assert!(!fixture.storage.load_checklist().unwrap().needs_migration);
-    }
+    let current = serde_json::json!({"a": 1, "b": 2});
+    let from_newest = upgrade(current.clone(), oldest + 2, oldest, &migrations);
+    assert_eq!(from_newest, Ok(current));
 }
 
 #[test]
-fn malformed_version_5_files_are_rejected_without_writing() {
-    let fixture = Fixture::new();
-    fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-    let valid = version_5_document(r#","section":"work""#);
+fn upgrade_names_the_failing_version_and_stops() {
+    let oldest = 3;
+    let migrations: [Migration; 3] = [rename_a_to_b, reject, rename_b_to_c];
 
-    for (json, problem) in [
-        // Version 6's name for the active tab is not a version 5 field.
-        (
-            version_5_document(r#","active_view":"work""#),
-            "unknown field `active_view`",
-        ),
-        (
-            version_5_document(r#","extra":true"#),
-            "unknown field `extra`",
-        ),
-        (
-            valid.replace(
-                r#""status":"carried""#,
-                r#""status":"carried","done":false"#,
-            ),
-            "unknown field `done`",
-        ),
-        (
-            valid.replace("carried", "finished"),
-            "unknown variant `finished`",
-        ),
-        (
-            valid.replace(r#""section":"Work""#, r#""section":5"#),
-            "invalid type",
-        ),
-        (
-            valid.replace(r#""section_order":["work"]"#, r#""section_order":[]"#),
-            "section_order",
-        ),
-        (valid.replace("000000000002", "000000000001"), "same id"),
-        (
-            r#"{"schema_version":5,"section":"work"}"#.to_owned(),
-            "missing field `tasks`",
-        ),
-    ] {
-        fs::write(fixture.task_path(), &json).unwrap();
+    let error = upgrade(serde_json::json!({"a": 1}), oldest, oldest, &migrations).unwrap_err();
+    assert_eq!(error, "migrating from version 4: unsupported shape");
 
-        let error = fixture
-            .storage
-            .load_checklist()
-            .err()
-            .expect("rejected")
-            .to_string();
-
-        assert!(error.contains("invalid task file"), "{json}: {error}");
-        assert!(error.contains(problem), "{json}: {error}");
-        assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
-    }
+    let error = upgrade(serde_json::json!({"x": 1}), oldest, oldest, &migrations).unwrap_err();
+    assert_eq!(error, "migrating from version 3: missing field `a`");
 }
 
 #[test]
-fn version_6_files_reject_the_version_5_active_tab_field() {
-    let fixture = Fixture::new();
-    fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
-    let json = version_5_document(r#","section":"work""#)
-        .replace(r#""schema_version":5"#, r#""schema_version":6"#);
-    fs::write(fixture.task_path(), &json).unwrap();
-
-    let error = fixture
-        .storage
-        .load_checklist()
-        .err()
-        .expect("rejected")
-        .to_string();
-
-    assert!(error.contains("unknown field `section`"), "{error}");
-    assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
+fn every_supported_version_but_the_newest_has_one_migration() {
+    assert_eq!(
+        MIGRATIONS.len() as u64,
+        SCHEMA_VERSION - OLDEST_SCHEMA_VERSION
+    );
 }
 
 #[test]
@@ -448,7 +387,7 @@ fn future_and_malformed_schema_versions_are_rejected_without_writing() {
     let fixture = Fixture::new();
     fs::create_dir_all(fixture.task_path().parent().unwrap()).unwrap();
 
-    let future = r#"{"schema_version":7,"tasks":[],"future":"field"}"#;
+    let future = r#"{"schema_version":2,"tasks":[],"future":"field"}"#;
     fs::write(fixture.task_path(), future).unwrap();
     let error = fixture
         .storage
@@ -457,8 +396,8 @@ fn future_and_malformed_schema_versions_are_rejected_without_writing() {
         .expect("rejected")
         .to_string();
 
-    assert!(error.contains("schema version 7"), "{error}");
-    assert!(error.contains("supports version 6"), "{error}");
+    assert!(error.contains("schema version 2"), "{error}");
+    assert!(error.contains("supports version 1"), "{error}");
     assert!(error.contains("left untouched"), "{error}");
     assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), future);
 
@@ -503,7 +442,7 @@ fn older_and_unversioned_files_are_refused_without_writing() {
             error.contains(&format!("schema version {version}")),
             "{error}"
         );
-        assert!(error.contains("only opens version 5 and later"), "{error}");
+        assert!(error.contains("only opens version 1 and later"), "{error}");
         assert!(error.contains("left untouched"), "{error}");
         assert_eq!(fs::read_to_string(fixture.task_path()).unwrap(), json);
     }
@@ -581,7 +520,7 @@ fn existing_directories_and_files_are_not_chmodded() {
     let lock_path = directory.join("tasks.lock");
     fs::write(&lock_path, "").unwrap();
     fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o640)).unwrap();
-    fs::write(fixture.task_path(), r#"{"schema_version":6,"tasks":[]}"#).unwrap();
+    fs::write(fixture.task_path(), r#"{"schema_version":1,"tasks":[]}"#).unwrap();
     fs::set_permissions(fixture.task_path(), fs::Permissions::from_mode(0o640)).unwrap();
     let unrelated = fixture.directory.join("other-user-file");
     fs::write(&unrelated, "Keep this file unchanged").unwrap();
@@ -822,8 +761,8 @@ fn corrupt_or_incompatible_data_is_never_replaced_at_startup() {
         "not json",
         "{}",
         "null",
-        r#"{"schema_version":6,"tasks":[{"text":"missing identity and status"}]}"#,
-        r#"{"schema_version":6,"tasks":[],"extra":1}"#,
+        r#"{"schema_version":1,"tasks":[{"text":"missing identity and status"}]}"#,
+        r#"{"schema_version":1,"tasks":[],"extra":1}"#,
     ] {
         fs::write(fixture.task_path(), invalid).unwrap();
         assert!(fixture.storage.load().is_err());

@@ -98,7 +98,6 @@ fn invalid_config_is_fatal_before_storage_but_help_version_and_export_ignore_it(
 
     assert!(!fixture.data.join("tasks.lock").exists());
     assert!(!fixture.data.join("tasks.json").exists());
-    assert!(!fixture.data.join("history.json").exists());
     assert_eq!(
         fs::read_to_string(&fixture.config).unwrap(),
         "[display]\nwrap = 'invalid'"

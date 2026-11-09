@@ -492,8 +492,7 @@ list one word away.
 
 Tasks are saved automatically to `tasks.json`. Each save replaces the file atomically, so
 an interrupted save leaves the previous list rather than a partial file. Undo/redo history
-is session-only: exiting sati, even accidentally, discards it. Old `history.json` files
-are ignored and can be removed manually if desired.
+is session-only: exiting sati, even accidentally, discards it.
 
 The task file stores the checklist, the selected task, the active tab (`active_view`:
 absent for `[*]`, `""` for `[-]`, otherwise the lowercase section name), and the order of
@@ -512,15 +511,12 @@ its own `section` field, separate from its `text`; typing `Work: fix bug` sets t
 to `Work` and the text to `fix bug`, and the task is still shown, edited, and exported as
 `Work: fix bug`.
 
-The file starts with a `schema_version` (currently `6`). Version 5 files, which named the
-active tab `section`, are upgraded in memory when sati starts and written as version 6 on
-the next save or normal quit; starting sati or running `sati export` never rewrites the file
-by itself. Files from formats before version 5, including the original bare task lists, are
-no longer upgraded: sati refuses them and leaves them untouched, so open such a file once
-with an older sati release to upgrade it. A file written by a newer version of sati is
-refused and left untouched, as is any file that cannot be read (including a task with a
-missing or unknown `status`), that gives two tasks the same `id`, or whose `section_order`
-doesn't list each section exactly once.
+The file starts with a `schema_version` (currently `1`). If a later sati changes the format,
+it will upgrade older files in memory when it starts and write them in the new format on the
+next save or normal quit; starting sati or running `sati export` never rewrites the file by
+itself. A file written by a newer version of sati is refused and left untouched, as is any
+file that cannot be read (including a task with a missing or unknown `status`), that gives
+two tasks the same `id`, or whose `section_order` doesn't list each section exactly once.
 
 ## Credits
 

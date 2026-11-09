@@ -19,72 +19,54 @@ use serde_json::Value;
 use crate::Result;
 use crate::model::{Task, reconcile_section_order};
 
-// The `tasks.json` format written by this build.
-const SCHEMA_VERSION: u64 = 6;
+// The `tasks.json` format written by this build. Version 1 is the first public format.
+const SCHEMA_VERSION: u64 = 1;
 
 // The oldest `tasks.json` format this build can still upgrade. Older files are refused.
-const OLDEST_SCHEMA_VERSION: u64 = 5;
+const OLDEST_SCHEMA_VERSION: u64 = 1;
 
 // A migration receives a document without its `schema_version` field, which the loader owns.
 type Migration = fn(Value) -> std::result::Result<Value, String>;
 
 // `MIGRATIONS[n]` upgrades a version `OLDEST_SCHEMA_VERSION + n` document to the next version.
-// To change the format, bump `SCHEMA_VERSION` and append one migration; the array length
-// enforces the pairing. Each step should first parse the previous version strictly into its
-// own typed struct with `deny_unknown_fields`, then build the next version, so unexpected or
-// malformed data is rejected instead of silently carried along. Migrations run in memory on
-// load; the upgraded document is written by the next save.
-const MIGRATIONS: [Migration; (SCHEMA_VERSION - OLDEST_SCHEMA_VERSION) as usize] = [v5_to_v6];
+// There are none yet: every released format so far is the current one. Migrations run in
+// memory on load (`upgrade`), and the upgraded document is written by the next save or clean
+// exit, never by loading itself.
+//
+// To change the format:
+//
+// 1. Bump `SCHEMA_VERSION`, write `fn vN_to_vM(Value) -> std::result::Result<Value, String>`,
+//    and append it here; the array length enforces the pairing. The step first parses version
+//    N strictly into its own structs with `deny_unknown_fields`, never today's `Task`, then
+//    builds version M, so unexpected or malformed data is rejected instead of carried along.
+// 2. Never edit or reorder a released migration: users may hold files at any supported
+//    version, and each step must keep meaning exactly what it did when it shipped.
+// 3. Raise `OLDEST_SCHEMA_VERSION` only to drop support deliberately. Remove the leading
+//    migrations with it and record the last release that can still upgrade those files.
+// 4. Test the step directly (exact input JSON to expected output JSON) and add a
+//    `load_checklist` round trip of a real version N file; see the notes in `tests.rs`.
+// 5. Update the task file section of the README.
+const MIGRATIONS: [Migration; (SCHEMA_VERSION - OLDEST_SCHEMA_VERSION) as usize] = [];
 
-// Version 5 documents, the input of `v5_to_v6`. Migrations use their own types so they never
-// depend on today's `Task`.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct V5Document {
-    tasks: Vec<V5Task>,
-    #[serde(default)]
-    selected: Option<usize>,
-    // The active tab, which version 6 calls `active_view`.
-    #[serde(default)]
-    section: Option<String>,
-    #[serde(default)]
-    section_order: Vec<String>,
-}
+// Runs the migrations that take a version `version` document to the newest version, in order.
+// `migrations[n]` upgrades version `oldest + n`. The caller has already checked that
+// `oldest <= version <= oldest + migrations.len()`. Taking the chain as arguments lets tests
+// run it with stand-in migrations.
+fn upgrade(
+    mut value: Value,
+    version: u64,
+    oldest: u64,
+    migrations: &[Migration],
+) -> std::result::Result<Value, String> {
+    let applied_from = (version - oldest) as usize;
 
-// Version 6 keeps this task shape, so `V5Task` is also how `v5_to_v6` writes tasks back out.
-// Every field passes through unchanged and is validated once the current `Task` is parsed.
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct V5Task {
-    id: String,
-    created_at: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    section: Option<String>,
-    text: String,
-    status: String,
-}
-
-// Version 6 renames the top-level `section`, the active tab, to `active_view`, so it can't be
-// mistaken for a task's own `section`.
-fn v5_to_v6(value: Value) -> std::result::Result<Value, String> {
-    #[derive(Serialize)]
-    struct V6Document {
-        tasks: Vec<V5Task>,
-        selected: Option<usize>,
-        active_view: Option<String>,
-        section_order: Vec<String>,
+    for (offset, migrate) in migrations.iter().enumerate().skip(applied_from) {
+        let from = oldest + offset as u64;
+        value = migrate(value)
+            .map_err(|problem| format!("migrating from version {from}: {problem}"))?;
     }
 
-    let document: V5Document = serde_json::from_value(value).map_err(|error| error.to_string())?;
-
-    let document = V6Document {
-        tasks: document.tasks,
-        selected: document.selected,
-        active_view: document.section,
-        section_order: document.section_order,
-    };
-
-    serde_json::to_value(document).map_err(|error| error.to_string())
+    Ok(value)
 }
 
 // The complete checklist that `tasks.json` holds: the tasks and the navigation saved with them.
@@ -249,16 +231,13 @@ impl Storage {
         }
 
         // Upgrade in memory only; nothing is written until the next save.
-        let mut value = Value::Object(fields);
-        let applied_from = (version - OLDEST_SCHEMA_VERSION) as usize;
-
-        for (offset, migrate) in MIGRATIONS.iter().enumerate().skip(applied_from) {
-            let from = OLDEST_SCHEMA_VERSION + offset as u64;
-
-            value = migrate(value).map_err(|problem| {
-                invalid_file(format!("migrating from version {from}: {problem}"))
-            })?;
-        }
+        let value = upgrade(
+            Value::Object(fields),
+            version,
+            OLDEST_SCHEMA_VERSION,
+            &MIGRATIONS,
+        )
+        .map_err(invalid_file)?;
 
         let mut document: ChecklistDocument =
             serde_json::from_value(value).map_err(|error| invalid_file(error.to_string()))?;
