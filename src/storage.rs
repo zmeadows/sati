@@ -17,13 +17,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::Result;
-use crate::model::{Task, reconcile_section_order};
+use crate::model::{Task, Template, reconcile_section_order};
 
 // The `tasks.json` format written by this build. Version 1 is the first public format.
 const SCHEMA_VERSION: u64 = 1;
 
 // The oldest `tasks.json` format this build can still upgrade. Older files are refused.
 const OLDEST_SCHEMA_VERSION: u64 = 1;
+
+// The `templates.json` format written by this build. It is versioned separately from
+// `tasks.json`. A future change to it should add migrations the way `MIGRATIONS` describes.
+const TEMPLATES_SCHEMA_VERSION: u64 = 1;
 
 // A migration receives a document without its `schema_version` field, which the loader owns.
 type Migration = fn(Value) -> std::result::Result<Value, String>;
@@ -275,6 +279,105 @@ impl Storage {
         Ok(document)
     }
 
+    // Templates live beside the tasks, so each data directory has its own and the same
+    // instance lock covers both files.
+    fn templates_path(&self) -> PathBuf {
+        self.path.with_file_name("templates.json")
+    }
+
+    // The saved templates in picker order, or none when the file doesn't exist yet. Like
+    // `load_checklist`, this validates strictly and never writes.
+    pub fn load_templates(&self) -> Result<Vec<Template>> {
+        let path = self.templates_path();
+
+        let contents = match fs::read(&path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(format!("could not read {}: {error}", path.display()).into());
+            }
+        };
+
+        let invalid_file = |problem: String| {
+            format!(
+                "invalid template file {}: {problem}. The file has been left untouched; repair it or move it aside before restarting",
+                path.display()
+            )
+        };
+
+        let value: Value =
+            serde_json::from_slice(&contents).map_err(|error| invalid_file(error.to_string()))?;
+
+        let Value::Object(mut fields) = value else {
+            return Err(invalid_file("expected an object".to_owned()).into());
+        };
+
+        let version = fields
+            .remove("schema_version")
+            .ok_or_else(|| invalid_file("missing schema_version".to_owned()))?;
+        let version = version.as_u64().ok_or_else(|| {
+            invalid_file("schema_version must be a non-negative integer".to_owned())
+        })?;
+
+        if version > TEMPLATES_SCHEMA_VERSION {
+            return Err(format!(
+                "template file {} uses schema version {version}, but this sati supports version {TEMPLATES_SCHEMA_VERSION}. The file has been left untouched; update sati to open it",
+                path.display()
+            )
+            .into());
+        }
+
+        if version < TEMPLATES_SCHEMA_VERSION {
+            return Err(invalid_file(format!("unsupported schema_version {version}")).into());
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Loaded {
+            templates: Vec<Template>,
+        }
+
+        let loaded: Loaded = serde_json::from_value(Value::Object(fields))
+            .map_err(|error| invalid_file(error.to_string()))?;
+
+        let mut first_with_name = std::collections::HashMap::new();
+
+        for (index, template) in loaded.templates.iter().enumerate() {
+            if let Some(problem) = template.validation_error() {
+                return Err(invalid_file(format!("template {} {problem}", index + 1)).into());
+            }
+
+            if let Some(first) = first_with_name.insert(template.name.to_lowercase(), index) {
+                return Err(invalid_file(format!(
+                    "templates {} and {} are both named {:?}; names must differ, ignoring case",
+                    first + 1,
+                    index + 1,
+                    template.name
+                ))
+                .into());
+            }
+        }
+
+        Ok(loaded.templates)
+    }
+
+    // Replaces `templates.json` with every template, in picker order.
+    pub fn save_templates(&self, templates: &[Template]) -> Result<()> {
+        #[derive(Serialize)]
+        struct Saved<'a> {
+            schema_version: u64,
+            templates: &'a [Template],
+        }
+
+        atomic_save(
+            &self.templates_path(),
+            &Saved {
+                schema_version: TEMPLATES_SCHEMA_VERSION,
+                templates,
+            },
+        )
+    }
+
     #[cfg(test)]
     pub fn save(&self, tasks: &[Task]) -> Result<()> {
         self.save_selected(tasks, None)
@@ -318,7 +421,7 @@ impl Storage {
 }
 
 fn atomic_save<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
-    let directory = path.parent().expect("task file has a parent directory");
+    let directory = path.parent().expect("data file has a parent directory");
     create_data_directory(directory)?;
 
     let mut contents = serde_json::to_vec_pretty(value)?;

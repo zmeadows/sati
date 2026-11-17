@@ -12,6 +12,10 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+use crate::app::templates::{
+    EntryInput, TemplateEditor, TemplateFocus, TemplateViewport, entry_insertion_index,
+    template_matches,
+};
 use crate::app::{App, Mode};
 use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
@@ -23,6 +27,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let area = frame.area();
     let styles = *app.appearance.styles();
     frame.render_widget(Block::default().style(styles.normal), area);
+
+    // The templates screen replaces the checklist, and handles its own clicks.
+    if matches!(app.mode, Mode::Templates(_)) {
+        app.viewport.tab_targets.clear();
+        draw_templates(frame, area, app);
+        return Rect::default();
+    }
+
     let searching = matches!(app.mode, Mode::Searching { .. });
     // Only search uses a separate input row; add/edit live inside the checklist.
     let input_height = u16::from(searching && area.height > 0);
@@ -40,24 +52,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
 
     let mut showing_status = false;
 
-    if let Some(notice) = &app.status_message
-        && let Some(status_style) =
-            notice.style(std::time::Instant::now(), styles.accent, styles.normal)
+    if list_area.height >= 2
+        && let Some(status) = status_line(app, &styles, list_area.width)
     {
-        // Status messages may use the whole border between the corners.
-        let available = usize::from(list_area.width).saturating_sub(2);
-        let short = notice.compact_message();
-
-        let message = if notice.message().width() <= available {
-            notice.message()
-        } else {
-            short
-        };
-
-        if list_area.height >= 2 && message.width() <= available {
-            block = block.title_bottom(Line::styled(message, status_style).left_aligned());
-            showing_status = true;
-        }
+        block = block.title_bottom(status);
+        showing_status = true;
     }
 
     // The hint points to the keyboard reference from the bottom-right corner. It only shows
@@ -151,6 +150,27 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     }
 
     rows
+}
+
+// The status message for the bottom border of a box `width` cells wide, while it is showing.
+// Messages may use the whole border between the corners; one too long for it gives way to its
+// compact form, and is left out if even that doesn't fit.
+fn status_line(app: &App, styles: &Styles, width: u16) -> Option<Line<'static>> {
+    let notice = app.status_message.as_ref()?;
+    let style = notice.style(std::time::Instant::now(), styles.accent, styles.normal)?;
+    let available = usize::from(width).saturating_sub(2);
+
+    let message = if notice.message().width() <= available {
+        notice.message()
+    } else {
+        notice.compact_message()
+    };
+
+    if message.width() > available {
+        return None;
+    }
+
+    Some(Line::styled(message.to_owned(), style).left_aligned())
 }
 
 const HELP_HINT: &str = "? for help";
@@ -1163,6 +1183,16 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
         ("Redo", "", "Ctrl+R"),
         ("Copy list as Markdown", "c", ""),
     ]),
+    ("Templates", &[
+        ("Open templates", "i", "Alt+I"),
+        ("Add template to tab", "Space, Enter", ""),
+        ("Find template", "/", ""),
+        ("New template", "a", ""),
+        ("Edit entries", "e", "Alt+E"),
+        ("Rename template", "E", ""),
+        ("Delete template", "d, Delete", ""),
+        ("Close templates", "Esc, q, i", "Ctrl+G"),
+    ]),
     ("Other", &[
         ("Search", "/", "Ctrl+F, Ctrl+S"),
         ("Open links in task", "v", ""),
@@ -1212,26 +1242,9 @@ const HELP_BORDERS: usize = 2;
 fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
     let styles = *app.appearance.styles();
 
+    // Leave the offset alone, so it is clamped once a usable size returns.
     if area.width < HELP_MIN_WIDTH || area.height < HELP_MIN_HEIGHT {
-        frame.render_widget(Clear, area);
-        frame.render_widget(Block::default().style(styles.normal), area);
-
-        if area.is_empty() {
-            return;
-        }
-
-        // Leave the offset alone, so it is clamped once a usable size returns.
-        let message: Vec<Line> = wrap_text(HELP_TOO_SMALL, usize::from(area.width))
-            .into_iter()
-            .map(|(_, line)| Line::styled(line, styles.muted))
-            .collect();
-        let height = (message.len() as u16).min(area.height);
-        let top = area.y + (area.height - height) / 2;
-
-        frame.render_widget(
-            Paragraph::new(message).alignment(Alignment::Center),
-            Rect::new(area.x, top, area.width, height),
-        );
+        draw_too_small(frame, area, &styles, HELP_TOO_SMALL);
         return;
     }
 
@@ -1381,6 +1394,433 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
 
     frame.render_widget(Paragraph::new(visible), inner);
     draw_scrollbar(frame, inner, total_lines, first_line, styles.muted);
+}
+
+// Covers `area` with a centered request for more room, for a view without a usable layout.
+fn draw_too_small(frame: &mut Frame, area: Rect, styles: &Styles, message: &str) {
+    frame.render_widget(Clear, area);
+    frame.render_widget(Block::default().style(styles.normal), area);
+
+    if area.is_empty() {
+        return;
+    }
+
+    let message: Vec<Line> = wrap_text(message, usize::from(area.width))
+        .into_iter()
+        .map(|(_, line)| Line::styled(line, styles.muted))
+        .collect();
+    let height = (message.len() as u16).min(area.height);
+    let top = area.y + (area.height - height) / 2;
+
+    frame.render_widget(
+        Paragraph::new(message).alignment(Alignment::Center),
+        Rect::new(area.x, top, area.width, height),
+    );
+}
+
+const TEMPLATES_TITLE: &str = "Templates";
+const TEMPLATES_LIST_HINT: &str = "␣ use · e edit · a new · / find";
+const TEMPLATES_EDITOR_HINT: &str = "a add · e edit · d delete · Esc done";
+const TEMPLATES_TOO_SMALL: &str = "Enlarge terminal to view templates.";
+
+// Wide enough for the hints and a useful entry; tall enough for the borders above, between,
+// and below the panels, one name row, and three entry rows.
+const TEMPLATES_MIN_WIDTH: u16 = 40;
+const TEMPLATES_MIN_HEIGHT: u16 = 7;
+
+// Cells the title leaves on the top border for the find and new inputs; a target tab whose
+// name would crowd them out is left out of the title.
+const TEMPLATES_BORDER_INPUT_MIN_WIDTH: u16 = 12;
+
+// Draw the templates screen in place of the checklist: matching names on top, and the focused
+// template's entries (or its editor) below. Like the checklist, it records where its rows are
+// for the mouse and keeps its scroll offsets in view.
+fn draw_templates(frame: &mut Frame, area: Rect, app: &mut App) {
+    let styles = *app.appearance.styles();
+    app.viewport.templates = TemplateViewport::default();
+
+    if area.width < TEMPLATES_MIN_WIDTH || area.height < TEMPLATES_MIN_HEIGHT {
+        draw_too_small(frame, area, &styles, TEMPLATES_TOO_SMALL);
+        return;
+    }
+
+    // With the tab strip hidden, the title names the tab a template will be added to. A
+    // checklist without sections has no tabs, so there is nothing to name.
+    let mut title = Line::from(vec![
+        Span::styled("─ ", styles.border),
+        Span::styled(TEMPLATES_TITLE, styles.heading),
+        Span::styled(" ", styles.border),
+    ]);
+
+    if let Some((_, label)) = app
+        .section_tabs()
+        .into_iter()
+        .find(|(view, _)| *view == app.view)
+    {
+        // The label is colored like the active tab it names.
+        let target = [
+            Span::styled("→ ", styles.border),
+            Span::styled(label, styles.accent),
+            Span::styled(" ", styles.border),
+        ];
+        // Besides the title, the top border keeps its left corner, a border cell after the
+        // title, and `─┐` after the input; see the border input below.
+        let title_width = title.width() + target.iter().map(Span::width).sum::<usize>();
+        let border_input_room = usize::from(area.width).saturating_sub(title_width + 4);
+
+        if border_input_room >= usize::from(TEMPLATES_BORDER_INPUT_MIN_WIDTH) {
+            title.spans.extend(target);
+        }
+    }
+
+    let title_width = title.width() as u16;
+    let status = status_line(app, &styles, area.width);
+
+    let App {
+        mode,
+        templates,
+        viewport,
+        wrap,
+        task_markers,
+        border_style,
+        ..
+    } = app;
+
+    let Mode::Templates(picker) = mode else {
+        return;
+    };
+
+    let matches = template_matches(templates, picker.filter.text());
+    let focused = matches
+        .contains(&picker.selected)
+        .then_some(picker.selected);
+    let editor = match &picker.focus {
+        TemplateFocus::Editing(editor) => Some(editor),
+        _ => None,
+    };
+
+    let entries: &[String] = focused.map_or(&[], |index| &templates[index].entries);
+    let inner_width = area.width - 2;
+    let layout = template_entry_layout(entries, editor, inner_width, *wrap, *task_markers, &styles);
+
+    // Names get the rows they need, up to a third of the screen or whatever the entries
+    // leave unused, and the entries get the rest. While editing, only the name shows.
+    let content_rows = usize::from(area.height - 3);
+
+    let list_rows = if editor.is_some() {
+        1
+    } else {
+        let needed = matches.len().max(1);
+        let unused_by_entries = content_rows.saturating_sub(layout.lines.len().max(1));
+        let share = (content_rows / 3).max(unused_by_entries).max(1);
+
+        needed.min(share).min(content_rows - 1)
+    };
+
+    let entry_rows = content_rows - list_rows;
+    let list_area = Rect::new(area.x + 1, area.y + 1, inner_width, list_rows as u16);
+    let divider_y = list_area.bottom();
+    let entries_area = Rect::new(area.x + 1, divider_y + 1, inner_width, entry_rows as u16);
+
+    let hint = match &picker.focus {
+        TemplateFocus::List | TemplateFocus::Filtering => Some(TEMPLATES_LIST_HINT),
+        TemplateFocus::Editing(editor) if editor.input.is_none() => Some(TEMPLATES_EDITOR_HINT),
+        _ => None,
+    };
+
+    let mut block = Block::bordered()
+        .border_type(border_type(*border_style))
+        .border_style(styles.border)
+        .title(title);
+
+    // As on the checklist, a brief status message takes the bottom border from the hint.
+    if let Some(status) = status {
+        block = block.title_bottom(status);
+    } else if let Some(hint) = hint
+        && hint.width() + HELP_BORDERS <= usize::from(area.width)
+    {
+        block = block.title_bottom(Line::styled(hint, styles.muted).right_aligned());
+    }
+
+    frame.render_widget(block, area);
+
+    // Both border styles join the divider to the sides with the same T pieces.
+    let divider = format!("├{}┤", "─".repeat(usize::from(inner_width)));
+    frame
+        .buffer_mut()
+        .set_string(area.x, divider_y, divider, styles.border);
+
+    // The filter and a new template's name are typed on the top border, after the title. A
+    // filter kept with Enter stays there, without the cursor.
+    let border_input = match &picker.focus {
+        TemplateFocus::Naming(input) => Some((input, "new", true)),
+        TemplateFocus::Filtering => Some((&picker.filter, "find", true)),
+        _ if !picker.filter.text().is_empty() => Some((&picker.filter, "find", false)),
+        _ => None,
+    };
+
+    if let Some((input, label, typing)) = border_input {
+        // A border cell after the title, then the input between spaces, then two border
+        // cells before the corner.
+        let x = area.x + 1 + title_width + 1;
+        let width = area.right().saturating_sub(x + 2);
+
+        frame
+            .buffer_mut()
+            .set_string(x, area.y, " ".repeat(usize::from(width)), styles.normal);
+
+        let input_area = Rect::new(x + 1, area.y, width.saturating_sub(2), 1);
+        draw_input_line(
+            frame, input_area, input, label, &styles, typing, false, None,
+        );
+    }
+
+    let mut template_by_row = Vec::new();
+
+    if let Some(index) = focused.filter(|_| editor.is_some()) {
+        let name = Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                templates[index].name.clone(),
+                styles.heading.add_modifier(Modifier::BOLD),
+            ),
+        ]);
+
+        frame.render_widget(Paragraph::new(name), list_area);
+    } else if matches.is_empty() {
+        let message = if templates.is_empty() {
+            " No templates yet. Press a to create one."
+        } else {
+            " No matching templates"
+        };
+
+        frame.render_widget(Paragraph::new(message).style(styles.muted), list_area);
+    } else {
+        // Keep the focused name in view.
+        let position = matches
+            .iter()
+            .position(|&index| Some(index) == focused)
+            .unwrap_or(0);
+        let mut scroll = picker
+            .list_scroll
+            .min(matches.len().saturating_sub(list_rows));
+
+        if position < scroll {
+            scroll = position;
+        } else if position >= scroll + list_rows {
+            scroll = position + 1 - list_rows;
+        }
+
+        picker.list_scroll = scroll;
+
+        let mut lines = Vec::new();
+
+        for &index in matches.iter().skip(scroll).take(list_rows) {
+            let marker = if Some(index) == focused {
+                focus_marker(*task_markers)
+            } else {
+                " "
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(marker, styles.accent.add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled(templates[index].name.clone(), styles.normal),
+            ]));
+            template_by_row.push(index);
+        }
+
+        frame.render_widget(Paragraph::new(lines), list_area);
+        draw_scrollbar(frame, list_area, matches.len(), scroll, styles.muted);
+
+        // Renaming types over the focused name, as renaming a section types over its tab.
+        if let TemplateFocus::Renaming(input) = &picker.focus
+            && let Some(row) = template_by_row
+                .iter()
+                .position(|&index| Some(index) == focused)
+        {
+            let row_area = Rect::new(
+                list_area.x + 2,
+                list_area.y + row as u16,
+                list_area.width - 2,
+                1,
+            );
+
+            draw_input_line(frame, row_area, input, "rename", &styles, true, false, None);
+        }
+    }
+
+    // The editor keeps its focused entry or input in view; the preview scrolls freely.
+    let total_rows = layout.lines.len();
+    let mut scroll = picker
+        .entries_scroll
+        .min(total_rows.saturating_sub(entry_rows));
+
+    if editor.is_some()
+        && let Some(focus) = layout.focus_rows.clone()
+    {
+        if focus.start < scroll || focus.len() > entry_rows {
+            scroll = focus.start;
+        } else if focus.end > scroll + entry_rows {
+            scroll = focus.end - entry_rows;
+        }
+    }
+
+    picker.entries_scroll = scroll;
+    let visible_rows = scroll..(scroll + entry_rows).min(total_rows);
+
+    if focused.is_some() && total_rows == 0 {
+        let message = if editor.is_some() {
+            " Press a to add an entry"
+        } else {
+            " No entries yet. Press e to add some."
+        };
+
+        frame.render_widget(Paragraph::new(message).style(styles.muted), entries_area);
+    }
+
+    let visible_lines: Vec<Line> = layout.lines[visible_rows.clone()].to_vec();
+    frame.render_widget(Paragraph::new(visible_lines), entries_area);
+    draw_scrollbar(frame, entries_area, total_rows, scroll, styles.muted);
+
+    if let Some((input, kind)) = editor.and_then(|editor| editor.input.as_ref())
+        && let Some(row) = layout.input_row
+        && visible_rows.contains(&row)
+    {
+        let label = match kind {
+            EntryInput::Add(_) => "add",
+            EntryInput::Edit(_) => "edit",
+        };
+        let indent = entries_area.width.saturating_sub(1).min(2);
+        let row_area = Rect::new(
+            entries_area.x + indent,
+            entries_area.y + (row - scroll) as u16,
+            entries_area.width - indent,
+            1,
+        );
+
+        draw_input_line(frame, row_area, input, label, &styles, true, false, None);
+    }
+
+    // While editing, the names can't be clicked: the editor stays on its template.
+    viewport.templates = TemplateViewport {
+        list: if editor.is_some() {
+            Rect::default()
+        } else {
+            list_area
+        },
+        template_by_row,
+        entries: entries_area,
+        entry_by_row: layout.entry_by_row[visible_rows].to_vec(),
+    };
+
+    if picker.focus == TemplateFocus::ConfirmDelete
+        && let Some(index) = focused
+    {
+        let question = format!("Delete template {}?", templates[index].name);
+        draw_confirmation(frame, area, &styles, *border_style, &question);
+    }
+}
+
+// The entry rows of a template, built like task rows: `entry_by_row` gives the entry on each
+// row (none for an add row), and `focus_rows` the rows of the editor's selected entry or input.
+struct EntryLayout {
+    lines: Vec<Line<'static>>,
+    entry_by_row: Vec<Option<usize>>,
+    input_row: Option<usize>,
+    focus_rows: Option<Range<usize>>,
+}
+
+fn template_entry_layout(
+    entries: &[String],
+    editor: Option<&TemplateEditor>,
+    width: u16,
+    wrap: bool,
+    markers: TaskMarkerStyle,
+    styles: &Styles,
+) -> EntryLayout {
+    let input = editor.and_then(|editor| editor.input.as_ref());
+    let selected_entry = editor.and_then(|editor| editor.selected);
+
+    let inline = input.map(|(_, kind)| match kind {
+        EntryInput::Add(placement) => {
+            entry_insertion_index(selected_entry, entries.len(), *placement)
+        }
+        EntryInput::Edit(index) => *index,
+    });
+    let editing = matches!(input, Some((_, EntryInput::Edit(_))));
+
+    // The preview has no selection, and an open input takes the focus from it.
+    let selected = if inline.is_some() {
+        None
+    } else {
+        selected_entry
+    };
+
+    let mut lines = Vec::new();
+    let mut entry_by_row = Vec::new();
+    let mut input_row = None;
+    let mut focus_rows = None;
+    let text_width = usize::from(width).saturating_sub(TASK_PREFIX_WIDTH);
+
+    for index in 0..=entries.len() {
+        if inline == Some(index) {
+            input_row = Some(lines.len());
+            focus_rows = Some(lines.len()..lines.len() + 1);
+            lines.push(Line::default());
+            entry_by_row.push(editing.then_some(index));
+
+            if editing {
+                continue;
+            }
+        }
+
+        let Some(entry) = entries.get(index) else {
+            break;
+        };
+
+        let text = links::display_text(entry).text;
+        let wrapped = if wrap && text_width > 0 {
+            wrap_text(&text, text_width)
+        } else {
+            vec![(0..text.len(), text.as_str())]
+        };
+
+        let is_selected = selected == Some(index);
+        let first_row = lines.len();
+
+        for (row, (_, row_text)) in wrapped.into_iter().enumerate() {
+            let marker = if row == 0 && is_selected {
+                focus_marker(markers)
+            } else {
+                " "
+            };
+            let checkbox = if row == 0 { " [ ] " } else { "     " };
+            let checkbox_style = if is_selected {
+                styles.accent
+            } else {
+                styles.normal
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(marker, styles.accent.add_modifier(Modifier::BOLD)),
+                Span::styled(checkbox, checkbox_style),
+                Span::styled(row_text.to_owned(), styles.normal),
+            ]));
+            entry_by_row.push(Some(index));
+        }
+
+        if is_selected {
+            focus_rows = Some(first_row..lines.len());
+        }
+    }
+
+    EntryLayout {
+        lines,
+        entry_by_row,
+        input_row,
+        focus_rows,
+    }
 }
 
 #[cfg(test)]

@@ -27,6 +27,14 @@ Only `http` and `https` links are recognized; anything else stays as typed. Edit
 
 Click a link to open it in your default browser (clicking elsewhere on the task still checks it off), or press `v` to open every link in the selected task. sati also marks links as terminal hyperlinks (OSC 8), so with `--no-mouse` the terminal's own link click works in terminals that support them; tmux needs `set -as terminal-features ',*:hyperlinks'`. `sati export` and `c` write links as Markdown links.
 
+## Templates
+
+A template is a named list of tasks you add again and again, such as a daily routine or a packing list. Press `i` to open them: names are listed above the entries of the focused one, with the most recently used first.
+
+`Space` or `Enter` adds a template's entries as new, unchecked tasks. On a section tab they join that section after its last task; on `[*]` and `[-]` they go to the end of the list, and an entry that starts with a section prefix such as `Work: ` goes to that section, as if you had typed it. Undo removes them all at once.
+
+`a` creates a template, `e` edits its entries with the usual task keys, and `E` renames it. Undo in the editor covers only changes made since it opened. `d` deletes a template after asking, and can't be undone.
+
 ## Carryover and clearing
 
 sati is meant to be cleared regularly. Both clearing commands act on the current tab, or the whole list on `[*]`:
@@ -40,7 +48,7 @@ Undo history covers clears, but it lasts only while sati is open.
 
 ## Data and multiple checklists
 
-Tasks are saved to `tasks.json` after every change:
+Tasks are saved to `tasks.json`, and templates to `templates.json`, after every change:
 
 | Platform | Directory |
 | --- | --- |
@@ -48,9 +56,9 @@ Tasks are saved to `tasks.json` after every change:
 | macOS | `~/Library/Application Support/sati/` |
 | Windows | `%APPDATA%\sati\` |
 
-Each save replaces the file atomically, so an interrupted save leaves the previous version intact. sati won't open a `tasks.json` that is malformed or was written by a newer version; it reports the problem and leaves the file untouched.
+Each save replaces the file atomically, so an interrupted save leaves the previous version intact. sati won't open a `tasks.json` or `templates.json` that is malformed or was written by a newer version; it reports the problem and leaves the file untouched.
 
-`--data-dir PATH` keeps `tasks.json` and its lock file directly in `PATH` instead. Each directory is an independent checklist, and only one sati can have it open at a time. `--data-dir` doesn't change where configuration is read from. sati doesn't expand `~` itself, so write `--data-dir ~/work` with a space: some shells don't expand `~` after `=`.
+`--data-dir PATH` keeps these files and a lock file directly in `PATH` instead. Each directory is an independent checklist with its own templates, and only one sati can have it open at a time. `--data-dir` doesn't change where configuration is read from. sati doesn't expand `~` itself, so write `--data-dir ~/work` with a space: some shells don't expand `~` after `=`.
 
 ```sh
 alias work='sati --data-dir ~/checklists/work'
@@ -59,7 +67,7 @@ sati export --data-dir ~/checklists/work > work.md
 
 ### Backup and restore
 
-`tasks.json` is the whole checklist, so to back one up, copy that file, whether it is in the default directory or a `--data-dir` directory. To restore, quit sati first, then put the copy back as `tasks.json` in the same directory. While sati is open, it would save over the restored file on your next change or when it quits.
+`tasks.json` is the whole checklist and `templates.json` its templates, so to back one up, copy those files, whether they are in the default directory or a `--data-dir` directory. To restore, quit sati first, then put the copies back under the same names in the same directory. While sati is open, it would save over a restored file on your next change or when it quits.
 
 `sati export` is for reading, not backup: it drops carryover marks and tab order, and sati can't import it. A backup written by a newer sati may not open in an older one.
 

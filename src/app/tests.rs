@@ -416,7 +416,7 @@ fn copy_key_remains_text_or_is_ignored_outside_normal_mode() {
             | Mode::Searching { input, .. }
             | Mode::RenamingSection { input }
             | Mode::PickingSectionTab { input, .. } => assert_eq!(input.text(), "c"),
-            Mode::ConfirmClearNonCarried | Mode::Help { .. } => {}
+            Mode::ConfirmClearNonCarried | Mode::Help { .. } | Mode::Templates(_) => {}
             Mode::Normal => panic!("copy changed mode"),
         }
 

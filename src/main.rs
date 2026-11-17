@@ -102,8 +102,8 @@ struct Cli {
 
     /// Use the checklist in this directory instead of the default data directory
     ///
-    /// The directory holds tasks.json and tasks.lock; each directory is an independent
-    /// checklist. sati creates the directory if needed; export only reads it. It does not
+    /// The directory holds tasks.json, templates.json, and tasks.lock; each directory is an
+    /// independent checklist. sati creates the directory if needed; export only reads it. It does not
     /// change where config.toml is read from.
     #[arg(long, value_name = "PATH", global = true)]
     data_dir: Option<PathBuf>,
@@ -339,6 +339,7 @@ fn run() -> Result<()> {
     let _instance_lock = storage.lock()?;
 
     let mut app = App::from_checklist_document(storage.load_checklist()?);
+    app.templates = storage.load_templates()?;
     app.wrap = options.wrap;
     app.status_messages = options.status_messages;
     app.status_message_duration = options.status_message_duration;

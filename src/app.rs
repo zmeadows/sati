@@ -2,8 +2,6 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
-use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Config, Matcher, Utf32Str};
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -15,12 +13,16 @@ use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
 use crate::links::DisplayText;
 use crate::model::{
-    SectionView, Task, TaskStatus, input_section_name, input_task_body, invalid_section_name,
-    parse_task_input, reconcile_active_view, reconcile_section_order, section_tabs_of,
-    single_line_character, view_includes_task,
+    SectionView, Task, TaskStatus, Template, input_section_name, input_task_body,
+    invalid_section_name, parse_task_input, reconcile_active_view, reconcile_section_order,
+    section_tabs_of, single_line_character, view_includes_task,
 };
 use crate::status_message::StatusMessage;
 use crate::storage::Storage;
+
+pub(crate) mod templates;
+
+use templates::{TemplatePicker, TemplateViewport};
 
 const HISTORY_LIMIT: usize = 256;
 
@@ -43,6 +45,36 @@ fn submitted_task_text(input: &TextInput) -> Option<String> {
         input_section_name(input.text()).is_some() && input_task_body(input.text()).is_empty();
 
     (!text.is_empty() && !bare_section).then(|| text.to_owned())
+}
+
+// The line-editing keys that every text input shares.
+fn edit_text_input(input: &mut TextInput, code: KeyCode) {
+    match code {
+        KeyCode::Backspace => input.delete_before(),
+        KeyCode::Delete => input.delete_after(),
+        KeyCode::Left => input.move_left(),
+        KeyCode::Right => input.move_right(),
+        KeyCode::Home => input.set_cursor(0),
+        KeyCode::End => input.set_cursor(input.text().len()),
+        KeyCode::Char(character) if !character.is_control() => {
+            input.insert(single_line_character(character).encode_utf8(&mut [0; 4]))
+        }
+        _ => {}
+    }
+}
+
+// Typing and moving the cursor repeat while a key is held in any text input.
+fn repeats_while_typing(code: KeyCode) -> bool {
+    matches!(
+        code,
+        KeyCode::Char(_)
+            | KeyCode::Backspace
+            | KeyCode::Delete
+            | KeyCode::Left
+            | KeyCode::Right
+            | KeyCode::Home
+            | KeyCode::End
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -87,6 +119,8 @@ pub enum Mode {
         max_scroll: usize,
         page: usize,
     },
+    // The templates screen opened with `i`, drawn in place of the checklist; see `templates`.
+    Templates(TemplatePicker),
 }
 
 impl Mode {
@@ -98,6 +132,7 @@ impl Mode {
             | Mode::Searching { input, .. }
             | Mode::RenamingSection { input }
             | Mode::PickingSectionTab { input, .. } => Some(input),
+            Mode::Templates(picker) => picker.text_input_mut(),
             Mode::Normal | Mode::ConfirmClearNonCarried | Mode::Help { .. } => None,
         }
     }
@@ -202,12 +237,15 @@ pub(crate) struct ViewportState {
     pub(crate) tab_targets: Vec<(Rect, SectionView)>,
     // The first visible tab when they overflow; kept between draws so tabs don't slide.
     pub(crate) tab_scroll: usize,
+    pub(crate) templates: TemplateViewport,
 }
 
 pub struct App {
     pub tasks: Vec<Task>,
     // Lowercase keys of the named section tabs in display order; see `reconcile_section_order`.
     pub section_order: Vec<String>,
+    // Saved separately in templates.json, in the template picker's order.
+    pub templates: Vec<Template>,
     pub list: ListState,
     pub mode: Mode,
     pub wrap: bool,
@@ -249,6 +287,7 @@ impl App {
         Self {
             tasks,
             section_order,
+            templates: Vec::new(),
             list: ListState::default().with_selected(selected),
             mode: Mode::Normal,
             wrap: true,
@@ -268,6 +307,7 @@ impl App {
                 height: 0,
                 tab_targets: Vec::new(),
                 tab_scroll: 0,
+                templates: TemplateViewport::default(),
             },
             pending_count: None,
             pending_section_jump: None,
@@ -503,32 +543,12 @@ impl App {
             })
             .collect();
 
-        if query.is_empty() {
-            return candidates.into_iter().map(|(view, _)| view).collect();
-        }
+        let names: Vec<&str> = candidates.iter().map(|(_, name)| name.as_str()).collect();
 
-        // `Pattern::new` takes the query literally: no `^`, `$`, `!`, or `'` syntax.
-        let pattern = Pattern::new(
-            query,
-            CaseMatching::Ignore,
-            Normalization::Smart,
-            AtomKind::Fuzzy,
-        );
-        let mut matcher = Matcher::new(Config::DEFAULT);
-        let mut buffer = Vec::new();
-
-        let mut scored: Vec<(SectionView, u32)> = candidates
+        crate::search::fuzzy_rank(query, &names)
             .into_iter()
-            .filter_map(|(view, name)| {
-                let score = pattern.score(Utf32Str::new(&name, &mut buffer), &mut matcher)?;
-                Some((view, score))
-            })
-            .collect();
-
-        // A stable sort, so equal scores stay in tab order.
-        scored.sort_by_key(|&(_, score)| std::cmp::Reverse(score));
-
-        scored.into_iter().map(|(view, _)| view).collect()
+            .map(|index| candidates[index].0.clone())
+            .collect()
     }
 
     // Open the section picker without moving: the current tab and selection stay as they are
@@ -1622,6 +1642,7 @@ impl App {
         }
 
         let previous_query = self.search_query().map(str::to_owned);
+        let previous_filter = self.template_filter().map(str::to_owned);
 
         let quit = if self.handle_modified_key(key, storage)? {
             false
@@ -1644,24 +1665,38 @@ impl App {
                     self.handle_help_key(key);
                     false
                 }
+                Mode::Templates(_) => {
+                    self.handle_templates_key(key, storage)?;
+                    false
+                }
             }
         };
 
         self.refresh_search(previous_query.as_deref());
         self.refresh_section_picker();
+        self.refresh_template_filter(previous_filter.as_deref());
         self.explain_rename_problem();
+        self.explain_template_name_problem();
 
         Ok(quit)
     }
 
     fn normalize_key(&self, key: KeyEvent) -> KeyEvent {
         // Emacs-style aliases become the Normal-mode keys they mirror, so they share their
-        // dispatch and repeat policy. Input modes keep ignoring these chords.
-        if self.mode == Mode::Normal {
+        // dispatch and repeat policy. The template list and editor take them the same way;
+        // input modes keep ignoring these chords.
+        let shortcuts = match &self.mode {
+            Mode::Normal => true,
+            Mode::Templates(picker) => picker.takes_shortcuts(),
+            _ => false,
+        };
+
+        if shortcuts {
             let alias = match (key.modifiers, key.code) {
                 (KeyModifiers::CONTROL, KeyCode::Char('o' | 'O')) => Some(KeyCode::Char('o')),
                 (KeyModifiers::ALT, KeyCode::Char('e' | 'E')) => Some(KeyCode::Char('e')),
                 (KeyModifiers::ALT, KeyCode::Char('g' | 'G')) => Some(KeyCode::Char('`')),
+                (KeyModifiers::ALT, KeyCode::Char('i' | 'I')) => Some(KeyCode::Char('i')),
                 (KeyModifiers::CONTROL, KeyCode::Char('v' | 'V')) => Some(KeyCode::PageDown),
                 (KeyModifiers::ALT, KeyCode::Char('v' | 'V')) => Some(KeyCode::PageUp),
                 // Org-mode's Alt+Up/Down move the task like K/J, counts included.
@@ -1693,10 +1728,13 @@ impl App {
             && matches!(key.code, KeyCode::Char('p' | 'P' | 'n' | 'N'))
         {
             // Ctrl+N/P step through whatever is selectable: tasks like Down/Up in Normal mode,
-            // help lines like Down/Up in the keyboard reference, and search results, picker
+            // help lines, templates, and entries like Down/Up, and search results, picker
             // matches, or section suggestions like Tab/Shift+Tab.
             let next = matches!(key.code, KeyCode::Char('n' | 'N'));
-            let line_based = matches!(self.mode, Mode::Normal | Mode::Help { .. });
+            let line_based = matches!(
+                self.mode,
+                Mode::Normal | Mode::Help { .. } | Mode::Templates(_)
+            );
 
             let code = match (line_based, next) {
                 (true, true) => KeyCode::Down,
@@ -1759,19 +1797,9 @@ impl App {
             | Mode::Editing { .. }
             | Mode::Searching { .. }
             | Mode::RenamingSection { .. }
-            | Mode::PickingSectionTab { .. } => {
-                matches!(
-                    key.code,
-                    KeyCode::Char(_)
-                        | KeyCode::Backspace
-                        | KeyCode::Delete
-                        | KeyCode::Left
-                        | KeyCode::Right
-                        | KeyCode::Home
-                        | KeyCode::End
-                )
-            }
+            | Mode::PickingSectionTab { .. } => repeats_while_typing(key.code),
             Mode::ConfirmClearNonCarried => false,
+            Mode::Templates(picker) => picker.repeat_allowed(key),
             // Holding a scroll key keeps scrolling; `?` and Esc open or close once per press.
             Mode::Help { .. } => {
                 key.modifiers.is_empty()
@@ -1836,7 +1864,18 @@ impl App {
             return Ok(true);
         }
 
-        // The clear confirmation and the keyboard reference ignore modified keys.
+        if let Mode::Templates(picker) = &self.mode
+            && picker.takes_shortcuts()
+        {
+            if matches!(picker.focus, templates::TemplateFocus::Editing(_)) {
+                self.handle_template_editor_chord(key, storage)?;
+            }
+
+            return Ok(true);
+        }
+
+        // The clear confirmation, the keyboard reference, and the template deletion
+        // confirmation ignore modified keys.
         let Some(input) = self.mode.text_input_mut() else {
             return Ok(true);
         };
@@ -1973,17 +2012,8 @@ impl App {
                 self.mode = Mode::Normal;
                 self.viewport.reveal_selection = true;
             }
-            KeyCode::Backspace => input.delete_before(),
-            KeyCode::Delete => input.delete_after(),
-            KeyCode::Left => input.move_left(),
-            KeyCode::Right => input.move_right(),
-            KeyCode::Home => input.set_cursor(0),
-            KeyCode::End => input.set_cursor(input.text().len()),
-            KeyCode::Char(character) if !character.is_control() => {
-                input.insert(single_line_character(character).encode_utf8(&mut [0; 4]))
-            }
             KeyCode::Enter => self.submit_input(storage)?,
-            _ => {}
+            code => edit_text_input(input, code),
         }
 
         Ok(())
@@ -2029,7 +2059,8 @@ impl App {
             | Mode::PickingSectionTab { .. }
             | Mode::Normal
             | Mode::ConfirmClearNonCarried
-            | Mode::Help { .. } => return Ok(()),
+            | Mode::Help { .. }
+            | Mode::Templates(_) => return Ok(()),
         }
 
         self.mode = Mode::Normal;
@@ -2107,6 +2138,7 @@ impl App {
             }
             KeyCode::Char('/') => self.start_search(),
             KeyCode::Char('`') => self.start_section_picker(),
+            KeyCode::Char('i') => self.open_templates(),
             KeyCode::Char('\'') => self.return_to_previous_position(),
             // Terminals may report `?` with or without Shift; nothing else reaches here.
             KeyCode::Char('?') => {
@@ -2256,6 +2288,7 @@ impl App {
         self.pending_section_jump = None;
         self.accept_section_suggestion();
         let previous_query = self.search_query().map(str::to_owned);
+        let previous_filter = self.template_filter().map(str::to_owned);
 
         if let Some(input) = self.mode.text_input_mut() {
             let normalized: String = text
@@ -2269,7 +2302,9 @@ impl App {
 
         self.refresh_search(previous_query.as_deref());
         self.refresh_section_picker();
+        self.refresh_template_filter(previous_filter.as_deref());
         self.explain_rename_problem();
+        self.explain_template_name_problem();
     }
 
     pub fn handle_mouse(&mut self, event: MouseEvent, rows: Rect, storage: &Storage) -> Result<()> {
@@ -2285,6 +2320,13 @@ impl App {
                 MouseEventKind::ScrollUp => self.scroll_help(false, 1),
                 _ => {}
             }
+
+            return Ok(());
+        }
+
+        // The templates screen replaces the checklist.
+        if matches!(self.mode, Mode::Templates(_)) {
+            self.handle_templates_mouse(event);
 
             return Ok(());
         }

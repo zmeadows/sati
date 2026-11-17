@@ -22,6 +22,7 @@ sati is for writing things down, checking them off, and clearing the list when t
 - Vim-style keys, with Emacs-style alternatives for many actions.
 - Sections: prefix a task with `Work: ` to group it under its own tab.
 - Carryover: mark unfinished tasks to keep them when you clear the list.
+- Templates: named lists, such as a daily routine, that you can add to any tab.
 - Search that highlights matches without filtering or reordering the list.
 - Undo and redo for the current session.
 - Terminal-native colors by default, plus built-in themes based on Vim, Neovim, and Emacs color schemes.

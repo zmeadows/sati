@@ -56,15 +56,63 @@ impl Task {
     pub(crate) fn validation_error(&self) -> Option<&'static str> {
         if self.section.as_deref().is_some_and(invalid_section_name) {
             Some("section must be one word without spaces, colons, or control characters")
-        } else if self.text.is_empty() {
-            Some("text is empty")
-        } else if self.text.trim() != self.text {
-            Some("text has leading or trailing whitespace")
-        } else if self.text.chars().any(|c| single_line_character(c) != c) {
-            Some("text contains a control character or Unicode line separator; use a single line")
         } else {
-            None
+            invalid_task_body(&self.text)
         }
+    }
+}
+
+// Why `text` can't be a task body, which must be nonempty, trimmed, and a single line.
+// Template entries become task bodies, so they follow the same rule.
+pub(crate) fn invalid_task_body(text: &str) -> Option<&'static str> {
+    if text.is_empty() {
+        Some("text is empty")
+    } else if text.trim() != text {
+        Some("text has leading or trailing whitespace")
+    } else if text.chars().any(|c| single_line_character(c) != c) {
+        Some("text contains a control character or Unicode line separator; use a single line")
+    } else {
+        None
+    }
+}
+
+// A named list of task bodies that the template picker (`i`) adds to the current tab. The
+// order of `App::templates` is the picker's order, most recently used first, so it is saved
+// as it is rather than kept in a field.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Template {
+    // Unique among templates, ignoring case. Unlike a section, a name may contain spaces.
+    pub name: String,
+    pub entries: Vec<String>,
+}
+
+impl Template {
+    pub(crate) fn validation_error(&self) -> Option<String> {
+        if let Some(problem) = invalid_template_name(&self.name) {
+            return Some(problem.to_owned());
+        }
+
+        for (index, entry) in self.entries.iter().enumerate() {
+            if let Some(problem) = invalid_task_body(entry) {
+                return Some(format!("entry {} {problem}", index + 1));
+            }
+        }
+
+        None
+    }
+}
+
+// Why `name` can't name a template: like a task body, it is a nonempty, trimmed single line.
+pub(crate) fn invalid_template_name(name: &str) -> Option<&'static str> {
+    if name.is_empty() {
+        Some("name is empty")
+    } else if name.trim() != name {
+        Some("name has leading or trailing whitespace")
+    } else if name.chars().any(|c| single_line_character(c) != c) {
+        Some("name contains a control character or Unicode line separator")
+    } else {
+        None
     }
 }
 

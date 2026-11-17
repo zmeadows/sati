@@ -11,7 +11,7 @@ Prioritize, in order:
 3. A quiet, responsive, keyboard-friendly interface.
 4. Small changes with little ongoing maintenance cost.
 
-Do not introduce calendars, tags, priorities, reminders, projects, synchronization, configurable keybindings, or other product features unless requested. Sections are an intentional part of the existing design. Preserve existing behavior and Linux, macOS, and Windows support unless the task explicitly changes them.
+Do not introduce calendars, tags, priorities, reminders, projects, synchronization, configurable keybindings, or other product features unless requested. Sections and templates are intentional parts of the existing design. Preserve existing behavior and Linux, macOS, and Windows support unless the task explicitly changes them.
 
 Read the relevant implementation and documentation before editing. This file describes durable constraints and engineering standards; it is not an exhaustive behavior specification. See *Documentation* below for where user-facing behavior is documented; the source is authoritative for implementation details.
 
@@ -20,10 +20,11 @@ Read the relevant implementation and documentation before editing. This file des
 The project uses Rust 2024 with MSRV **1.89**. Consult `Cargo.toml` for dependencies and enabled features; do not assume a new dependency is needed. Import Crossterm through `ratatui::crossterm`, not a separately versioned direct dependency.
 
 - `src/main.rs` — Clap CLI and subcommands, configuration startup order, terminal setup/cleanup, event loop, and the crate-wide `Result` alias.
-- `src/model.rs` — `Task`, `TaskStatus`, `SectionView`, task validation and timestamps, task-input parsing, tab ordering, active-view filtering, and section-order/active-view reconciliation.
+- `src/model.rs` — `Task`, `TaskStatus`, `Template`, `SectionView`, task validation and timestamps, task-input parsing, tab ordering, active-view filtering, and section-order/active-view reconciliation.
 - `src/app.rs` — modes, application state, input dispatch, task mutations, navigation, undo/redo, and the `ViewportState` that drawing records for input.
+- `src/app/templates.rs` — the templates screen (`i`): picker and editor state, their keys and mouse handling, applying a template to the current tab, and template mutations.
 - `src/ui.rs` — layout, drawing, wrapped rows, mouse mapping, and the `?` keyboard reference (`HELP_GROUPS`).
-- `src/storage.rs` — platform data paths, instance locking, persistent schema, validation, migration, and atomic saving.
+- `src/storage.rs` — platform data paths, instance locking, persistent schema (`tasks.json` and `templates.json`), validation, migration, and atomic saving.
 - `src/input.rs` — grapheme-aware single-line editing.
 - `src/config.rs` — strict TOML configuration and discovery.
 - `src/styles.rs`, `src/themes.rs` — style resolution, the session's theme state (`Appearance`), and built-in themes.
@@ -98,6 +99,7 @@ The following are architectural invariants, not a complete shortcut specificatio
 
 - `tasks.json` is the authoritative document (`ChecklistDocument`); its current `schema_version` is **1**. The schema includes tasks, selection, the active view (`active_view`, distinct from each task's `section`), and section order. Version 1 is the first public format and the oldest supported; there are no migrations yet. Reject malformed documents, duplicate IDs, invalid statuses or sections, incorrect section order, unknown schema versions, and unsupported old versions without modifying the file.
 - Loading validates strictly and does not write. For future schema changes, bump the version and append an explicit, sequential migration to `MIGRATIONS` from a strictly parsed typed previous schema; do not overwrite or patch unknown raw JSON fields. Never edit or reorder a released migration. Each new migration needs a direct test of the step and a `load_checklist` round-trip test of a real old-version file (see the checklist above `MIGRATIONS`). A migrated document is saved on the next save or clean exit, not during loading.
+- `templates.json` holds the templates in picker order (most recently used first) with its own `schema_version` (**1**), independent of `tasks.json`. It is loaded, validated, and saved the same way: strictly, without writing on load, and atomically. Template changes are saved before they are accepted; applying a template is an ordinary task mutation followed by saving the new template order.
 - Hold the exclusive `tasks.lock` for the interactive process lifetime. Never delete the lock file: different processes must coordinate on the same pathname. Each selected data directory is an independent checklist.
 - Save using `atomic-write-file`; never hand-roll replacement, truncate the live file first, or fall back to non-atomic copying. Preserve the Unix `0600` save-file policy and private permissions when creating the data directory. Report save errors accurately: failure *after* rename may mean the replacement is already visible, even if `commit()` reported an error.
 - Respect platform-specific data paths and an explicitly supplied `--data-dir`; do not assume Unix-only behavior. `export` is read-only, does not take the interactive instance lock, and does not create a data directory or write files.

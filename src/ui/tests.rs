@@ -2,6 +2,7 @@ use super::*;
 use crate::app::AddPlacement;
 use crate::model::Task;
 use crate::styles::{Appearance, DEFAULT_ACCENT};
+use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{Terminal, backend::TestBackend};
 
 #[track_caller]
@@ -3566,4 +3567,339 @@ fn clicking_a_link_opens_it_without_checking_off_the_task() {
     }
 
     assert!(crate::links::tests::take_opened().is_empty());
+}
+
+fn template_app(templates: &[(&str, &[&str])]) -> App {
+    let mut app = app_with_texts(&["Home: dishes", "Work: email"]);
+    app.templates = templates
+        .iter()
+        .map(|(name, entries)| crate::model::Template {
+            name: (*name).to_owned(),
+            entries: entries.iter().map(|entry| (*entry).to_owned()).collect(),
+        })
+        .collect();
+
+    app
+}
+
+fn template_key(app: &mut App, fixture: &crate::storage::tests::Fixture, code: KeyCode) {
+    app.handle_key(code.into(), &fixture.storage).unwrap();
+}
+
+fn template_mouse(app: &mut App, kind: MouseEventKind, column: u16, row: u16) {
+    let fixture = crate::storage::tests::Fixture::new();
+    let event = MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+
+    app.handle_mouse(event, Rect::default(), &fixture.storage)
+        .unwrap();
+}
+
+#[test]
+fn the_templates_screen_lists_names_above_the_focused_entries() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let mut app = template_app(&[
+        (
+            "Daily",
+            &[
+                "Make bed",
+                "Stretch for ten minutes, then plan the whole day",
+            ],
+        ),
+        ("Weekend", &["Sleep in"]),
+    ]);
+    let mut terminal = test_terminal(50, 12);
+
+    template_key(&mut app, &fixture, KeyCode::Char('i'));
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        screen(&terminal),
+        [
+            "┌─ Templates → [*] ──────────────────────────────┐",
+            "│› Daily                                         │",
+            "│  Weekend                                       │",
+            "├────────────────────────────────────────────────┤",
+            "│  [ ] Make bed                                  │",
+            "│  [ ] Stretch for ten minutes, then plan the    │",
+            "│      whole day                                 │",
+            "│                                                │",
+            "│                                                │",
+            "│                                                │",
+            "│                                                │",
+            "└─────────────────␣ use · e edit · a new · / find┘",
+        ]
+        .join("\n")
+    );
+
+    // The names give up rows to long entries, down to a third of the screen.
+    let mut app = template_app(&[
+        ("One", &["a", "b", "c", "d", "e", "f", "g", "h", "i"]),
+        ("Two", &[]),
+        ("Three", &[]),
+        ("Four", &[]),
+        ("Five", &[]),
+    ]);
+    let mut terminal = test_terminal(50, 10);
+
+    template_key(&mut app, &fixture, KeyCode::Char('i'));
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, 1),
+        "│› One                                           ┃"
+    );
+    assert_eq!(
+        row_text(&terminal, 2),
+        "│  Two                                           │"
+    );
+    assert_eq!(
+        row_text(&terminal, 3),
+        "├────────────────────────────────────────────────┤"
+    );
+    assert_eq!(
+        row_text(&terminal, 8),
+        "│  [ ] e                                         │"
+    );
+    assert_eq!(app.viewport.templates.template_by_row, [0, 1]);
+    assert_eq!(
+        app.viewport.templates.entry_by_row,
+        [Some(0), Some(1), Some(2), Some(3), Some(4)]
+    );
+
+    // Moving down scrolls the names to keep the focus in view.
+    template_key(&mut app, &fixture, KeyCode::Char('j'));
+    template_key(&mut app, &fixture, KeyCode::Char('j'));
+    app.templates[2].entries = vec!["z".to_owned(); 9];
+    render(&mut terminal, &mut app);
+    assert_eq!(app.viewport.templates.template_by_row, [1, 2]);
+
+    // A short template leaves its spare rows to the names.
+    template_key(&mut app, &fixture, KeyCode::Char('j'));
+    render(&mut terminal, &mut app);
+    assert_eq!(app.viewport.templates.template_by_row, [0, 1, 2, 3, 4]);
+    assert_eq!(
+        row_text(&terminal, 7),
+        "│ No entries yet. Press e to add some.           │"
+    );
+}
+
+#[test]
+fn the_templates_title_names_the_tab_a_template_will_join() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let mut app = template_app(&[("Daily", &["a"])]);
+    app.select_tab(SectionView::Named("work".into()));
+    let mut terminal = test_terminal(50, 10);
+
+    template_key(&mut app, &fixture, KeyCode::Char('i'));
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, 0),
+        "┌─ Templates → Work ─────────────────────────────┐"
+    );
+
+    // Without sections there are no tabs to name.
+    let mut app = app_with_texts(&["dishes"]);
+    app.templates = template_app(&[("Daily", &["a"])]).templates;
+
+    template_key(&mut app, &fixture, KeyCode::Char('i'));
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, 0),
+        "┌─ Templates ────────────────────────────────────┐"
+    );
+
+    // A status message takes the bottom border from the hint.
+    app.status_message = Some(crate::status_message::StatusMessage::new(
+        "Renamed template to Daily",
+        crate::status_message::DEFAULT_DURATION,
+    ));
+    render(&mut terminal, &mut app);
+
+    assert!(row_text(&terminal, 9).contains("Renamed template to Daily"));
+    assert!(!screen(&terminal).contains("␣ use"));
+}
+
+#[test]
+fn the_template_filter_and_new_names_are_typed_on_the_top_border() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let mut app = template_app(&[("Daily", &["a"]), ("Weekend", &["b"])]);
+    let mut terminal = test_terminal(50, 10);
+
+    template_key(&mut app, &fixture, KeyCode::Char('i'));
+    template_key(&mut app, &fixture, KeyCode::Char('/'));
+    template_key(&mut app, &fixture, KeyCode::Char('w'));
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, 0),
+        "┌─ Templates → [*] ─ find › w                   ─┐"
+    );
+    assert_eq!(
+        row_text(&terminal, 1),
+        "│› Weekend                                       │"
+    );
+    assert_eq!(
+        terminal.get_cursor_position().unwrap(),
+        ratatui::layout::Position::new(29, 0)
+    );
+
+    // A kept filter stays visible; nothing matching says so.
+    template_key(&mut app, &fixture, KeyCode::Char('x'));
+    template_key(&mut app, &fixture, KeyCode::Enter);
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, 0),
+        "┌─ Templates → [*] ─ find › wx                  ─┐"
+    );
+    assert_eq!(
+        row_text(&terminal, 1),
+        "│ No matching templates                          │"
+    );
+
+    template_key(&mut app, &fixture, KeyCode::Esc);
+    template_key(&mut app, &fixture, KeyCode::Char('a'));
+    template_key(&mut app, &fixture, KeyCode::Char('N'));
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, 0),
+        "┌─ Templates → [*] ─ new › N                    ─┐"
+    );
+
+    // Renaming types over the focused name instead.
+    template_key(&mut app, &fixture, KeyCode::Esc);
+    template_key(&mut app, &fixture, KeyCode::Char('E'));
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, 2),
+        "│› rename › Weekend                              │"
+    );
+}
+
+#[test]
+fn the_template_editor_shows_only_the_name_and_an_inline_entry_input() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let mut app = template_app(&[("Daily", &["Make bed", "Stretch"]), ("Weekend", &[])]);
+    let mut terminal = test_terminal(50, 10);
+
+    template_key(&mut app, &fixture, KeyCode::Char('i'));
+    template_key(&mut app, &fixture, KeyCode::Char('e'));
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        screen(&terminal),
+        [
+            "┌─ Templates → [*] ──────────────────────────────┐",
+            "│ Daily                                          │",
+            "├────────────────────────────────────────────────┤",
+            "│› [ ] Make bed                                  │",
+            "│  [ ] Stretch                                   │",
+            "│                                                │",
+            "│                                                │",
+            "│                                                │",
+            "│                                                │",
+            "└────────────a add · e edit · d delete · Esc done┘",
+        ]
+        .join("\n")
+    );
+    assert_eq!(app.viewport.templates.list, Rect::default());
+
+    template_key(&mut app, &fixture, KeyCode::Char('o'));
+    template_key(&mut app, &fixture, KeyCode::Char('x'));
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, 4),
+        "│  add › x                                       │"
+    );
+    assert_eq!(
+        row_text(&terminal, 5),
+        "│  [ ] Stretch                                   │"
+    );
+    assert_eq!(
+        terminal.get_cursor_position().unwrap(),
+        ratatui::layout::Position::new(10, 4)
+    );
+    assert_eq!(
+        app.viewport.templates.entry_by_row,
+        [Some(0), None, Some(1)]
+    );
+}
+
+#[test]
+fn deleting_a_template_asks_in_a_dialog_and_small_terminals_ask_for_room() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let mut app = template_app(&[("Daily", &["a"])]);
+    let mut terminal = test_terminal(50, 12);
+
+    template_key(&mut app, &fixture, KeyCode::Char('i'));
+    template_key(&mut app, &fixture, KeyCode::Char('d'));
+    render(&mut terminal, &mut app);
+
+    assert!(screen(&terminal).contains("Delete template Daily?"));
+
+    let mut terminal = test_terminal(30, 6);
+    render(&mut terminal, &mut app);
+
+    assert!(screen(&terminal).contains("Enlarge terminal to view"));
+    assert_eq!(app.viewport.templates.list, Rect::default());
+}
+
+#[test]
+fn the_mouse_scrolls_and_picks_in_the_panel_under_it() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let mut app = template_app(&[
+        ("One", &["a", "b", "c", "d", "e", "f", "g", "h", "i"]),
+        ("Two", &["x"]),
+    ]);
+    let mut terminal = test_terminal(50, 12);
+
+    template_key(&mut app, &fixture, KeyCode::Char('i'));
+    render(&mut terminal, &mut app);
+
+    // The wheel over the entries scrolls the preview without changing the template.
+    template_mouse(&mut app, MouseEventKind::ScrollDown, 10, 8);
+    template_mouse(&mut app, MouseEventKind::ScrollDown, 10, 8);
+    render(&mut terminal, &mut app);
+    assert_eq!(
+        row_text(&terminal, 4),
+        "│  [ ] c                                         │"
+    );
+    assert_eq!(app.focused_template(), Some(0));
+
+    // Over the names it moves the focus, and a click picks a name.
+    template_mouse(&mut app, MouseEventKind::ScrollDown, 10, 1);
+    assert_eq!(app.focused_template(), Some(1));
+    render(&mut terminal, &mut app);
+    template_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), 10, 1);
+    assert_eq!(app.focused_template(), Some(0));
+
+    // Clicks outside the panels do nothing.
+    template_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), 0, 0);
+    assert!(matches!(app.mode, Mode::Templates(_)));
+
+    // In the editor, the wheel and clicks pick entries.
+    template_key(&mut app, &fixture, KeyCode::Char('e'));
+    render(&mut terminal, &mut app);
+    template_mouse(&mut app, MouseEventKind::ScrollDown, 10, 5);
+    template_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), 10, 6);
+
+    let Mode::Templates(picker) = &app.mode else {
+        panic!("the templates screen closed");
+    };
+    let crate::app::templates::TemplateFocus::Editing(editor) = &picker.focus else {
+        panic!("the editor closed");
+    };
+
+    assert_eq!(editor.selected, Some(3));
+    assert_eq!(app.tasks.len(), 2);
 }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::TaskStatus;
+use crate::model::{TaskStatus, Template};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -961,4 +961,85 @@ fn directory_creation_failure_is_reported_without_changing_existing_data() {
         fs::read_to_string(fixture.directory.join("data")).unwrap(),
         "existing file"
     );
+}
+
+#[test]
+fn templates_round_trip_beside_the_tasks_with_private_permissions() {
+    let fixture = Fixture::new();
+    let templates_path = fixture.task_path().with_file_name("templates.json");
+
+    assert!(fixture.storage.load_templates().unwrap().is_empty());
+    assert!(!templates_path.exists());
+
+    let templates = vec![
+        Template {
+            name: "Daily (weekend)".to_owned(),
+            entries: vec!["Sleep in".to_owned(), "Work: review".to_owned()],
+        },
+        Template {
+            name: "Empty".to_owned(),
+            entries: Vec::new(),
+        },
+    ];
+
+    fixture.storage.save_templates(&templates).unwrap();
+    assert_eq!(fixture.storage.load_templates().unwrap(), templates);
+    assert!(!fixture.task_path().exists());
+
+    let saved = fs::read_to_string(&templates_path).unwrap();
+    assert!(saved.starts_with("{\n  \"schema_version\": 1,"), "{saved}");
+
+    #[cfg(unix)]
+    assert_eq!(
+        fs::metadata(&templates_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[test]
+fn invalid_template_files_are_rejected_and_left_untouched() {
+    let fixture = Fixture::new();
+    let templates_path = fixture.task_path().with_file_name("templates.json");
+    fs::create_dir_all(templates_path.parent().unwrap()).unwrap();
+
+    for (json, problem) in [
+        ("not json", "invalid template file"),
+        ("[]", "expected an object"),
+        (r#"{"templates":[]}"#, "missing schema_version"),
+        (r#"{"schema_version":2,"templates":[]}"#, "update sati"),
+        (
+            r#"{"schema_version":0,"templates":[]}"#,
+            "unsupported schema_version 0",
+        ),
+        (
+            r#"{"schema_version":1,"templates":[],"extra":1}"#,
+            "unknown field",
+        ),
+        (
+            r#"{"schema_version":1,"templates":[{"name":"A","entries":[],"used":1}]}"#,
+            "unknown field",
+        ),
+        (
+            r#"{"schema_version":1,"templates":[{"name":" A","entries":[]}]}"#,
+            "template 1 name has leading or trailing whitespace",
+        ),
+        (
+            r#"{"schema_version":1,"templates":[{"name":"A","entries":["ok","two\nlines"]}]}"#,
+            "template 1 entry 2 text contains a control character",
+        ),
+        (
+            r#"{"schema_version":1,"templates":[{"name":"A","entries":[""]}]}"#,
+            "template 1 entry 1 text is empty",
+        ),
+        (
+            r#"{"schema_version":1,"templates":[{"name":"Daily","entries":[]},{"name":"daily","entries":[]}]}"#,
+            "templates 1 and 2 are both named \"daily\"",
+        ),
+    ] {
+        fs::write(&templates_path, json).unwrap();
+
+        let error = fixture.storage.load_templates().unwrap_err().to_string();
+        assert!(error.contains(problem), "{json}: {error}");
+        assert_eq!(fs::read_to_string(&templates_path).unwrap(), json);
+    }
 }
