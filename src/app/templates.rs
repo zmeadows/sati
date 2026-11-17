@@ -1,6 +1,7 @@
 // The templates screen opened with `i`: named templates on top, the focused template's
 // entries below. A template is added to the current tab as new tasks, and its entries are
-// edited in place, saved to templates.json after every change.
+// edited in place, saved to templates.json after every change. `I` opens the same screen to
+// replace a section tab's tasks with a template instead.
 
 use std::collections::VecDeque;
 
@@ -14,13 +15,23 @@ use super::{
 };
 use crate::Result;
 use crate::input::TextInput;
-use crate::model::{SectionView, Task, Template, input_task_body};
+use crate::model::{SectionView, Task, TaskStatus, Template, input_task_body};
 use crate::storage::Storage;
 
 const EMPTY_TEMPLATE_NAME: &str = "Type a template name";
 
+// What using a template does to the current tab.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TemplateAction {
+    // Adds its entries as new tasks (`i`).
+    Add,
+    // Replaces the section's tasks, except carried ones, with its entries (`I`).
+    Replace,
+}
+
 #[derive(Debug, PartialEq)]
 pub struct TemplatePicker {
+    pub(crate) action: TemplateAction,
     // Narrows the list to fuzzy name matches while it has text. Typed after `/`, and kept
     // when typing ends with Enter.
     pub(crate) filter: TextInput,
@@ -105,8 +116,9 @@ pub(crate) fn entry_insertion_index(
 }
 
 impl TemplatePicker {
-    fn new() -> Self {
+    fn new(action: TemplateAction) -> Self {
         Self {
+            action,
             filter: TextInput::default(),
             selected: 0,
             focus: TemplateFocus::List,
@@ -236,8 +248,15 @@ impl Mode {
 }
 
 impl App {
-    pub(super) fn open_templates(&mut self) {
-        self.mode = Mode::Templates(TemplatePicker::new());
+    // Replacing needs a section to replace; on [*] and [-] it explains why nothing opened.
+    pub(super) fn open_templates(&mut self, action: TemplateAction) {
+        if action == TemplateAction::Replace && !matches!(self.view, SectionView::Named(_)) {
+            self.show_important_message("Replacing works only on a section tab");
+
+            return;
+        }
+
+        self.mode = Mode::Templates(TemplatePicker::new(action));
     }
 
     // The template the list focuses and the preview shows: none while nothing matches.
@@ -331,7 +350,7 @@ impl App {
                     self.mode = Mode::Normal;
                 }
             }
-            KeyCode::Char('q' | 'i') => self.mode = Mode::Normal,
+            KeyCode::Char('q' | 'i' | 'I') => self.mode = Mode::Normal,
             KeyCode::Char('j') | KeyCode::Down => self.move_template_selection(true),
             KeyCode::Char('k') | KeyCode::Up => self.move_template_selection(false),
             KeyCode::Char('g' | 'G') | KeyCode::Home | KeyCode::End => {
@@ -429,11 +448,16 @@ impl App {
     // Adds a pending task for each entry, as if each were typed on the current tab: on a
     // section tab into that section, after its last task; on [*] and [-] at the end of the
     // list, where an entry that starts with "Name: " joins that section like typed input.
+    //
+    // Replacing first removes the section's tasks, except carried ones, which stay as `D`
+    // leaves them; the entries follow them, or take the place of the first removed task.
     fn apply_template(&mut self, storage: &Storage) -> Result<()> {
-        let Some(index) = self.focused_template() else {
+        let (Some(index), Some(picker)) = (self.focused_template(), self.mode.template_picker())
+        else {
             return Ok(());
         };
 
+        let action = picker.action;
         let template = self.templates[index].clone();
 
         if template.entries.is_empty() {
@@ -442,19 +466,9 @@ impl App {
             return Ok(());
         }
 
-        let (position, section) = match &self.view {
-            SectionView::Named(key) => {
-                let last = self
-                    .tasks
-                    .iter()
-                    .rposition(|task| task.section_key().as_ref() == Some(key));
-
-                (
-                    last.map_or(self.tasks.len(), |last| last + 1),
-                    self.scope_label(),
-                )
-            }
-            SectionView::All | SectionView::Unsectioned => (self.tasks.len(), None),
+        let section = match &self.view {
+            SectionView::Named(_) => self.scope_label(),
+            SectionView::All | SectionView::Unsectioned => None,
         };
 
         let added: Vec<Task> = template
@@ -467,10 +481,71 @@ impl App {
             .collect();
         let count = added.len();
 
-        let mut tasks = self.tasks.clone();
-        tasks.splice(position..position, added);
+        let (mut tasks, position, label, message) = match action {
+            TemplateAction::Add => {
+                let position = match &self.view {
+                    SectionView::Named(key) => self
+                        .tasks
+                        .iter()
+                        .rposition(|task| task.section_key().as_ref() == Some(key))
+                        .map_or(self.tasks.len(), |last| last + 1),
+                    SectionView::All | SectionView::Unsectioned => self.tasks.len(),
+                };
 
-        let label = format!("add template {}", template.name);
+                let label = format!("add template {}", template.name);
+                let message = format!("Added {count} {} from {}", task_noun(count), template.name);
+
+                (self.tasks.clone(), position, label, message)
+            }
+            TemplateAction::Replace => {
+                // `open_templates` only replaces on a section tab.
+                let Some(section) = section else {
+                    return Ok(());
+                };
+
+                let mut survivors = Vec::new();
+                let mut first_removed = None;
+                let mut last_kept = None;
+                let mut kept = 0;
+
+                for (old_index, task) in self.tasks.iter().enumerate() {
+                    let in_section = self.task_in_active_view(old_index);
+
+                    if in_section && task.status != TaskStatus::Carried {
+                        first_removed.get_or_insert(survivors.len());
+                        continue;
+                    }
+
+                    if in_section {
+                        last_kept = Some(survivors.len());
+                        kept += 1;
+                    }
+
+                    survivors.push(task.clone());
+                }
+
+                let position = match (last_kept, first_removed) {
+                    (Some(last), _) => last + 1,
+                    (None, Some(first)) => first,
+                    (None, None) => survivors.len(),
+                };
+
+                let label = format!("replace {section} with {}", template.name);
+                let mut message = format!(
+                    "Replaced {section} with {} ({count} {})",
+                    template.name,
+                    task_noun(count)
+                );
+
+                if kept > 0 {
+                    message.push_str(&format!(", kept {kept} carried"));
+                }
+
+                (survivors, position, label, message)
+            }
+        };
+
+        tasks.splice(position..position, added);
         self.commit_task_change(tasks, Some(position), label, storage)?;
 
         // The template just used moves to the top of the picker.
@@ -480,11 +555,7 @@ impl App {
         self.commit_templates(templates, storage)?;
 
         self.mode = Mode::Normal;
-        self.show_routine_message(format!(
-            "Added {count} {} from {}",
-            task_noun(count),
-            template.name
-        ));
+        self.show_routine_message(message);
 
         Ok(())
     }

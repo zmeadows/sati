@@ -37,6 +37,8 @@ A template is a named list of tasks you add again and again, such as a daily rou
 
 `Space` or `Enter` adds a template's entries as new, unchecked tasks. On a section tab they join that section after its last task; on `[*]` and `[-]` they go to the end of the list, and an entry that starts with a section prefix such as `Work: ` goes to that section, as if you had typed it. Undo removes them all at once.
 
+`I` opens the same list, but on a section tab the template replaces the section's tasks instead: pending and completed tasks are removed, while carried tasks stay and the entries follow them. Undo brings the old tasks back.
+
 `a` creates a template, `e` edits its entries with the usual task keys, and `E` renames it. Undo in the editor covers only changes made since it opened. `d` deletes a template after asking, and can't be undone.
 
 ## Carryover and clearing

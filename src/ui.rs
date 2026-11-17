@@ -14,8 +14,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::finder::FinderViewport;
 use crate::app::templates::{
-    EntryInput, TemplateEditor, TemplateFocus, TemplateViewport, entry_insertion_index,
-    template_matches,
+    EntryInput, TemplateAction, TemplateEditor, TemplateFocus, TemplateViewport,
+    entry_insertion_index, template_matches,
 };
 use crate::app::{App, Mode, MoveTarget, task_display_text, task_noun};
 use crate::config::{BorderStyle, TaskMarkerStyle};
@@ -1436,13 +1436,14 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
     ]),
     ("Templates", &[
         ("Open templates", "i", "Alt+I"),
+        ("Open to replace tab", "I", ""),
         ("Add template to tab", "Space, Enter", ""),
         ("Find template", "/", ""),
         ("New template", "a", ""),
         ("Edit entries", "e", "Alt+E"),
         ("Rename template", "E", ""),
         ("Delete template", "d, Delete", ""),
-        ("Close templates", "Esc, q, i", "Ctrl+G"),
+        ("Close templates", "Esc, q, i, I", "Ctrl+G"),
     ]),
     ("Other", &[
         ("Search", "/", "Ctrl+F, Ctrl+S"),
@@ -1672,6 +1673,7 @@ fn draw_too_small(frame: &mut Frame, area: Rect, styles: &Styles, message: &str)
 }
 
 const TEMPLATES_TITLE: &str = "Templates";
+const REPLACE_TEMPLATE_TITLE: &str = "Replace template";
 const TEMPLATES_LIST_HINT: &str = "␣ use · e edit · a new · / find";
 const TEMPLATES_EDITOR_HINT: &str = "a add · e edit · d delete · Esc done";
 const TEMPLATES_TOO_SMALL: &str = "Enlarge terminal to view templates.";
@@ -1699,9 +1701,15 @@ fn draw_templates(frame: &mut Frame, area: Rect, app: &mut App) {
 
     // With the tab strip hidden, the title names the tab a template will be added to. A
     // checklist without sections has no tabs, so there is nothing to name.
+    let title_text = match &app.mode {
+        Mode::Templates(picker) if picker.action == TemplateAction::Replace => {
+            REPLACE_TEMPLATE_TITLE
+        }
+        _ => TEMPLATES_TITLE,
+    };
     let mut title = Line::from(vec![
         Span::styled("─ ", styles.border),
-        Span::styled(TEMPLATES_TITLE, styles.heading),
+        Span::styled(title_text, styles.heading),
         Span::styled(" ", styles.border),
     ]);
 

@@ -24,7 +24,7 @@ pub(crate) mod finder;
 pub(crate) mod templates;
 
 use finder::{FinderViewport, TaskFinder};
-use templates::{TemplatePicker, TemplateViewport};
+use templates::{TemplateAction, TemplatePicker, TemplateViewport};
 
 const HISTORY_LIMIT: usize = 256;
 
@@ -2527,7 +2527,8 @@ impl App {
             }
             KeyCode::Char('/') => self.start_search(),
             KeyCode::Char('`') => self.start_section_picker(),
-            KeyCode::Char('i') => self.open_templates(),
+            KeyCode::Char('i') => self.open_templates(TemplateAction::Add),
+            KeyCode::Char('I') => self.open_templates(TemplateAction::Replace),
             KeyCode::Char('f') => self.open_task_finder(),
             KeyCode::Char('\'') => self.return_to_previous_position(),
             // Terminals may report `?` with or without Shift; nothing else reaches here.

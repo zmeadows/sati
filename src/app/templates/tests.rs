@@ -206,6 +206,124 @@ fn applying_on_all_or_unsectioned_appends_entries_as_typed() {
 }
 
 #[test]
+fn replacing_on_a_section_tab_keeps_only_carried_tasks_and_undoes_in_one_step() {
+    let fixture = Fixture::new();
+    let mut app = saved_app(
+        &fixture,
+        &[
+            "Home: dishes",
+            "Work: email",
+            "Home: water plants",
+            "Home: laundry",
+            "loose",
+        ],
+        vec![
+            template("Weekend", &["sleep"]),
+            template("Daily", &["Stretch", "Plan tomorrow"]),
+        ],
+    );
+    app.tasks[1].status = TaskStatus::Completed;
+    app.tasks[2].status = TaskStatus::Carried;
+    app.tasks[3].status = TaskStatus::Completed;
+    fixture.storage.save(&app.tasks).unwrap();
+    let before = app.tasks.clone();
+    let section_order = app.section_order.clone();
+    app.select_tab(SectionView::Named("home".to_owned()));
+
+    press(&mut app, &fixture, KeyCode::Char('I'));
+    press(&mut app, &fixture, KeyCode::Char('j'));
+    press(&mut app, &fixture, KeyCode::Enter);
+
+    assert_eq!(
+        texts(&app),
+        [
+            "Work: email",
+            "Home: water plants",
+            "Home: Stretch",
+            "Home: Plan tomorrow",
+            "loose",
+        ]
+    );
+    assert_eq!(app.tasks[0].status, TaskStatus::Completed);
+    assert_eq!(app.tasks[1], before[2]);
+    assert!(
+        app.tasks[2..4]
+            .iter()
+            .all(|task| task.status == TaskStatus::Pending)
+    );
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.list.selected(), Some(2));
+    assert_eq!(app.view, SectionView::Named("home".to_owned()));
+    assert_eq!(app.section_order, section_order);
+    assert_eq!(
+        notice(&app),
+        Some("Replaced Home with Daily (2 tasks), kept 1 carried")
+    );
+
+    assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+    assert_eq!(names(&app.templates), ["Daily", "Weekend"]);
+    assert_eq!(fixture.storage.load_templates().unwrap(), app.templates);
+
+    press(&mut app, &fixture, KeyCode::Char('u'));
+    assert_eq!(app.tasks, before);
+    assert_eq!(notice(&app), Some("Undid: replace Home with Daily"));
+}
+
+#[test]
+fn replacing_a_section_without_carried_tasks_takes_its_first_tasks_place() {
+    let fixture = Fixture::new();
+    let mut app = saved_app(
+        &fixture,
+        &["Work: email", "Home: dishes", "loose", "Home: laundry"],
+        vec![template("Daily", &["Stretch"])],
+    );
+    app.select_tab(SectionView::Named("home".to_owned()));
+
+    press(&mut app, &fixture, KeyCode::Char('I'));
+    press(&mut app, &fixture, KeyCode::Char(' '));
+
+    assert_eq!(texts(&app), ["Work: email", "Home: Stretch", "loose"]);
+    assert_eq!(app.list.selected(), Some(1));
+    assert_eq!(notice(&app), Some("Replaced Home with Daily (1 task)"));
+}
+
+#[test]
+fn replacing_works_only_on_a_section_tab() {
+    for view in [SectionView::All, SectionView::Unsectioned] {
+        let fixture = Fixture::new();
+        let mut app = saved_app(
+            &fixture,
+            &["Home: dishes", "loose"],
+            vec![template("Daily", &["a"])],
+        );
+        app.select_tab(view.clone());
+
+        press(&mut app, &fixture, KeyCode::Char('I'));
+
+        assert_eq!(app.mode, Mode::Normal, "{view:?}");
+        assert_eq!(notice(&app), Some("Replacing works only on a section tab"));
+        assert_eq!(texts(&app), ["Home: dishes", "loose"]);
+        assert!(!app.can_undo());
+    }
+}
+
+#[test]
+fn replacing_with_an_empty_template_changes_nothing_and_i_closes() {
+    let fixture = Fixture::new();
+    let mut app = saved_app(&fixture, &["Home: dishes"], vec![template("Empty", &[])]);
+    app.select_tab(SectionView::Named("home".to_owned()));
+
+    press(&mut app, &fixture, KeyCode::Char('I'));
+    press(&mut app, &fixture, KeyCode::Enter);
+    assert_eq!(notice(&app), Some("Template is empty"));
+    assert_eq!(texts(&app), ["Home: dishes"]);
+    assert!(!app.can_undo());
+
+    press(&mut app, &fixture, KeyCode::Char('I'));
+    assert_eq!(app.mode, Mode::Normal);
+}
+
+#[test]
 fn an_empty_template_or_no_match_adds_nothing() {
     let fixture = Fixture::new();
     let mut app = saved_app(&fixture, &["one"], vec![template("Empty", &[])]);

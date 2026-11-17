@@ -3733,6 +3733,16 @@ fn the_templates_title_names_the_tab_a_template_will_join() {
         "┌─ Templates → Work ─────────────────────────────┐"
     );
 
+    // `I` opens the same screen to replace the tab's tasks, and says so.
+    template_key(&mut app, &fixture, KeyCode::Esc);
+    template_key(&mut app, &fixture, KeyCode::Char('I'));
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, 0),
+        "┌─ Replace template → Work ──────────────────────┐"
+    );
+
     // Without sections there are no tabs to name.
     let mut app = app_with_texts(&["dishes"]);
     app.templates = template_app(&[("Daily", &["a"])]).templates;
