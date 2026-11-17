@@ -71,6 +71,10 @@ sati export --data-dir ~/checklists/work > work.md
 
 `sati export` is for reading, not backup: it drops carryover marks and tab order, and sati can't import it. A backup written by a newer sati may not open in an older one.
 
+## Pasting lists
+
+Pasting several lines into the checklist, or into a new task's prompt, asks whether to add them as separate tasks and previews them. `Enter` adds them where the new task would have gone, `J` joins the lines into one task's text instead, and `Esc` cancels. Bullets, numbers, and checkboxes from Markdown, Org, Obsidian, and todo.txt lists are removed: checked items (`[x]`, `DONE`) are added checked, `[>]` items are carried, and a Markdown heading such as `## Groceries` puts the items below it in that section. A list copied with `c` or `sati export` pastes back as the same tasks, except that carried ones come back unchecked.
+
 ## Export and clipboard
 
 `sati export` writes Markdown to stdout and errors to stderr. It only reads `tasks.json`, so it is safe to run while sati is open. Completed tasks become `- [x]` items; pending and carried tasks become `- [ ]`. When exporting a section, its tasks are written without their prefix.
@@ -94,4 +98,4 @@ In PowerShell, first run `[Console]::OutputEncoding = [System.Text.Encoding]::UT
 - **Task ages:** holding `b` shows how long ago each task was added. Terminals that don't report key releases (including many VTE-based terminals, Terminal.app, and tmux) keep the ages shown until you press `b` again.
 - **`Ctrl+S`** searches unless your terminal or multiplexer intercepts it; `/` and `Ctrl+F` also search.
 - **Mouse:** sati captures the mouse by default. To select and copy text with it instead, use `--no-mouse` or `mouse = false`; links then open with the terminal's own link click, often Ctrl+click or Cmd+click.
-- **Pasting on Windows:** pasted text arrives as ordinary keystrokes. Open a prompt (`a`, `e`, or `/`) before pasting, and paste one line at a time: in the checklist, pasted letters run as shortcuts, and a line break acts as `Enter`. Keep Windows Terminal's multi-line paste warning on.
+- **Pasting on Windows:** pasted text arrives as ordinary keystrokes, so pasted lists aren't recognized. Open a prompt (`a`, `e`, or `/`) before pasting, and paste one line at a time: in the checklist, pasted letters run as shortcuts, and a line break acts as `Enter`. Keep Windows Terminal's multi-line paste warning on.

@@ -419,6 +419,7 @@ fn copy_key_remains_text_or_is_ignored_outside_normal_mode() {
             | Mode::MovingTask(TaskMove { input, .. }) => assert_eq!(input.text(), "c"),
             Mode::ConfirmClearNonCarried
             | Mode::ConfirmNewSection(_)
+            | Mode::ConfirmPaste(_)
             | Mode::Help { .. }
             | Mode::Templates(_) => {}
             Mode::Normal => panic!("copy changed mode"),
@@ -4010,7 +4011,7 @@ fn typing_and_paste_insert_at_the_cursor_in_both_input_modes() {
             Mode::Adding(input, AddPlacement::End)
         };
         press(&mut app, &fixture, KeyCode::Char('界'));
-        app.handle_paste("e\u{301}\r\nq\tD\u{2028}");
+        app.handle_paste("e\u{301}\tq\u{0085}D\u{0008}");
 
         match &app.mode {
             Mode::Adding(input, _) | Mode::Editing { input, .. } => {
@@ -4089,7 +4090,7 @@ fn backspace_removes_whole_graphemes_in_add_and_edit_modes() {
 }
 
 #[test]
-fn pasted_multiline_text_is_literal_and_requires_explicit_confirmation() {
+fn joined_multiline_paste_is_literal_and_requires_explicit_confirmation() {
     for ending in [KeyCode::Enter, KeyCode::Esc] {
         let fixture = Fixture::new();
         let mut app = app_with_tasks(1);
@@ -4099,6 +4100,7 @@ fn pasted_multiline_text_is_literal_and_requires_explicit_confirmation() {
         app.handle_paste(
             "日本語\r\nq\nD\rd\tx\0u\u{0008}\u{001b}[13u\u{0085}👩‍💻\u{2028}e\u{2029}end",
         );
+        press(&mut app, &fixture, KeyCode::Char('J'));
         let expected = "Start 日本語 q D d x u  [13u 👩‍💻 e end";
 
         assert_eq!(app.mode, Mode::Adding(expected.into(), AddPlacement::End));
@@ -4168,6 +4170,13 @@ fn paste_in_normal_or_confirmation_mode_cannot_act_or_consume_undo() {
         }
 
         app.handle_paste("q\r\nD\r\nd\ra\nx u\u{001b}日本語");
+
+        // While browsing, the lines wait for confirmation to become tasks.
+        if !confirm {
+            assert!(matches!(app.mode, Mode::ConfirmPaste(_)));
+            press(&mut app, &fixture, KeyCode::Esc);
+        }
+
         app.handle_paste("");
         assert_eq!(app.tasks, modified);
         assert_eq!(app.list.selected(), Some(1));
@@ -7386,4 +7395,196 @@ fn b_shows_ages_until_released_or_pressed_again_without_saving_or_history() {
     assert_eq!(notice(&app), None);
     assert!(!app.can_undo());
     assert!(!fixture.task_path().exists());
+}
+
+fn add_prompt_text(app: &App) -> Option<(&str, AddPlacement)> {
+    match &app.mode {
+        Mode::Adding(input, placement) => Some((input.text(), *placement)),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_pasted_list_asks_first_then_adds_its_tasks_below_the_selection_as_one_step() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["a", "b"]);
+    app.list.select(Some(0));
+
+    app.handle_paste("- [ ] one\n- [x] two\n\n- [>] three\n");
+
+    let Mode::ConfirmPaste(pasted) = &app.mode else {
+        panic!("expected the paste confirmation, got {:?}", app.mode);
+    };
+    assert_eq!(pasted.tasks.len(), 3);
+    assert_eq!(texts(&app), ["a", "b"]);
+    assert!(!app.can_undo());
+    assert!(!fixture.task_path().exists());
+
+    // Holding Enter doesn't add the list.
+    repeat(&mut app, &fixture, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(matches!(app.mode, Mode::ConfirmPaste(_)));
+
+    press(&mut app, &fixture, KeyCode::Enter);
+
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(texts(&app), ["a", "one", "two", "three", "b"]);
+    assert_eq!(
+        app.tasks.iter().map(|task| task.status).collect::<Vec<_>>(),
+        [
+            TaskStatus::Pending,
+            TaskStatus::Pending,
+            TaskStatus::Completed,
+            TaskStatus::Carried,
+            TaskStatus::Pending,
+        ]
+    );
+    assert_eq!(app.list.selected(), Some(1));
+    assert!(app.viewport.reveal_selection);
+    assert_eq!(notice(&app), Some("Added 3 tasks"));
+    assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+    assert_eq!(app.history.len(), 1);
+
+    app.undo(&fixture.storage).unwrap();
+    assert_eq!(texts(&app), ["a", "b"]);
+}
+
+#[test]
+fn a_pasted_list_goes_where_the_add_prompt_would_have_put_its_task() {
+    let fixture = Fixture::new();
+
+    for (key, expected) in [
+        (KeyCode::Char('a'), ["a", "b", "one", "two"]),
+        (KeyCode::Char('o'), ["a", "one", "two", "b"]),
+        (KeyCode::Char('O'), ["one", "two", "a", "b"]),
+    ] {
+        let mut app = app_with_texts(&["a", "b"]);
+        app.list.select(Some(0));
+        press(&mut app, &fixture, key);
+        app.handle_paste("one\ntwo");
+        press(&mut app, &fixture, KeyCode::Enter);
+
+        assert_eq!(texts(&app), expected, "{key:?}");
+        assert_eq!(app.mode, Mode::Normal);
+    }
+}
+
+#[test]
+fn cancelling_a_pasted_list_returns_to_the_add_prompt_and_joining_pastes_one_line() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["a"]);
+
+    press(&mut app, &fixture, KeyCode::Char('a'));
+    app.handle_paste("typed ");
+    app.handle_paste("one\r\ntwo");
+    press(&mut app, &fixture, KeyCode::Esc);
+
+    assert_eq!(add_prompt_text(&app), Some(("typed ", AddPlacement::End)));
+    assert!(!app.can_undo());
+
+    app.handle_paste("one\r\ntwo");
+    press(
+        &mut app,
+        &fixture,
+        KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT),
+    );
+
+    assert_eq!(
+        add_prompt_text(&app),
+        Some(("typed one two", AddPlacement::End))
+    );
+
+    press(&mut app, &fixture, KeyCode::Enter);
+    assert_eq!(texts(&app), ["a", "typed one two"]);
+
+    // While browsing, cancelling changes nothing and joining opens a prompt below.
+    app.handle_paste("one\ntwo");
+    press(&mut app, &fixture, KeyCode::Esc);
+
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.history.len(), 1);
+
+    app.handle_paste("one\ntwo");
+    press(&mut app, &fixture, KeyCode::Char('j'));
+
+    assert_eq!(
+        add_prompt_text(&app),
+        Some(("one two", AddPlacement::Below))
+    );
+}
+
+#[test]
+fn single_lines_and_pastes_outside_browsing_or_adding_stay_one_line() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["a"]);
+
+    // A single line while browsing still does nothing.
+    app.handle_paste("one\n");
+    assert_eq!(app.mode, Mode::Normal);
+
+    press(&mut app, &fixture, KeyCode::Char('a'));
+    app.handle_paste("one\n\n");
+    assert_eq!(add_prompt_text(&app), Some(("one  ", AddPlacement::End)));
+
+    // Lines that hold no tasks aren't a list.
+    press(&mut app, &fixture, KeyCode::Esc);
+    press(&mut app, &fixture, KeyCode::Char('a'));
+    app.handle_paste("---\n- [ ]");
+    assert_eq!(
+        add_prompt_text(&app),
+        Some(("--- - [ ]", AddPlacement::End))
+    );
+
+    press(&mut app, &fixture, KeyCode::Esc);
+    press(&mut app, &fixture, KeyCode::Char('e'));
+    app.handle_paste(" one\ntwo");
+    assert!(matches!(&app.mode, Mode::Editing { input, .. } if input.text() == "a one two"));
+
+    press(&mut app, &fixture, KeyCode::Esc);
+    app.start_search();
+    app.handle_paste("one\ntwo");
+    assert_eq!(app.search_query(), Some("one two"));
+}
+
+#[test]
+fn a_list_pasted_in_a_section_tab_joins_that_section_unless_it_names_another() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["Home: a", "Work: b"]);
+    app.select_tab(named("home"));
+
+    app.handle_paste("- c\n- Errands: d\n# Work\n- e");
+    press(&mut app, &fixture, KeyCode::Enter);
+
+    assert_eq!(
+        texts(&app),
+        ["Home: a", "Home: c", "Errands: d", "Work: e", "Work: b"]
+    );
+    assert_eq!(app.view, named("home"));
+    assert_eq!(app.list.selected(), Some(1));
+
+    // The add prompt's section suggestion is still there after cancelling.
+    press(&mut app, &fixture, KeyCode::Char('a'));
+    assert!(app.section_suggestions.is_some());
+
+    app.handle_paste("f\ng");
+    press(&mut app, &fixture, KeyCode::Esc);
+
+    assert!(app.section_suggestions.is_some());
+    assert_eq!(add_prompt_text(&app), Some(("", AddPlacement::End)));
+}
+
+#[test]
+fn a_pasted_list_that_cannot_be_saved_is_not_added() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["a"]);
+    fixture.storage.save(&app.tasks).unwrap();
+    let before = task_state(&app);
+
+    block_saves(&fixture);
+    app.handle_paste("one\ntwo");
+
+    assert!(
+        app.handle_key(KeyCode::Enter.into(), &fixture.storage)
+            .is_err()
+    );
+    assert_eq!(task_state(&app), before);
 }

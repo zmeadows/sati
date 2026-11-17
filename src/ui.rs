@@ -16,7 +16,7 @@ use crate::app::templates::{
     EntryInput, TemplateEditor, TemplateFocus, TemplateViewport, entry_insertion_index,
     template_matches,
 };
-use crate::app::{App, Mode, MoveTarget};
+use crate::app::{App, Mode, MoveTarget, task_noun};
 use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
 use crate::links::{self, Link};
@@ -153,6 +153,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     {
         let question = format!("Move to new section {name}?");
         draw_confirmation(frame, area, &styles, app.border_style, &question);
+    }
+
+    if let Mode::ConfirmPaste(pasted) = &app.mode {
+        draw_paste_confirmation(frame, area, &styles, app, &pasted.tasks);
     }
 
     if matches!(app.mode, Mode::Help { .. }) {
@@ -1270,6 +1274,105 @@ fn draw_confirmation(
             .style(styles.normal),
         inner,
     );
+}
+
+// Asks whether to add a pasted list as separate tasks, previewing as many of them as fit, one
+// row each. When some don't fit, the last row says how many are left out.
+fn draw_paste_confirmation(
+    frame: &mut Frame,
+    area: Rect,
+    styles: &Styles,
+    app: &App,
+    tasks: &[Task],
+) {
+    // Inside the border, the preview sits between the title and a blank line, and a blank line
+    // and the footer.
+    const SURROUNDING_ROWS: usize = 4;
+
+    let wanted_height = tasks.len().saturating_add(SURROUNDING_ROWS + 2);
+    let width = area.width.min(60);
+    let height = area
+        .height
+        .min(u16::try_from(wanted_height).unwrap_or(u16::MAX));
+
+    let dialog = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+
+    frame.render_widget(Clear, dialog);
+    frame.render_widget(Block::default().style(styles.normal), dialog);
+    let block = Block::bordered()
+        .border_type(border_type(app.border_style))
+        .border_style(styles.border);
+    let inner = block.inner(dialog);
+    frame.render_widget(block, dialog);
+
+    let title = Line::raw(format!("Add {} {}?", tasks.len(), task_noun(tasks.len()))).centered();
+    let footer = Line::raw("Enter: Add  J: Join  Esc: Cancel").centered();
+    let inner_height = usize::from(inner.height);
+
+    let lines = if inner_height > SURROUNDING_ROWS {
+        let room = inner_height - SURROUNDING_ROWS;
+        let shown = if tasks.len() <= room {
+            tasks.len()
+        } else {
+            room - 1
+        };
+        let width = usize::from(inner.width);
+
+        let mut lines = vec![title, Line::raw("")];
+
+        for task in &tasks[..shown] {
+            lines.push(paste_preview_line(task, styles, app.task_markers, width));
+        }
+
+        if shown < tasks.len() {
+            let more = format!(" … and {} more", tasks.len() - shown);
+            lines.push(Line::styled(more, styles.muted));
+        }
+
+        lines.push(Line::raw(""));
+        lines.push(footer);
+        lines
+    } else if inner_height >= 2 {
+        vec![title, footer]
+    } else {
+        vec![title]
+    };
+
+    frame.render_widget(Paragraph::new(lines).style(styles.normal), inner);
+}
+
+// A pasted task as its checklist row would show it, cut off with "…" to fit `width` cells.
+fn paste_preview_line(
+    task: &Task,
+    styles: &Styles,
+    markers: TaskMarkerStyle,
+    width: usize,
+) -> Line<'static> {
+    let checkbox = task_checkbox(task, markers);
+    let mut text = links::display_text(&task.full_text()).text;
+    let room = width.saturating_sub(checkbox.width());
+
+    if text.width() > room {
+        let kept = fitting_len(&text, room.saturating_sub(TRUNCATION.width()));
+        text.truncate(kept);
+        text.push_str(TRUNCATION);
+    }
+
+    let text_style = if task.status == TaskStatus::Completed {
+        styles.completed.add_modifier(Modifier::CROSSED_OUT)
+    } else {
+        styles.normal
+    };
+
+    Line::from(vec![
+        Span::styled(checkbox, styles.normal),
+        Span::styled(text, text_style),
+    ])
 }
 
 // An action, its keys, and its Ctrl/Alt alternative ("" where either is missing).

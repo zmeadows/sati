@@ -4087,3 +4087,47 @@ fn links_cut_off_for_an_age_are_hyperlinked_only_where_drawn() {
         [vec![(10..21, url.to_owned())]]
     );
 }
+
+#[test]
+fn the_paste_confirmation_previews_the_tasks_that_fit_and_counts_the_rest() {
+    let mut app = app_with_texts(&["a"]);
+    app.handle_paste("- [ ] one\n- [x] two\n- [>] three\n- a much longer fourth task that runs on");
+
+    // Room for every task: the dialog is 4 + 6 rows tall, centered over the checklist.
+    let mut terminal = test_terminal(40, 12);
+    render(&mut terminal, &mut app);
+
+    #[rustfmt::skip]
+    let expected = [
+        "┌──────────────────────────────────────┐",
+        "┌──────────────────────────────────────┐",
+        "│             Add 4 tasks?             │",
+        "│                                      │",
+        "│ [ ] one                              │",
+        "│ [✓] two                              │",
+        "│ [↪] three                            │",
+        "│ [ ] a much longer fourth task that r…│",
+        "│                                      │",
+        "│   Enter: Add  J: Join  Esc: Cancel   │",
+        "└──────────────────────────────────────┘",
+        "└──────────────────────────────────────┘",
+    ];
+    assert_eq!(screen(&terminal), expected.join("\n"));
+
+    // Two rows of room: one task, then how many are left out.
+    let mut terminal = test_terminal(40, 8);
+    render(&mut terminal, &mut app);
+
+    #[rustfmt::skip]
+    let expected = [
+        "┌──────────────────────────────────────┐",
+        "│             Add 4 tasks?             │",
+        "│                                      │",
+        "│ [ ] one                              │",
+        "│ … and 3 more                         │",
+        "│                                      │",
+        "│   Enter: Add  J: Join  Esc: Cancel   │",
+        "└──────────────────────────────────────┘",
+    ];
+    assert_eq!(screen(&terminal), expected.join("\n"));
+}

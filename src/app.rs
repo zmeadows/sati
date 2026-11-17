@@ -33,7 +33,7 @@ const UNSECTIONED_NAME: &str = "unsectioned";
 // now cannot turn a much later `j` into a jump.
 const PREFIX_TIMEOUT: Duration = Duration::from_secs(2);
 
-fn task_noun(count: usize) -> &'static str {
+pub(crate) fn task_noun(count: usize) -> &'static str {
     if count == 1 { "task" } else { "tasks" }
 }
 
@@ -116,6 +116,8 @@ pub enum Mode {
     // Asking before the move creates the section the picker's focused `MoveTarget::New`
     // names. Cancelling returns to the picker as it was.
     ConfirmNewSection(TaskMove),
+    // Asking whether a pasted list becomes separate tasks, in a dialog over the checklist.
+    ConfirmPaste(PastedList),
     // The read-only keyboard reference opened with `?`. Drawing keeps `scroll` within
     // `max_scroll` (the offset that shows the last line) and records `page`, the content rows
     // that fit, so the scroll keys never depend on the terminal size directly.
@@ -142,9 +144,20 @@ impl Mode {
             Mode::Normal
             | Mode::ConfirmClearNonCarried
             | Mode::ConfirmNewSection(_)
+            | Mode::ConfirmPaste(_)
             | Mode::Help { .. } => None,
         }
     }
+}
+
+// A list pasted while browsing or adding, waiting for confirmation. `tasks` are what Enter
+// adds; `text` is the paste as it came, which `J` joins into one line of the add prompt.
+#[derive(Debug, PartialEq)]
+pub struct PastedList {
+    pub tasks: Vec<Task>,
+    text: String,
+    // The add prompt the paste interrupted, which Esc returns to; None while browsing.
+    adding: Option<(TextInput, AddPlacement)>,
 }
 
 // The section picker for moving the task at `index`. `targets` are found for `matched_query`,
@@ -1897,6 +1910,10 @@ impl App {
                     self.handle_confirm_new_section_key(key, storage)?;
                     false
                 }
+                Mode::ConfirmPaste(_) => {
+                    self.handle_confirm_paste_key(key, storage)?;
+                    false
+                }
                 Mode::Help { .. } => {
                     self.handle_help_key(key);
                     false
@@ -2044,7 +2061,9 @@ impl App {
             | Mode::RenamingSection { .. }
             | Mode::PickingSectionTab { .. }
             | Mode::MovingTask(_) => repeats_while_typing(key.code),
-            Mode::ConfirmClearNonCarried | Mode::ConfirmNewSection(_) => false,
+            Mode::ConfirmClearNonCarried | Mode::ConfirmNewSection(_) | Mode::ConfirmPaste(_) => {
+                false
+            }
             Mode::Templates(picker) => picker.repeat_allowed(key),
             // Holding a scroll key keeps scrolling; `?` and Esc open or close once per press.
             Mode::Help { .. } => {
@@ -2335,6 +2354,7 @@ impl App {
             | Mode::Normal
             | Mode::ConfirmClearNonCarried
             | Mode::ConfirmNewSection(_)
+            | Mode::ConfirmPaste(_)
             | Mode::Help { .. }
             | Mode::Templates(_) => return Ok(()),
         }
@@ -2357,6 +2377,54 @@ impl App {
             }
             KeyCode::Esc => self.mode = Mode::Normal,
             _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn handle_confirm_paste_key(&mut self, key: KeyEvent, storage: &Storage) -> Result<()> {
+        if !matches!(
+            key.code,
+            KeyCode::Enter | KeyCode::Esc | KeyCode::Char('j' | 'J')
+        ) {
+            return Ok(());
+        }
+
+        let Mode::ConfirmPaste(pasted) = std::mem::replace(&mut self.mode, Mode::Normal) else {
+            return Ok(());
+        };
+
+        match key.code {
+            KeyCode::Enter => {
+                // A paste while browsing goes below the selection, like `p`.
+                let placement = pasted
+                    .adding
+                    .as_ref()
+                    .map_or(AddPlacement::Below, |(_, placement)| *placement);
+                let index = self.insertion_index(placement);
+                let count = pasted.tasks.len();
+
+                let mut tasks = self.tasks.clone();
+                tasks.splice(index..index, pasted.tasks);
+
+                self.section_suggestions = None;
+                self.commit_task_change(tasks, Some(index), "paste tasks", storage)?;
+                self.viewport.reveal_selection = true;
+                self.show_routine_message(format!("Added {count} {}", task_noun(count)));
+            }
+            KeyCode::Esc => {
+                if let Some((input, placement)) = pasted.adding {
+                    self.mode = Mode::Adding(input, placement);
+                }
+            }
+            // Join: the paste goes into the add prompt as one line, as it would without a list.
+            _ => {
+                let (input, placement) = pasted
+                    .adding
+                    .unwrap_or_else(|| (TextInput::default(), AddPlacement::Below));
+                self.mode = Mode::Adding(input, placement);
+                self.paste_into_input(&pasted.text);
+            }
         }
 
         Ok(())
@@ -2567,6 +2635,42 @@ impl App {
         self.status_message = None;
         self.pending_count = None;
         self.pending_section_jump = None;
+
+        // Several lines pasted while browsing or adding may be a list, so ask whether to add
+        // them as separate tasks. A section suggestion stays pending for Esc to return to.
+        let lines = text
+            .split(['\n', '\r', '\u{2028}', '\u{2029}'])
+            .filter(|line| line.chars().any(|c| !c.is_whitespace() && !c.is_control()))
+            .count();
+
+        if lines > 1 && matches!(self.mode, Mode::Normal | Mode::Adding(..)) {
+            let default_section = match self.view {
+                SectionView::Named(_) => self.scope_label(),
+                SectionView::All | SectionView::Unsectioned => None,
+            };
+            let tasks = crate::paste::parse_list(text, default_section.as_deref());
+
+            if !tasks.is_empty() {
+                let adding = match std::mem::replace(&mut self.mode, Mode::Normal) {
+                    Mode::Adding(input, placement) => Some((input, placement)),
+                    _ => None,
+                };
+
+                self.mode = Mode::ConfirmPaste(PastedList {
+                    tasks,
+                    text: text.to_owned(),
+                    adding,
+                });
+
+                return;
+            }
+        }
+
+        self.paste_into_input(text);
+    }
+
+    // The paste as one line of the current text input: line breaks become spaces.
+    fn paste_into_input(&mut self, text: &str) {
         self.accept_section_suggestion();
         let previous_query = self.search_query().map(str::to_owned);
         let previous_filter = self.template_filter().map(str::to_owned);

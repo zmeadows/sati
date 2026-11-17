@@ -4,6 +4,7 @@ mod export;
 mod input;
 mod links;
 mod model;
+mod paste;
 mod search;
 mod status_message;
 mod storage;
