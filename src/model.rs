@@ -123,6 +123,32 @@ pub(crate) fn current_time() -> OffsetDateTime {
         .expect("zero nanoseconds is always valid")
 }
 
+// How long ago `created_at` was, in its largest whole unit, such as "3d" or "2mo". Months and
+// years are approximate (30 and 365 days). A time in the future, from a clock that moved
+// back, reads as "now".
+pub(crate) fn format_age(created_at: OffsetDateTime, now: OffsetDateTime) -> String {
+    let seconds = (now - created_at).whole_seconds();
+    let minutes = seconds / 60;
+    let hours = minutes / 60;
+    let days = hours / 24;
+
+    if minutes < 1 {
+        "now".to_owned()
+    } else if hours < 1 {
+        format!("{minutes}m")
+    } else if days < 1 {
+        format!("{hours}h")
+    } else if days < 7 {
+        format!("{days}d")
+    } else if days < 30 {
+        format!("{}w", days / 7)
+    } else if days < 365 {
+        format!("{}mo", days / 30)
+    } else {
+        format!("{}y", days / 365)
+    }
+}
+
 // `created_at` is stored as whole-second UTC RFC 3339, such as "2026-11-07T19:24:05Z".
 mod utc_seconds {
     use serde::{Deserialize, Deserializer, Serializer, de};
@@ -335,6 +361,40 @@ impl SectionView {
             None => SectionView::All,
             Some(key) if key.is_empty() => SectionView::Unsectioned,
             Some(key) => SectionView::Named(key),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_age;
+    use time::{Duration, OffsetDateTime};
+
+    #[test]
+    fn ages_use_their_largest_whole_unit() {
+        let now = OffsetDateTime::UNIX_EPOCH + Duration::days(4000);
+
+        #[rustfmt::skip]
+        let cases = [
+            (Duration::seconds(-90),    "now"),
+            (Duration::ZERO,            "now"),
+            (Duration::seconds(59),     "now"),
+            (Duration::minutes(1),      "1m"),
+            (Duration::seconds(3599),   "59m"),
+            (Duration::hours(1),        "1h"),
+            (Duration::hours(23),       "23h"),
+            (Duration::days(1),         "1d"),
+            (Duration::days(6),         "6d"),
+            (Duration::days(7),         "1w"),
+            (Duration::days(29),        "4w"),
+            (Duration::days(30),        "1mo"),
+            (Duration::days(364),       "12mo"),
+            (Duration::days(365),       "1y"),
+            (Duration::days(1000),      "2y"),
+        ];
+
+        for (age, expected) in cases {
+            assert_eq!(format_age(now - age, now), expected, "age {age}");
         }
     }
 }

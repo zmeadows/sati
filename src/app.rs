@@ -286,6 +286,9 @@ pub struct App {
     pub appearance: crate::styles::Appearance,
     pub status_message: Option<StatusMessage>,
     pub view: SectionView,
+    // Whether task rows end with each task's age (`b`). Session-only display state: never
+    // saved, and not part of undo.
+    pub show_ages: bool,
 
     pub(crate) viewport: ViewportState,
 
@@ -328,6 +331,7 @@ impl App {
             appearance: crate::styles::Appearance::default(),
             status_message: None,
             view: SectionView::All,
+            show_ages: false,
             viewport: ViewportState {
                 scroll: 0,
                 reveal_selection: true,
@@ -1827,6 +1831,13 @@ impl App {
             KeyCode::Modifier(_) | KeyCode::CapsLock | KeyCode::NumLock | KeyCode::ScrollLock
         );
 
+        // `b` shows ages while held: its press toggles them, and its release hides them where
+        // the terminal reports releases. Elsewhere a second press hides them.
+        if key.kind == KeyEventKind::Release && key.code == KeyCode::Char('b') {
+            self.show_ages = false;
+            return Ok(false);
+        }
+
         if modifier_only
             || key.kind == KeyEventKind::Release
             || (key.kind == KeyEventKind::Repeat && !self.repeat_allowed(key))
@@ -2436,6 +2447,7 @@ impl App {
             KeyCode::Char('c') => self.request_clipboard_copy(&mut std::io::stdout().lock()),
             KeyCode::Char('q') => return Ok(true),
             KeyCode::Char('u') => self.undo(storage)?,
+            KeyCode::Char('b') => self.show_ages = !self.show_ages,
             KeyCode::Char('w') => {
                 self.wrap = !self.wrap;
                 self.viewport.reveal_selection = true;

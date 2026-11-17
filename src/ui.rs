@@ -20,7 +20,7 @@ use crate::app::{App, Mode, MoveTarget};
 use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
 use crate::links::{self, Link};
-use crate::model::{SectionView, Task, TaskStatus, input_section_name};
+use crate::model::{SectionView, Task, TaskStatus, current_time, format_age, input_section_name};
 use crate::styles::Styles;
 
 pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
@@ -619,6 +619,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
     let mut link_targets_by_row = Vec::new();
     let mut input_row = None;
     let text_width = usize::from(width).saturating_sub(TASK_PREFIX_WIDTH);
+    let now = current_time();
 
     for index in 0..=app.tasks.len() {
         if let Some(position) = inline
@@ -699,7 +700,30 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
             Color::Reset
         };
 
-        for (row, (source, row_text)) in wrapped.into_iter().enumerate() {
+        // While `b` shows ages, each task's age ends its last row at the right edge, and
+        // text that would run into it is cut off before a gap. Without room for at least
+        // one cell of text before the age, the row shows none.
+        let age = app
+            .show_ages
+            .then(|| format!("[{}]", format_age(task.created_at, now)))
+            .filter(|age| text_width > age.width() + AGE_GAP + TRUNCATION.width());
+        let last_row = wrapped.len() - 1;
+
+        for (row, (mut source, mut row_text)) in wrapped.into_iter().enumerate() {
+            let age = age.as_deref().filter(|_| row == last_row);
+            let mut truncated = false;
+
+            if let Some(age) = age {
+                let room = text_width - age.width() - AGE_GAP;
+
+                if row_text.width() > room {
+                    let kept = fitting_len(row_text, room - TRUNCATION.width());
+                    row_text = row_text[..kept].trim_end();
+                    source.end = source.start + row_text.len();
+                    truncated = true;
+                }
+            }
+
             task_index_by_row.push(Some(index));
             link_targets_by_row.push(link_columns(text, source.clone(), &display.links));
 
@@ -766,6 +790,17 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
                 heading_style,
                 match_color,
             ));
+
+            if let Some(age) = age {
+                if truncated {
+                    line.push_span(Span::styled(TRUNCATION, styles.muted));
+                }
+
+                let padding = usize::from(width).saturating_sub(line.width() + age.width());
+                line.push_span(Span::raw(" ".repeat(padding)));
+                line.push_span(Span::styled(age.to_owned(), styles.muted));
+            }
+
             lines.push(line);
         }
     }
@@ -782,6 +817,26 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
 // The cells before task text on every row: the focus marker and the checkbox, or their blank
 // indent on a wrapped row.
 const TASK_PREFIX_WIDTH: usize = 6;
+
+// The cells kept free between task text and its age, and the mark that ends text cut off to
+// make room for the age.
+const AGE_GAP: usize = 2;
+const TRUNCATION: &str = "…";
+
+// The length of the longest start of `text` that fits in `cells` terminal cells.
+fn fitting_len(text: &str, cells: usize) -> usize {
+    let mut used = 0;
+
+    for (index, grapheme) in text.grapheme_indices(true) {
+        used += grapheme.width();
+
+        if used > cells {
+            return index;
+        }
+    }
+
+    text.len()
+}
 
 // The columns of each link's cells on a row drawing `source` of `text`, counted from the
 // row's left edge.
@@ -1273,6 +1328,7 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
         ("Search", "/", "Ctrl+F, Ctrl+S"),
         ("Open links in task", "v", ""),
         ("Toggle wrapping", "w", ""),
+        ("Show task ages", "hold b", ""),
         ("Next / previous theme", "t / T", ""),
         ("Keyboard shortcuts", "?", ""),
         ("Quit", "q", ""),

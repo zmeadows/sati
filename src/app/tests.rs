@@ -7360,3 +7360,30 @@ fn cancelling_the_move_picker_changes_nothing() {
     assert_eq!(app.view, SectionView::All);
     assert!(fixture.storage.load().unwrap().is_empty());
 }
+
+#[test]
+fn b_shows_ages_until_released_or_pressed_again_without_saving_or_history() {
+    let fixture = Fixture::new();
+    let mut app = app_with_tasks(2);
+    let b = |kind| KeyEvent::new_with_kind(KeyCode::Char('b'), KeyModifiers::NONE, kind);
+
+    // A release hides the ages where the terminal reports one; a held key changes nothing.
+    press(&mut app, &fixture, b(KeyEventKind::Press));
+    assert!(app.show_ages);
+    press(&mut app, &fixture, b(KeyEventKind::Repeat));
+    assert!(app.show_ages);
+    press(&mut app, &fixture, b(KeyEventKind::Release));
+    assert!(!app.show_ages);
+    press(&mut app, &fixture, b(KeyEventKind::Release));
+    assert!(!app.show_ages);
+
+    // Without release reports, a second press hides them.
+    press(&mut app, &fixture, KeyCode::Char('b'));
+    assert!(app.show_ages);
+    press(&mut app, &fixture, KeyCode::Char('b'));
+    assert!(!app.show_ages);
+
+    assert_eq!(notice(&app), None);
+    assert!(!app.can_undo());
+    assert!(!fixture.task_path().exists());
+}

@@ -3992,3 +3992,98 @@ fn the_move_picker_shows_the_tab_bar_even_without_sections() {
     assert!(top.contains("move to › Jo"), "{top:?}");
     assert!(top.contains(" +Jo "), "{top:?}");
 }
+
+// Tasks created three days ago, well away from any unit boundary, showing their ages.
+fn app_showing_ages(texts: &[&str]) -> App {
+    let mut app = app_with_texts(texts);
+    let created_at = crate::model::current_time() - time::Duration::days(3);
+
+    for task in &mut app.tasks {
+        task.created_at = created_at;
+    }
+
+    app.show_ages = true;
+    app
+}
+
+#[test]
+fn ages_end_rows_at_the_right_edge_and_cut_off_only_text_that_reaches_them() {
+    let mut app = app_showing_ages(&["short", "a long task that will not fit here at all"]);
+    app.wrap = false;
+    let mut terminal = test_terminal(30, 6);
+    let rows = render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, rows.y),
+        "│› [ ] short             [3d]│"
+    );
+    assert_eq!(
+        row_text(&terminal, rows.y + 1),
+        "│  [ ] a long task tha…  [3d]│"
+    );
+
+    // Hiding the ages restores the rows as they were.
+    app.show_ages = false;
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, rows.y),
+        "│› [ ] short                 │"
+    );
+    assert_eq!(
+        row_text(&terminal, rows.y + 1),
+        "│  [ ] a long task that will │"
+    );
+}
+
+#[test]
+fn a_wrapped_task_shows_its_age_on_its_last_row() {
+    let mut app = app_showing_ages(&["one two three four five six seven"]);
+    let mut terminal = test_terminal(30, 6);
+    let rows = render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, rows.y),
+        "│› [ ] one two three four    │"
+    );
+    assert_eq!(
+        row_text(&terminal, rows.y + 1),
+        "│      five six seven    [3d]│"
+    );
+    assert_eq!(app.viewport.task_index_by_row, [Some(0), Some(0)]);
+}
+
+#[test]
+fn ages_cut_wide_glyphs_whole_and_hide_where_no_text_would_fit() {
+    let mut app = app_showing_ages(&["日本語のテキストがとても長いです"]);
+    app.wrap = false;
+    let mut terminal = test_terminal(30, 5);
+    let rows = render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, rows.y),
+        "│› [ ] 日本語のテキス…   [3d]│"
+    );
+
+    // Seven text cells cannot hold "[3d]", its gap, the cut-off mark, and one cell of text.
+    let mut app = app_showing_ages(&["short"]);
+    let mut terminal = test_terminal(15, 5);
+    let rows = render(&mut terminal, &mut app);
+
+    assert_eq!(row_text(&terminal, rows.y), "│› [ ] short  │");
+}
+
+#[test]
+fn links_cut_off_for_an_age_are_hyperlinked_only_where_drawn() {
+    let url = "https://example.com/a/very/long/path";
+    let mut app = app_showing_ages(&["see https://example.com/a/very/long/path ok"]);
+    app.wrap = false;
+    let mut terminal = test_terminal(30, 5);
+    render(&mut terminal, &mut app);
+
+    // Six prefix cells and "see ", then the 11 cells of "https://exa" before the cut.
+    assert_eq!(
+        app.viewport.link_targets_by_row,
+        [vec![(10..21, url.to_owned())]]
+    );
+}
