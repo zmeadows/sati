@@ -16,6 +16,8 @@ A section tab is a view of the same list, not a separate list. It hides the pref
 
 `s` then a digit jumps to a tab by position (`s1` is `[*]`, `s0` the tenth), and `` ` `` finds a tab by fuzzy name. Switching to a tab that doesn't contain the selected task selects its first unfinished task. `'` returns to the tab and task you were on before your last jump; press it again to go back. `E` renames the current section on every task in it, and `L` / `H` move its tab without reordering any tasks. `M` moves the selected task to the bottom of a section you find by name, or to a new one after you confirm its name, and follows it to that tab.
 
+`/` searches the current tab for exact text. `f` finds a task on any tab by fuzzy match instead: type a few of its letters in order, such as `wfb` for `Work: Fix bug`, and `Enter` goes to the focused match. The view stays on the current tab if it shows that task, and otherwise switches to the task's own tab; `'` returns to where you were.
+
 ## Links and emphasis
 
 A task can link to web pages in two ways:

@@ -4161,3 +4161,99 @@ fn the_paste_confirmation_previews_the_tasks_that_fit_and_counts_the_rest() {
     ];
     assert_eq!(screen(&terminal), expected.join("\n"));
 }
+
+#[test]
+fn the_task_finder_waits_for_a_query_then_lists_matches_as_on_all() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let mut app = app_with_texts(&[
+        "Work: fix the bug",
+        "plain task",
+        "Home: fix the leaking kitchen faucet before guests",
+    ]);
+    app.tasks[0].status = TaskStatus::Completed;
+    app.select_tab(SectionView::Named("home".into()));
+    let mut terminal = test_terminal(44, 7);
+
+    press_keys(&mut app, &fixture, "f");
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        screen(&terminal),
+        [
+            "┌─ Find task ─ ›                          ─┐",
+            "│                                          │",
+            "│                                          │",
+            "│          Waiting for search term         │",
+            "│                                          │",
+            "│                                          │",
+            "└────────Tab next · Enter go to · Esc close┘",
+        ]
+        .join("\n")
+    );
+
+    // Long tasks are cut off, and the completed match of equal score comes last.
+    press_keys(&mut app, &fixture, "fix");
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        screen(&terminal),
+        [
+            "┌─ Find task ─ › fix                      ─┐",
+            "│› [ ] Home: fix the leaking kitchen fauce…│",
+            "│  [✓] Work: fix the bug                   │",
+            "│                                          │",
+            "│                                          │",
+            "│                                          │",
+            "└────────Tab next · Enter go to · Esc close┘",
+        ]
+        .join("\n")
+    );
+    assert_eq!(app.viewport.finder.task_by_row, [2, 0]);
+
+    let buffer = terminal.backend().buffer();
+    let highlighted: String = (0..44)
+        .filter(|&x| buffer[(x, 1)].modifier.contains(Modifier::REVERSED))
+        .map(|x| buffer[(x, 1)].symbol().to_owned())
+        .collect();
+    assert_eq!(highlighted, "fix");
+    assert!(buffer[(7, 1)].modifier.contains(Modifier::BOLD)); // The "Home:" heading.
+
+    press_keys(&mut app, &fixture, "zz");
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, 3),
+        "│             No matching tasks            │"
+    );
+    assert!(app.viewport.finder.task_by_row.is_empty());
+}
+
+#[test]
+fn clicking_a_finder_result_goes_to_that_task() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let mut app = app_with_texts(&["Work: report", "Home: reply", "plain"]);
+    app.select_tab(SectionView::Named("home".into()));
+    let mut terminal = test_terminal(44, 7);
+
+    press_keys(&mut app, &fixture, "fre");
+    let rows = render(&mut terminal, &mut app);
+    let report_row = app
+        .viewport
+        .finder
+        .task_by_row
+        .iter()
+        .position(|&index| index == 0)
+        .unwrap() as u16;
+
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 10,
+        row: 1 + report_row,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(click, rows, &fixture.storage).unwrap();
+
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.view, SectionView::Named("work".into()));
+    assert_eq!(app.list.selected(), Some(0));
+}

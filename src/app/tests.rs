@@ -427,7 +427,10 @@ fn copy_key_remains_text_or_is_ignored_outside_normal_mode() {
             | Mode::Searching { input, .. }
             | Mode::RenamingSection { input }
             | Mode::PickingSectionTab { input, .. }
-            | Mode::MovingTask(TaskMove { input, .. }) => assert_eq!(input.text(), "cC"),
+            | Mode::MovingTask(TaskMove { input, .. })
+            | Mode::FindingTask(finder::TaskFinder { input, .. }) => {
+                assert_eq!(input.text(), "cC")
+            }
             Mode::ConfirmClearNonCarried
             | Mode::ConfirmNewSection(_)
             | Mode::ConfirmPaste(_)

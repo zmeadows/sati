@@ -20,8 +20,10 @@ use crate::model::{
 use crate::status_message::StatusMessage;
 use crate::storage::Storage;
 
+pub(crate) mod finder;
 pub(crate) mod templates;
 
+use finder::{FinderViewport, TaskFinder};
 use templates::{TemplatePicker, TemplateViewport};
 
 const HISTORY_LIMIT: usize = 256;
@@ -45,6 +47,23 @@ fn submitted_task_text(input: &TextInput) -> Option<String> {
         input_section_name(input.text()).is_some() && input_task_body(input.text()).is_empty();
 
     (!text.is_empty() && !bare_section).then(|| text.to_owned())
+}
+
+// What a task's row shows: its body, after its section prefix when `with_section`, with links
+// as their titles or shortened URLs and emphasis markers removed.
+pub(crate) fn task_display_text(task: &Task, with_section: bool) -> DisplayText {
+    let section = if with_section {
+        task.section.as_deref()
+    } else {
+        None
+    };
+
+    // Task validation rules out control characters; keep any from breaking the row anyway.
+    let single_line = |text: &str| -> String { text.chars().map(single_line_character).collect() };
+    let section = section.map(single_line);
+    let body = single_line(&task.text);
+
+    crate::markup::display_text(section.as_deref(), &body)
 }
 
 // The line-editing keys that every text input shares.
@@ -128,6 +147,8 @@ pub enum Mode {
     },
     // The templates screen opened with `i`, drawn in place of the checklist; see `templates`.
     Templates(TemplatePicker),
+    // The task finder opened with `f`, drawn in place of the checklist; see `finder`.
+    FindingTask(TaskFinder),
 }
 
 impl Mode {
@@ -141,6 +162,7 @@ impl Mode {
             | Mode::PickingSectionTab { input, .. }
             | Mode::MovingTask(TaskMove { input, .. }) => Some(input),
             Mode::Templates(picker) => picker.text_input_mut(),
+            Mode::FindingTask(finder) => Some(&mut finder.input),
             Mode::Normal
             | Mode::ConfirmClearNonCarried
             | Mode::ConfirmNewSection(_)
@@ -280,6 +302,7 @@ pub(crate) struct ViewportState {
     // The first visible tab when they overflow; kept between draws so tabs don't slide.
     pub(crate) tab_scroll: usize,
     pub(crate) templates: TemplateViewport,
+    pub(crate) finder: FinderViewport,
 }
 
 pub struct App {
@@ -354,6 +377,7 @@ impl App {
                 tab_targets: Vec::new(),
                 tab_scroll: 0,
                 templates: TemplateViewport::default(),
+                finder: FinderViewport::default(),
             },
             pending_count: None,
             pending_section_jump: None,
@@ -434,20 +458,9 @@ impl App {
     // where every task shares the prefix, with links as their titles or shortened URLs and
     // emphasis markers removed.
     pub(crate) fn display_text(&self, index: usize) -> DisplayText {
-        let task = &self.tasks[index];
+        let with_section = !matches!(self.view, SectionView::Named(_));
 
-        let section = match self.view {
-            SectionView::Named(_) => None,
-            _ => task.section.as_deref(),
-        };
-
-        // Task validation rules out control characters; keep any from breaking the row anyway.
-        let single_line =
-            |text: &str| -> String { text.chars().map(single_line_character).collect() };
-        let section = section.map(single_line);
-        let body = single_line(&task.text);
-
-        crate::markup::display_text(section.as_deref(), &body)
+        task_display_text(&self.tasks[index], with_section)
     }
 
     // Keep a loaded view valid; see `model::reconcile_active_view`.
@@ -1947,6 +1960,10 @@ impl App {
                     self.handle_templates_key(key, storage)?;
                     false
                 }
+                Mode::FindingTask(_) => {
+                    self.handle_task_finder_key(key);
+                    false
+                }
             }
         };
 
@@ -1954,6 +1971,7 @@ impl App {
         self.refresh_section_picker();
         self.refresh_task_move();
         self.refresh_template_filter(previous_filter.as_deref());
+        self.refresh_task_finder();
         self.explain_rename_problem();
         self.explain_template_name_problem();
 
@@ -2090,6 +2108,7 @@ impl App {
                 false
             }
             Mode::Templates(picker) => picker.repeat_allowed(key),
+            Mode::FindingTask(finder) => finder.repeat_allowed(key),
             // Holding a scroll key keeps scrolling; `?` and Esc open or close once per press.
             Mode::Help { .. } => {
                 key.modifiers.is_empty()
@@ -2381,7 +2400,8 @@ impl App {
             | Mode::ConfirmNewSection(_)
             | Mode::ConfirmPaste(_)
             | Mode::Help { .. }
-            | Mode::Templates(_) => return Ok(()),
+            | Mode::Templates(_)
+            | Mode::FindingTask(_) => return Ok(()),
         }
 
         self.mode = Mode::Normal;
@@ -2508,6 +2528,7 @@ impl App {
             KeyCode::Char('/') => self.start_search(),
             KeyCode::Char('`') => self.start_section_picker(),
             KeyCode::Char('i') => self.open_templates(),
+            KeyCode::Char('f') => self.open_task_finder(),
             KeyCode::Char('\'') => self.return_to_previous_position(),
             // Terminals may report `?` with or without Shift; nothing else reaches here.
             KeyCode::Char('?') => {
@@ -2718,6 +2739,7 @@ impl App {
         self.refresh_section_picker();
         self.refresh_task_move();
         self.refresh_template_filter(previous_filter.as_deref());
+        self.refresh_task_finder();
         self.explain_rename_problem();
         self.explain_template_name_problem();
     }
@@ -2739,9 +2761,15 @@ impl App {
             return Ok(());
         }
 
-        // The templates screen replaces the checklist.
+        // The templates screen and the task finder replace the checklist.
         if matches!(self.mode, Mode::Templates(_)) {
             self.handle_templates_mouse(event);
+
+            return Ok(());
+        }
+
+        if matches!(self.mode, Mode::FindingTask(_)) {
+            self.handle_task_finder_mouse(event);
 
             return Ok(());
         }

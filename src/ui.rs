@@ -12,11 +12,12 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+use crate::app::finder::FinderViewport;
 use crate::app::templates::{
     EntryInput, TemplateEditor, TemplateFocus, TemplateViewport, entry_insertion_index,
     template_matches,
 };
-use crate::app::{App, Mode, MoveTarget, task_noun};
+use crate::app::{App, Mode, MoveTarget, task_display_text, task_noun};
 use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
 use crate::markup::{self, DisplayText, Link};
@@ -28,10 +29,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let styles = *app.appearance.styles();
     frame.render_widget(Block::default().style(styles.normal), area);
 
-    // The templates screen replaces the checklist, and handles its own clicks.
+    // The templates screen and the task finder replace the checklist, and handle their own
+    // clicks.
     if matches!(app.mode, Mode::Templates(_)) {
         app.viewport.tab_targets.clear();
         draw_templates(frame, area, app);
+        return Rect::default();
+    }
+
+    if matches!(app.mode, Mode::FindingTask(_)) {
+        app.viewport.tab_targets.clear();
+        draw_task_finder(frame, area, app);
         return Rect::default();
     }
 
@@ -661,14 +669,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
             task.section.as_deref()
         };
 
-        // A section name has no colon or space, so no link starts inside "Work: ".
-        let section_heading_end = section_prefix.map_or(0, |prefix| {
-            let end = prefix.len();
-            text.grapheme_indices(true)
-                .take_while(|(index, _)| *index <= end)
-                .last()
-                .map_or(0, |(index, grapheme)| index + grapheme.len())
-        });
+        let section_heading_end = section_heading_end(text, section_prefix);
 
         let searching = app.search_query().is_some();
         let matches = app
@@ -956,6 +957,18 @@ fn border_type(style: BorderStyle) -> BorderType {
         BorderStyle::Square => BorderType::Plain,
         BorderStyle::Rounded => BorderType::Rounded,
     }
+}
+
+// Where the bold "Work:" heading ends in a row's text that starts with `section`'s prefix. A
+// section name has no colon or space, so no link starts inside "Work: ".
+fn section_heading_end(text: &str, section: Option<&str>) -> usize {
+    section.map_or(0, |section| {
+        let end = section.len();
+        text.grapheme_indices(true)
+            .take_while(|(index, _)| *index <= end)
+            .last()
+            .map_or(0, |(index, grapheme)| index + grapheme.len())
+    })
 }
 
 fn focus_marker(style: TaskMarkerStyle) -> &'static str {
@@ -1433,6 +1446,7 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
     ]),
     ("Other", &[
         ("Search", "/", "Ctrl+F, Ctrl+S"),
+        ("Find any task", "f", ""),
         ("Open links in task", "v", ""),
         ("Toggle wrapping", "w", ""),
         ("Show task ages", "hold b", ""),
@@ -2060,6 +2074,223 @@ fn template_entry_layout(
         input_row,
         focus_rows,
     }
+}
+
+const FINDER_TITLE: &str = "Find task";
+const FINDER_HINT: &str = "Tab next · Enter go to · Esc close";
+const FINDER_WAITING: &str = "Waiting for search term";
+const FINDER_NO_MATCHES: &str = "No matching tasks";
+const FINDER_TOO_SMALL: &str = "Enlarge terminal to find tasks.";
+
+// Room for the title, a few cells of query, and one result row between the borders.
+const FINDER_MIN_WIDTH: u16 = 24;
+const FINDER_MIN_HEIGHT: u16 = 3;
+
+// Draw the task finder in place of the checklist: the query on the top border, and below it
+// one row per match, shown as on [*] and cut off rather than wrapped. Like the checklist, it
+// records where its rows are for the mouse and keeps the focused match in view.
+fn draw_task_finder(frame: &mut Frame, area: Rect, app: &mut App) {
+    let styles = *app.appearance.styles();
+    app.viewport.finder = FinderViewport::default();
+
+    if area.width < FINDER_MIN_WIDTH || area.height < FINDER_MIN_HEIGHT {
+        draw_too_small(frame, area, &styles, FINDER_TOO_SMALL);
+        return;
+    }
+
+    let title = Line::from(vec![
+        Span::styled("─ ", styles.border),
+        Span::styled(FINDER_TITLE, styles.heading),
+        Span::styled(" ", styles.border),
+    ]);
+    let title_width = title.width() as u16;
+    let status = status_line(app, &styles, area.width);
+
+    let App {
+        mode,
+        tasks,
+        viewport,
+        task_markers,
+        border_style,
+        ..
+    } = app;
+
+    let Mode::FindingTask(finder) = mode else {
+        return;
+    };
+
+    let mut block = Block::bordered()
+        .border_type(border_type(*border_style))
+        .border_style(styles.border)
+        .title(title);
+
+    // As on the checklist, a brief status message takes the bottom border from the hint.
+    if let Some(status) = status {
+        block = block.title_bottom(status);
+    } else if FINDER_HINT.width() + HELP_BORDERS <= usize::from(area.width) {
+        block = block.title_bottom(Line::styled(FINDER_HINT, styles.muted).right_aligned());
+    }
+
+    frame.render_widget(block, area);
+
+    // The query is typed on the top border after the title: a border cell, then the input
+    // between spaces, then two border cells before the corner.
+    let x = area.x + 1 + title_width + 1;
+    let width = area.right().saturating_sub(x + 2);
+
+    frame
+        .buffer_mut()
+        .set_string(x, area.y, " ".repeat(usize::from(width)), styles.normal);
+
+    let input_area = Rect::new(x + 1, area.y, width.saturating_sub(2), 1);
+    draw_input_line(
+        frame,
+        input_area,
+        &finder.input,
+        "",
+        &styles,
+        true,
+        false,
+        None,
+    );
+
+    let results = Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2);
+    let rows = usize::from(results.height);
+
+    let message = if finder.input.text().trim().is_empty() {
+        Some(FINDER_WAITING)
+    } else if finder.matches.is_empty() {
+        Some(FINDER_NO_MATCHES)
+    } else {
+        None
+    };
+
+    if let Some(message) = message {
+        let row = Rect::new(
+            results.x,
+            results.y + (results.height - 1) / 2,
+            results.width,
+            1,
+        );
+        frame.render_widget(
+            Paragraph::new(message)
+                .style(styles.muted)
+                .alignment(Alignment::Center),
+            row,
+        );
+
+        viewport.finder.results = results;
+        return;
+    }
+
+    // Keep the focused match in view.
+    let focused = finder.focused.min(finder.matches.len() - 1);
+    let mut scroll = finder.scroll.min(finder.matches.len().saturating_sub(rows));
+
+    if focused < scroll {
+        scroll = focused;
+    } else if focused >= scroll + rows {
+        scroll = focused + 1 - rows;
+    }
+
+    finder.scroll = scroll;
+
+    let mut lines = Vec::new();
+    let mut task_by_row = Vec::new();
+
+    for (position, &index) in finder.matches.iter().enumerate().skip(scroll).take(rows) {
+        let task = &tasks[index];
+        let is_focused = position == focused;
+        let completed = task.status == TaskStatus::Completed;
+
+        let checkbox = task_checkbox(task, *task_markers);
+        let text_width = usize::from(results.width).saturating_sub(1 + checkbox.width());
+
+        let display = task_display_text(task, true);
+        let mut text = display.text.as_str();
+        let heading_end = section_heading_end(text, task.section.as_deref());
+        let matches = crate::search::fuzzy_match_ranges(text, finder.input.text());
+
+        let truncated = text.width() > text_width;
+        if truncated {
+            let kept = fitting_len(text, text_width.saturating_sub(TRUNCATION.width()));
+            text = &text[..kept];
+        }
+
+        // As in the checklist: completed tasks are struck through in one color, and matches
+        // reverse the focused row's accent or the theme's colors.
+        let (text_style, heading_style) = if completed {
+            let style = styles.completed.add_modifier(Modifier::CROSSED_OUT);
+            (style, style)
+        } else {
+            (styles.normal, styles.heading)
+        };
+        let match_color = if is_focused {
+            styles.accent.fg.unwrap_or(Color::Reset)
+        } else {
+            Color::Reset
+        };
+        let checkbox_style = if is_focused {
+            styles.accent
+        } else if completed {
+            styles.muted
+        } else {
+            styles.normal
+        };
+
+        let marker = if is_focused {
+            focus_marker(*task_markers)
+        } else {
+            " "
+        };
+        let mut line = Line::from(Span::styled(
+            marker,
+            styles.accent.add_modifier(Modifier::BOLD),
+        ));
+
+        // Only the arrow of a carried checkbox takes the carryover-marker color.
+        let carried_arrow = if task.status == TaskStatus::Carried {
+            checkbox
+                .strip_prefix(" [")
+                .and_then(|rest| rest.strip_suffix("] "))
+        } else {
+            None
+        };
+
+        if let Some(arrow) = carried_arrow {
+            line.push_span(Span::styled(" [", checkbox_style));
+            line.push_span(Span::styled(arrow, styles.carryover_marker));
+            line.push_span(Span::styled("] ", checkbox_style));
+        } else {
+            line.push_span(Span::styled(checkbox, checkbox_style));
+        }
+
+        line.spans.extend(task_spans(
+            text,
+            0,
+            heading_end,
+            &matches,
+            &display,
+            text_style,
+            heading_style,
+            match_color,
+        ));
+
+        if truncated {
+            line.push_span(Span::styled(TRUNCATION, styles.muted));
+        }
+
+        lines.push(line);
+        task_by_row.push(index);
+    }
+
+    frame.render_widget(Paragraph::new(lines), results);
+    draw_scrollbar(frame, results, finder.matches.len(), scroll, styles.muted);
+
+    viewport.finder = FinderViewport {
+        results,
+        task_by_row,
+    };
 }
 
 #[cfg(test)]
