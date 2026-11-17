@@ -14,7 +14,7 @@ Once any task has a section, tabs appear on the top border:
 
 A section tab is a view of the same list, not a separate list. It hides the prefix, and movement, reordering, search, clearing, and `c` apply only to its tasks. Adding a task from a section tab suggests that section, and while the input is empty or a single partial word, `Tab` cycles through matching sections.
 
-`s` then a digit jumps to a tab by position (`s1` is `[*]`, `s0` the tenth), and `` ` `` finds a tab by fuzzy name. `'` returns to the tab and task you were on before your last jump; press it again to go back. `E` renames the current section on every task in it, and `L` / `H` move its tab without reordering any tasks.
+`s` then a digit jumps to a tab by position (`s1` is `[*]`, `s0` the tenth), and `` ` `` finds a tab by fuzzy name. Switching to a tab that doesn't contain the selected task selects its first unfinished task. `'` returns to the tab and task you were on before your last jump; press it again to go back. `E` renames the current section on every task in it, and `L` / `H` move its tab without reordering any tasks.
 
 ## Carryover and clearing
 

@@ -407,8 +407,9 @@ impl App {
     }
 
     // Shows the tab for `view`. The selection stays when its task is in that tab and otherwise
-    // moves to the tab's first task. Previews in the section picker call this too, so it does
-    // not record a jump itself.
+    // moves to the tab's first unfinished task, skipping past any completed ones, or to its
+    // first task when all are completed. Previews in the section picker call this too, so it
+    // does not record a jump itself.
     pub fn select_tab(&mut self, view: SectionView) {
         self.view = view;
 
@@ -418,8 +419,14 @@ impl App {
             .is_some_and(|index| index < self.tasks.len() && self.task_in_active_view(index));
 
         if !selection_in_view {
+            let indices = self.active_view_task_indices();
+            let first_unfinished = indices
+                .iter()
+                .copied()
+                .find(|&index| self.tasks[index].status != TaskStatus::Completed);
+
             self.list
-                .select(self.active_view_task_indices().first().copied());
+                .select(first_unfinished.or(indices.first().copied()));
         }
 
         self.viewport.reveal_selection = true;

@@ -886,6 +886,46 @@ fn alt_b_and_f_still_move_by_word_while_adding() {
 }
 
 #[test]
+fn switching_tabs_selects_the_first_unfinished_task() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&[
+        "Work: done",
+        "Work: also done",
+        "Work: next",
+        "Home: done",
+        "Home: carried",
+        "Errands: done",
+    ]);
+    app.tasks[0].status = TaskStatus::Completed;
+    app.tasks[1].status = TaskStatus::Completed;
+    app.tasks[3].status = TaskStatus::Completed;
+    app.tasks[4].status = TaskStatus::Carried;
+    app.tasks[5].status = TaskStatus::Completed;
+
+    // Without a saved order, tabs are alphabetical: [*] Errands Home Work. Start outside Work
+    // so the switch has to move the selection.
+    app.list.select(Some(3));
+    type_keys(&mut app, &fixture, "s4");
+    assert_eq!(app.view, SectionView::Named("work".into()));
+    assert_eq!(app.list.selected(), Some(2));
+
+    // A carried task is unfinished too.
+    press(&mut app, &fixture, KeyCode::Char('h'));
+    assert_eq!(app.view, SectionView::Named("home".into()));
+    assert_eq!(app.list.selected(), Some(4));
+
+    // With every task completed, the tab opens on its first task.
+    press(&mut app, &fixture, KeyCode::Char('h'));
+    assert_eq!(app.view, SectionView::Named("errands".into()));
+    assert_eq!(app.list.selected(), Some(5));
+
+    // A selected task that is also in the new tab stays selected.
+    type_keys(&mut app, &fixture, "s1");
+    assert_eq!(app.view, SectionView::All);
+    assert_eq!(app.list.selected(), Some(5));
+}
+
+#[test]
 fn s_or_alt_s_and_a_digit_jump_to_tabs_in_display_order() {
     let fixture = Fixture::new();
     let mut app = app_with_texts(&["Work: a", "Home: b", "plain"]);
