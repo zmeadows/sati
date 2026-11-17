@@ -7101,10 +7101,10 @@ fn v_opens_every_link_in_the_selected_task_without_changing_anything() {
         "plain task",
         "[docs](https://a.com/docs) then https://b.com/x.",
     ]);
-    crate::links::tests::take_opened();
+    crate::markup::tests::take_opened();
 
     press(&mut app, &fixture, KeyCode::Char('v'));
-    assert!(crate::links::tests::take_opened().is_empty());
+    assert!(crate::markup::tests::take_opened().is_empty());
     assert_eq!(notice(&app), Some("No link in task"));
 
     press(&mut app, &fixture, KeyCode::Char('j'));
@@ -7112,7 +7112,7 @@ fn v_opens_every_link_in_the_selected_task_without_changing_anything() {
     press(&mut app, &fixture, KeyCode::Char('v'));
 
     assert_eq!(
-        crate::links::tests::take_opened(),
+        crate::markup::tests::take_opened(),
         ["https://a.com/docs", "https://b.com/x"]
     );
     assert_eq!(notice(&app), Some("Opening 2 links"));
@@ -7121,7 +7121,7 @@ fn v_opens_every_link_in_the_selected_task_without_changing_anything() {
 
     // Opening launches a program, so a held key doesn't repeat it.
     repeat(&mut app, &fixture, KeyCode::Char('v'), KeyModifiers::NONE);
-    assert!(crate::links::tests::take_opened().is_empty());
+    assert!(crate::markup::tests::take_opened().is_empty());
 }
 
 #[test]
@@ -7152,6 +7152,21 @@ fn search_matches_link_titles_and_shortened_urls_but_not_hidden_urls() {
 
         assert_eq!(app.list.selected(), expected, "{query:?}");
     }
+}
+
+#[test]
+fn search_matches_emphasized_text_as_shown_without_its_asterisks() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["first", "**Pay** *the* rent"]);
+
+    press(&mut app, &fixture, KeyCode::Char('/'));
+    app.handle_paste("pay the rent");
+    assert_eq!(app.list.selected(), Some(1));
+
+    press(&mut app, &fixture, KeyCode::Esc);
+    press(&mut app, &fixture, KeyCode::Char('/'));
+    app.handle_paste("**");
+    assert_eq!(app.list.selected(), None);
 }
 
 fn move_targets(app: &App) -> Vec<MoveTarget> {

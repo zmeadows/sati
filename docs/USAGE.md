@@ -16,16 +16,18 @@ A section tab is a view of the same list, not a separate list. It hides the pref
 
 `s` then a digit jumps to a tab by position (`s1` is `[*]`, `s0` the tenth), and `` ` `` finds a tab by fuzzy name. Switching to a tab that doesn't contain the selected task selects its first unfinished task. `'` returns to the tab and task you were on before your last jump; press it again to go back. `E` renames the current section on every task in it, and `L` / `H` move its tab without reordering any tasks. `M` moves the selected task to the bottom of a section you find by name, or to a new one after you confirm its name, and follows it to that tab.
 
-## Links
+## Links and emphasis
 
 A task can link to web pages in two ways:
 
 - `[title](https://example.com/page)` shows as an underlined `title`.
 - A bare `https://` or `http://` URL, such as one you paste, shows shortened to its host and the start of its path, like `github.com/zmeadows/sati/issu…`.
 
-Only `http` and `https` links are recognized; anything else stays as typed. Editing a task (`e`) shows its text exactly as stored, and copying, pasting, and `tasks.json` all keep it that way. Search matches what a row shows, so it finds a link's title but not the URL behind it.
+Asterisks emphasize text as in Markdown: `*italic*`, `**bold**`, and `***bold italic***`. They count only in pairs that hug the text they wrap, so `2 * 3`, `5*3`, and `*.rs` stay as typed. Some terminals don't show italics.
 
-Click a link to open it in your default browser (clicking elsewhere on the task still checks it off), or press `v` to open every link in the selected task. sati also marks links as terminal hyperlinks (OSC 8), so with `--no-mouse` the terminal's own link click works in terminals that support them; tmux needs `set -as terminal-features ',*:hyperlinks'`. `sati export` and `C` write links as Markdown links.
+Only `http` and `https` links are recognized; anything else stays as typed. Editing a task (`e`) shows its text exactly as stored, asterisks included, and copying, pasting, and `tasks.json` all keep it that way. Search matches what a row shows, so it finds a link's title but not the URL behind it.
+
+Click a link to open it in your default browser (clicking elsewhere on the task still checks it off), or press `v` to open every link in the selected task. sati also marks links as terminal hyperlinks (OSC 8), so with `--no-mouse` the terminal's own link click works in terminals that support them; tmux needs `set -as terminal-features ',*:hyperlinks'`. `sati export` and `C` write links and emphasis as Markdown.
 
 ## Templates
 

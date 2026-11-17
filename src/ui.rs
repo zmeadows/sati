@@ -19,7 +19,7 @@ use crate::app::templates::{
 use crate::app::{App, Mode, MoveTarget, task_noun};
 use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
-use crate::links::{self, Link};
+use crate::markup::{self, DisplayText, Link};
 use crate::model::{SectionView, Task, TaskStatus, current_time, format_age, input_section_name};
 use crate::styles::Styles;
 
@@ -572,7 +572,7 @@ fn mark_hyperlinks(frame: &mut Frame, area: Rect, rows: &[Vec<(Range<u16>, Strin
                     continue;
                 };
 
-                let linked = links::osc8_wrapped(url, symbol);
+                let linked = markup::osc8_wrapped(url, symbol);
                 cell.set_symbol(&linked)
                     .set_diff_option(CellDiffOption::ForcedWidth(forced));
                 column += width;
@@ -652,11 +652,6 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
         let in_section = matches!(app.view, SectionView::Named(_));
         let display = app.display_text(index);
         let text = display.text.as_str();
-        let link_ranges: Vec<Range<usize>> = display
-            .links
-            .iter()
-            .map(|link| link.range.clone())
-            .collect();
 
         // Draw the "Work:" part of the composed text as a bold heading; the section comes
         // from its field.
@@ -789,7 +784,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
                 source.start,
                 section_heading_end,
                 &matches,
-                &link_ranges,
+                &display,
                 text_style,
                 heading_style,
                 match_color,
@@ -1053,7 +1048,7 @@ fn task_spans(
     offset: usize,
     section_heading_end: usize,
     matches: &[Range<usize>],
-    links: &[Range<usize>],
+    markup: &DisplayText,
     base: Style,
     heading: Style,
     match_color: Color,
@@ -1095,7 +1090,15 @@ fn task_spans(
             next = next.add_modifier(Modifier::BOLD);
         }
 
-        if links.iter().any(|range| range.contains(&source)) {
+        if markup.bold.iter().any(|range| range.contains(&source)) {
+            next = next.add_modifier(Modifier::BOLD);
+        }
+
+        if markup.italic.iter().any(|range| range.contains(&source)) {
+            next = next.add_modifier(Modifier::ITALIC);
+        }
+
+        if markup.links.iter().any(|link| link.range.contains(&source)) {
             next = next.add_modifier(Modifier::UNDERLINED);
         }
 
@@ -1354,7 +1357,7 @@ fn paste_preview_line(
     width: usize,
 ) -> Line<'static> {
     let checkbox = task_checkbox(task, markers);
-    let mut text = links::display_text(&task.full_text()).text;
+    let mut text = markup::display_text(task.section.as_deref(), &task.text).text;
     let room = width.saturating_sub(checkbox.width());
 
     if text.width() > room {
@@ -2015,7 +2018,7 @@ fn template_entry_layout(
             break;
         };
 
-        let text = links::display_text(entry).text;
+        let text = markup::display_text(None, entry).text;
         let wrapped = if wrap && text_width > 0 {
             wrap_text(&text, text_width)
         } else {

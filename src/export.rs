@@ -6,13 +6,13 @@ use std::{
 
 use crate::{
     Result,
-    links::{self, Segment},
+    markup::{self, Segment},
     model::{SectionView, Task, TaskStatus, section_tabs_of, view_includes_task},
     storage::Storage,
 };
 
 // Each task as typed ("Work: fix bug"), or only its body when every task is from one section.
-// Text is escaped so it reads literally, except that links stay working Markdown links.
+// Text is escaped so it reads literally, except that links and emphasis stay working Markdown.
 pub fn markdown(tasks: &[Task], include_sections: bool) -> String {
     let mut output = String::new();
 
@@ -25,13 +25,13 @@ pub fn markdown(tasks: &[Task], include_sections: bool) -> String {
 
         output.push_str(checkbox);
 
-        let text = if include_sections {
-            task.full_text()
-        } else {
-            task.text.clone()
-        };
+        // Only the body has markup; a section name is always literal.
+        if include_sections && let Some(section) = &task.section {
+            push_escaped(&mut output, section);
+            output.push_str(": ");
+        }
 
-        for segment in links::segments(&text) {
+        for segment in markup::segments(&task.text) {
             match segment {
                 Segment::Plain(plain) => push_escaped(&mut output, plain),
                 // A bare URL is its own text. Backslashes keep the destination's parentheses
@@ -50,6 +50,7 @@ pub fn markdown(tasks: &[Task], include_sections: bool) -> String {
 
                     output.push(')');
                 }
+                Segment::Emphasis { marker, .. } => output.push_str(marker),
             }
         }
 
@@ -206,7 +207,7 @@ mod tests {
             },
             Task {
                 status: TaskStatus::Carried,
-                ..Task::new("Work: Review *PR* & <notes> [x] \\ `code`")
+                ..Task::new("Work: Review 2 * PR & <notes> [x] \\ `code`")
             },
             Task::new("1. nested 日本語 👩‍💻 e\u{301}"),
         ];
@@ -216,7 +217,7 @@ mod tests {
             concat!(
                 "- [ ] Buy groceries\n",
                 "- [x] Walk the dog\n",
-                r"- [ ] Work: Review \*PR\* \& \<notes\> \[x\] \\ \`code\`",
+                r"- [ ] Work: Review 2 \* PR \& \<notes\> \[x\] \\ \`code\`",
                 "\n",
                 "- [ ] 1\\. nested 日本語 👩‍💻 e\u{301}\n"
             )
@@ -226,7 +227,7 @@ mod tests {
         // A single-section export prints bodies only, still escaped.
         assert_eq!(
             markdown(&tasks[2..3], false),
-            "- [ ] Review \\*PR\\* \\& \\<notes\\> \\[x\\] \\\\ \\`code\\`\n"
+            "- [ ] Review 2 \\* PR \\& \\<notes\\> \\[x\\] \\\\ \\`code\\`\n"
         );
     }
 
@@ -241,6 +242,24 @@ mod tests {
             concat!(
                 r"- [ ] Read [the \*docs\*](https://a.com/x_\(y\)) and ",
                 r"[https://b\.com/a\_b](https://b.com/a_b)\. \[x\] \(y\)",
+                "\n"
+            )
+        );
+    }
+
+    #[test]
+    fn emphasis_exports_as_markdown_and_stray_asterisks_stay_escaped() {
+        let tasks = [
+            Task::new("**Bold** *it_alic* ***both*** **[docs](https://a.com)** 2 * 3"),
+            Task::new("*Work*: *fix*"),
+        ];
+
+        assert_eq!(
+            markdown(&tasks, true),
+            concat!(
+                r"- [ ] **Bold** *it\_alic* ***both*** **[docs](https://a.com)** 2 \* 3",
+                "\n",
+                r"- [ ] \*Work\*: *fix*",
                 "\n"
             )
         );

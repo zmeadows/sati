@@ -819,7 +819,7 @@ fn semantic_styles_and_reverse_highlights_preserve_modifier_hierarchy() {
         0,
         0,
         std::slice::from_ref(&(1..2)),
-        &[],
+        &DisplayText::default(),
         Styles::default().muted.add_modifier(Modifier::ITALIC),
         Styles::default().heading,
         Color::Reset,
@@ -3452,7 +3452,7 @@ fn links_show_their_titles_underlined_as_osc8_hyperlinks() {
 
         assert_eq!(
             cell.symbol(),
-            crate::links::osc8_wrapped(url, &symbol.to_string())
+            crate::markup::osc8_wrapped(url, &symbol.to_string())
         );
         assert_eq!(
             cell.diff_option,
@@ -3484,6 +3484,36 @@ fn editing_shows_the_link_syntax_as_typed() {
 }
 
 #[test]
+fn emphasis_shows_bold_and_italic_without_its_asterisks() {
+    let mut app = app_with_texts(&["**Pay** *rent* ***now*** 2 * 3"]);
+    let mut terminal = test_terminal(40, 5);
+    let rows = render(&mut terminal, &mut app);
+    let buffer = terminal.backend().buffer();
+
+    // Columns count from the list's left edge: six prefix cells, then "Pay rent now 2 * 3".
+    let modifiers = |column: u16| buffer[(rows.x + column, rows.y)].modifier;
+    let emphasis = Modifier::BOLD | Modifier::ITALIC;
+
+    assert!(screen(&terminal).contains("Pay rent now 2 * 3"));
+    assert_eq!(modifiers(6) & emphasis, Modifier::BOLD);
+    assert_eq!(modifiers(9) & emphasis, Modifier::empty());
+    assert_eq!(modifiers(10) & emphasis, Modifier::ITALIC);
+    assert_eq!(modifiers(15) & emphasis, emphasis);
+    assert_eq!(modifiers(21) & emphasis, Modifier::empty());
+}
+
+#[test]
+fn editing_shows_emphasis_asterisks_as_typed() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let mut app = app_with_texts(&["**Pay** *rent*"]);
+    let mut terminal = test_terminal(40, 5);
+    press_keys(&mut app, &fixture, "e");
+    render(&mut terminal, &mut app);
+
+    assert!(screen(&terminal).contains("**Pay** *rent*"));
+}
+
+#[test]
 fn wrapped_and_wide_links_map_every_cell_they_cover() {
     let url = "https://x.com".to_owned();
 
@@ -3511,7 +3541,7 @@ fn wrapped_and_wide_links_map_every_cell_they_cover() {
 
     for (column, symbol) in [(6, "日"), (8, "本")] {
         let cell = &buffer[(rows.x + column, rows.y)];
-        assert_eq!(cell.symbol(), crate::links::osc8_wrapped(&url, symbol));
+        assert_eq!(cell.symbol(), crate::markup::osc8_wrapped(&url, symbol));
         assert_eq!(
             cell.diff_option,
             CellDiffOption::ForcedWidth(NonZeroU16::new(2).unwrap())
@@ -3547,12 +3577,12 @@ fn clicking_a_link_opens_it_without_checking_off_the_task() {
     let mut app = app_with_texts(&["Read [the docs](https://ratatui.rs/) now"]);
     let mut terminal = test_terminal(40, 5);
     let rows = render(&mut terminal, &mut app);
-    crate::links::tests::take_opened();
+    crate::markup::tests::take_opened();
 
     app.handle_mouse(left_click(rows.x + 11, rows.y), rows, &fixture.storage)
         .unwrap();
 
-    assert_eq!(crate::links::tests::take_opened(), ["https://ratatui.rs/"]);
+    assert_eq!(crate::markup::tests::take_opened(), ["https://ratatui.rs/"]);
     assert_eq!(app.tasks[0].status, TaskStatus::Pending);
     assert!(!fixture.task_path().exists());
 
@@ -3566,7 +3596,7 @@ fn clicking_a_link_opens_it_without_checking_off_the_task() {
         assert_eq!(app.tasks[0].status, status);
     }
 
-    assert!(crate::links::tests::take_opened().is_empty());
+    assert!(crate::markup::tests::take_opened().is_empty());
 }
 
 fn template_app(templates: &[(&str, &[&str])]) -> App {

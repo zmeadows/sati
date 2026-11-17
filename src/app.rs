@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::Result;
 use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
-use crate::links::DisplayText;
+use crate::markup::DisplayText;
 use crate::model::{
     SectionView, Task, TaskStatus, Template, input_section_name, input_task_body,
     invalid_section_name, parse_task_input, reconcile_active_view, reconcile_section_order,
@@ -431,19 +431,23 @@ impl App {
     }
 
     // What a task's row shows, and so what search matches: only the body inside a section tab,
-    // where every task shares the prefix, and links as their titles or shortened URLs.
+    // where every task shares the prefix, with links as their titles or shortened URLs and
+    // emphasis markers removed.
     pub(crate) fn display_text(&self, index: usize) -> DisplayText {
         let task = &self.tasks[index];
 
-        let raw = match self.view {
-            SectionView::Named(_) => task.text.clone(),
-            _ => task.full_text(),
+        let section = match self.view {
+            SectionView::Named(_) => None,
+            _ => task.section.as_deref(),
         };
 
         // Task validation rules out control characters; keep any from breaking the row anyway.
-        let raw: String = raw.chars().map(single_line_character).collect();
+        let single_line =
+            |text: &str| -> String { text.chars().map(single_line_character).collect() };
+        let section = section.map(single_line);
+        let body = single_line(&task.text);
 
-        crate::links::display_text(&raw)
+        crate::markup::display_text(section.as_deref(), &body)
     }
 
     // Keep a loaded view valid; see `model::reconcile_active_view`.
@@ -1829,7 +1833,7 @@ impl App {
     // "Opening"; a failure stops before the remaining links.
     fn open_links(&mut self, urls: &[String]) {
         for url in urls {
-            if let Err(error) = crate::links::open(url) {
+            if let Err(error) = crate::markup::open(url) {
                 self.show_important_message(format!("Could not open link: {error}"));
                 return;
             }
