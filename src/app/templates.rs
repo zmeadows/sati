@@ -1,7 +1,8 @@
 // The templates screen opened with `i`: named templates on top, the focused template's
 // entries below. A template is added to the current tab as new tasks, and its entries are
 // edited in place, saved to templates.json after every change. `I` opens the same screen to
-// replace a section tab's tasks with a template instead.
+// replace a section tab's tasks with a template instead. In the list, `a` names a new empty
+// template and `A` a new one made from the current section's tasks.
 
 use std::collections::VecDeque;
 
@@ -51,6 +52,8 @@ pub enum TemplateFocus {
     Filtering,
     // Typing the name of a new template.
     Naming(TextInput),
+    // Typing the name of a new template made from the current section's tasks.
+    FromSection(TextInput),
     Renaming(TextInput),
     ConfirmDelete,
     Editing(TemplateEditor),
@@ -130,7 +133,9 @@ impl TemplatePicker {
     pub(crate) fn text_input_mut(&mut self) -> Option<&mut TextInput> {
         match &mut self.focus {
             TemplateFocus::Filtering => Some(&mut self.filter),
-            TemplateFocus::Naming(input) | TemplateFocus::Renaming(input) => Some(input),
+            TemplateFocus::Naming(input)
+            | TemplateFocus::FromSection(input)
+            | TemplateFocus::Renaming(input) => Some(input),
             TemplateFocus::Editing(editor) => editor.input.as_mut().map(|(input, _)| input),
             TemplateFocus::List | TemplateFocus::ConfirmDelete => None,
         }
@@ -168,7 +173,9 @@ impl TemplatePicker {
                         KeyCode::Up | KeyCode::Down | KeyCode::Tab | KeyCode::BackTab
                     )
             }
-            TemplateFocus::Naming(_) | TemplateFocus::Renaming(_) => repeats_while_typing(key.code),
+            TemplateFocus::Naming(_)
+            | TemplateFocus::FromSection(_)
+            | TemplateFocus::Renaming(_) => repeats_while_typing(key.code),
             TemplateFocus::ConfirmDelete => false,
             TemplateFocus::Editing(editor) if editor.input.is_some() => {
                 repeats_while_typing(key.code)
@@ -313,9 +320,9 @@ impl App {
         match &picker.focus {
             TemplateFocus::List => self.handle_template_list_key(key, storage)?,
             TemplateFocus::Filtering => self.handle_template_filter_key(key),
-            TemplateFocus::Naming(_) | TemplateFocus::Renaming(_) => {
-                self.handle_template_name_key(key, storage)?
-            }
+            TemplateFocus::Naming(_)
+            | TemplateFocus::FromSection(_)
+            | TemplateFocus::Renaming(_) => self.handle_template_name_key(key, storage)?,
             TemplateFocus::ConfirmDelete => match key.code {
                 KeyCode::Enter => self.delete_template(storage)?,
                 KeyCode::Esc => self.set_template_focus(TemplateFocus::List),
@@ -374,6 +381,14 @@ impl App {
             KeyCode::Char('/') => self.set_template_focus(TemplateFocus::Filtering),
             KeyCode::Char('a') => {
                 self.set_template_focus(TemplateFocus::Naming(TextInput::default()));
+            }
+            // Like replacing, this needs a section; on [*] and [-] it explains why not.
+            KeyCode::Char('A') => {
+                if matches!(self.view, SectionView::Named(_)) {
+                    self.set_template_focus(TemplateFocus::FromSection(TextInput::default()));
+                } else {
+                    self.show_important_message("Open a section to make a template from it");
+                }
             }
             KeyCode::Char('E') => {
                 if let Some(index) = focused {
@@ -584,7 +599,7 @@ impl App {
         let picker = self.mode.template_picker()?;
 
         let (input, renamed) = match &picker.focus {
-            TemplateFocus::Naming(input) => (input, None),
+            TemplateFocus::Naming(input) | TemplateFocus::FromSection(input) => (input, None),
             TemplateFocus::Renaming(input) => (input, Some(picker.selected)),
             _ => return None,
         };
@@ -627,16 +642,21 @@ impl App {
         };
 
         let index = picker.selected;
-        let (name, renaming) = match &picker.focus {
-            TemplateFocus::Naming(input) => (input.text().trim().to_owned(), false),
-            TemplateFocus::Renaming(input) => (input.text().trim().to_owned(), true),
-            _ => return Ok(()),
-        };
 
-        if renaming {
-            self.rename_template(index, name, storage)
-        } else {
-            self.create_template(name, storage)
+        match &picker.focus {
+            TemplateFocus::Naming(input) => {
+                let name = input.text().trim().to_owned();
+                self.create_template(name, storage)
+            }
+            TemplateFocus::FromSection(input) => {
+                let name = input.text().trim().to_owned();
+                self.create_template_from_section(name, storage)
+            }
+            TemplateFocus::Renaming(input) => {
+                let name = input.text().trim().to_owned();
+                self.rename_template(index, name, storage)
+            }
+            _ => Ok(()),
         }
     }
 
@@ -664,6 +684,58 @@ impl App {
             picker.entries_scroll = 0;
             picker.focus = TemplateFocus::Editing(editor);
         }
+
+        Ok(())
+    }
+
+    // The entries a template made from the current view would have: every task in it,
+    // whatever its status, in list order. An entry is the task's body, since applying it on a
+    // section tab puts it in that section; it must not carry the section it came from. Also
+    // drawn as the preview while naming such a template, so the preview is what gets saved.
+    pub(crate) fn section_entries(&self) -> Vec<String> {
+        let mut entries = Vec::new();
+
+        for (index, task) in self.tasks.iter().enumerate() {
+            if self.task_in_active_view(index) {
+                entries.push(task.text.clone());
+            }
+        }
+
+        entries
+    }
+
+    fn create_template_from_section(&mut self, name: String, storage: &Storage) -> Result<()> {
+        // `A` only starts on a section tab, and the view can't change while naming.
+        let Some(section) = self.scope_label() else {
+            return Ok(());
+        };
+
+        let entries = self.section_entries();
+        let count = entries.len();
+
+        let mut templates = self.templates.clone();
+        templates.insert(
+            0,
+            Template {
+                name: name.clone(),
+                entries,
+            },
+        );
+
+        self.commit_templates(templates, storage)?;
+
+        if let Some(picker) = self.mode.template_picker_mut() {
+            picker.filter = TextInput::default();
+            picker.selected = 0;
+            picker.list_scroll = 0;
+            picker.entries_scroll = 0;
+            picker.focus = TemplateFocus::List;
+        }
+
+        self.show_routine_message(format!(
+            "Saved {section} as {name} ({count} {})",
+            task_noun(count)
+        ));
 
         Ok(())
     }

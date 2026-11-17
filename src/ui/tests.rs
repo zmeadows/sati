@@ -3767,7 +3767,7 @@ fn the_templates_title_names_the_tab_a_template_will_join() {
 }
 
 #[test]
-fn the_template_filter_and_new_names_are_typed_on_the_top_border() {
+fn the_template_filter_is_typed_on_the_top_border() {
     let fixture = crate::storage::tests::Fixture::new();
     let mut app = template_app(&[("Daily", &["a"]), ("Weekend", &["b"])]);
     let mut terminal = test_terminal(50, 10);
@@ -3804,16 +3804,6 @@ fn the_template_filter_and_new_names_are_typed_on_the_top_border() {
         "│ No matching templates                          │"
     );
 
-    template_key(&mut app, &fixture, KeyCode::Esc);
-    template_key(&mut app, &fixture, KeyCode::Char('a'));
-    template_key(&mut app, &fixture, KeyCode::Char('N'));
-    render(&mut terminal, &mut app);
-
-    assert_eq!(
-        row_text(&terminal, 0),
-        "┌─ Templates → [*] ─ new › N                    ─┐"
-    );
-
     // Renaming types over the focused name instead.
     template_key(&mut app, &fixture, KeyCode::Esc);
     template_key(&mut app, &fixture, KeyCode::Char('E'));
@@ -3822,6 +3812,68 @@ fn the_template_filter_and_new_names_are_typed_on_the_top_border() {
     assert_eq!(
         row_text(&terminal, 2),
         "│› rename › Weekend                              │"
+    );
+}
+
+#[test]
+fn a_new_template_is_named_after_the_last_name_with_a_placeholder() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let mut app = template_app(&[("Daily", &["a"]), ("Weekend", &["b"])]);
+    let mut terminal = test_terminal(50, 10);
+
+    // An empty template has no entries to show, so the focused template's are hidden.
+    template_key(&mut app, &fixture, KeyCode::Char('i'));
+    template_key(&mut app, &fixture, KeyCode::Char('a'));
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        screen(&terminal),
+        [
+            "┌─ Templates → [*] ──────────────────────────────┐",
+            "│  Daily                                         │",
+            "│  Weekend                                       │",
+            "│› new template name                             │",
+            "├────────────────────────────────────────────────┤",
+            "│                                                │",
+            "│                                                │",
+            "│                                                │",
+            "│                                                │",
+            "└────────────────────────────────────────────────┘",
+        ]
+        .join("\n")
+    );
+    assert_eq!(
+        terminal.get_cursor_position().unwrap(),
+        ratatui::layout::Position::new(3, 3)
+    );
+
+    template_key(&mut app, &fixture, KeyCode::Char('N'));
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, 3),
+        "│› N                                             │"
+    );
+
+    // From a section, the entries show what the template will hold.
+    template_key(&mut app, &fixture, KeyCode::Esc);
+    template_key(&mut app, &fixture, KeyCode::Esc);
+    app.select_tab(crate::model::SectionView::Named("home".to_owned()));
+    template_key(&mut app, &fixture, KeyCode::Char('i'));
+    template_key(&mut app, &fixture, KeyCode::Char('A'));
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        row_text(&terminal, 3),
+        "│› new template from section                     │"
+    );
+    assert_eq!(
+        row_text(&terminal, 5),
+        "│  [ ] dishes                                    │"
+    );
+    assert_eq!(
+        row_text(&terminal, 6),
+        "│                                                │"
     );
 }
 

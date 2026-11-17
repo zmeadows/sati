@@ -1440,6 +1440,7 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
         ("Add template to tab", "Space, Enter", ""),
         ("Find template", "/", ""),
         ("New template", "a", ""),
+        ("Template from section", "A", ""),
         ("Edit entries", "e", "Alt+E"),
         ("Rename template", "E", ""),
         ("Delete template", "d, Delete", ""),
@@ -1676,6 +1677,8 @@ const TEMPLATES_TITLE: &str = "Templates";
 const REPLACE_TEMPLATE_TITLE: &str = "Replace template";
 const TEMPLATES_LIST_HINT: &str = "␣ use · e edit · a new · / find";
 const TEMPLATES_EDITOR_HINT: &str = "a add · e edit · d delete · Esc done";
+const NEW_TEMPLATE_PLACEHOLDER: &str = "new template name";
+const SECTION_TEMPLATE_PLACEHOLDER: &str = "new template from section";
 const TEMPLATES_TOO_SMALL: &str = "Enlarge terminal to view templates.";
 
 // Wide enough for the hints and a useful entry; tall enough for the borders above, between,
@@ -1737,6 +1740,14 @@ fn draw_templates(frame: &mut Frame, area: Rect, app: &mut App) {
     let title_width = title.width() as u16;
     let status = status_line(app, &styles, area.width);
 
+    // Naming a template made from the section previews the entries it will have.
+    let section_preview = match &app.mode {
+        Mode::Templates(picker) if matches!(picker.focus, TemplateFocus::FromSection(_)) => {
+            Some(app.section_entries())
+        }
+        _ => None,
+    };
+
     let App {
         mode,
         templates,
@@ -1760,7 +1771,23 @@ fn draw_templates(frame: &mut Frame, area: Rect, app: &mut App) {
         _ => None,
     };
 
-    let entries: &[String] = focused.map_or(&[], |index| &templates[index].entries);
+    // A new template's name is typed on a row after the names, with a placeholder saying what
+    // is being made.
+    let naming = match &picker.focus {
+        TemplateFocus::Naming(input) => Some((input, NEW_TEMPLATE_PLACEHOLDER)),
+        TemplateFocus::FromSection(input) => Some((input, SECTION_TEMPLATE_PLACEHOLDER)),
+        _ => None,
+    };
+
+    // While naming, the entries are the preview from the section, or none for an empty
+    // template: not the entries of whichever template was focused before.
+    let entries: &[String] = if let Some(preview) = &section_preview {
+        preview
+    } else if naming.is_some() {
+        &[]
+    } else {
+        focused.map_or(&[], |index| &templates[index].entries)
+    };
     let inner_width = area.width - 2;
     let layout = template_entry_layout(entries, editor, inner_width, *wrap, *task_markers, &styles);
 
@@ -1771,7 +1798,7 @@ fn draw_templates(frame: &mut Frame, area: Rect, app: &mut App) {
     let list_rows = if editor.is_some() {
         1
     } else {
-        let needed = matches.len().max(1);
+        let needed = (matches.len() + usize::from(naming.is_some())).max(1);
         let unused_by_entries = content_rows.saturating_sub(layout.lines.len().max(1));
         let share = (content_rows / 3).max(unused_by_entries).max(1);
 
@@ -1811,10 +1838,9 @@ fn draw_templates(frame: &mut Frame, area: Rect, app: &mut App) {
         .buffer_mut()
         .set_string(area.x, divider_y, divider, styles.border);
 
-    // The filter and a new template's name are typed on the top border, after the title. A
-    // filter kept with Enter stays there, without the cursor.
+    // The filter is typed on the top border, after the title. A filter kept with Enter stays
+    // there, without the cursor.
     let border_input = match &picker.focus {
-        TemplateFocus::Naming(input) => Some((input, "new", true)),
         TemplateFocus::Filtering => Some((&picker.filter, "find", true)),
         _ if !picker.filter.text().is_empty() => Some((&picker.filter, "find", false)),
         _ => None,
@@ -1848,7 +1874,7 @@ fn draw_templates(frame: &mut Frame, area: Rect, app: &mut App) {
         ]);
 
         frame.render_widget(Paragraph::new(name), list_area);
-    } else if matches.is_empty() {
+    } else if matches.is_empty() && naming.is_none() {
         let message = if templates.is_empty() {
             " No templates yet. Press a to create one."
         } else {
@@ -1857,14 +1883,17 @@ fn draw_templates(frame: &mut Frame, area: Rect, app: &mut App) {
 
         frame.render_widget(Paragraph::new(message).style(styles.muted), list_area);
     } else {
-        // Keep the focused name in view.
-        let position = matches
-            .iter()
-            .position(|&index| Some(index) == focused)
-            .unwrap_or(0);
-        let mut scroll = picker
-            .list_scroll
-            .min(matches.len().saturating_sub(list_rows));
+        // Keep the focused name, or the name being typed after the last one, in view.
+        let total_rows = matches.len() + usize::from(naming.is_some());
+        let position = if naming.is_some() {
+            matches.len()
+        } else {
+            matches
+                .iter()
+                .position(|&index| Some(index) == focused)
+                .unwrap_or(0)
+        };
+        let mut scroll = picker.list_scroll.min(total_rows.saturating_sub(list_rows));
 
         if position < scroll {
             scroll = position;
@@ -1877,7 +1906,8 @@ fn draw_templates(frame: &mut Frame, area: Rect, app: &mut App) {
         let mut lines = Vec::new();
 
         for &index in matches.iter().skip(scroll).take(list_rows) {
-            let marker = if Some(index) == focused {
+            // While naming, the input row has the focus instead.
+            let marker = if Some(index) == focused && naming.is_none() {
                 focus_marker(*task_markers)
             } else {
                 " "
@@ -1892,7 +1922,27 @@ fn draw_templates(frame: &mut Frame, area: Rect, app: &mut App) {
         }
 
         frame.render_widget(Paragraph::new(lines), list_area);
-        draw_scrollbar(frame, list_area, matches.len(), scroll, styles.muted);
+        draw_scrollbar(frame, list_area, total_rows, scroll, styles.muted);
+
+        // The prompt's arrow sits in the marker column, so the name lines up with the others.
+        // The placeholder shows only until something is typed.
+        if let Some((input, placeholder)) = naming
+            && let Some(row) = matches.len().checked_sub(scroll)
+            && row < list_rows
+        {
+            let row_area = Rect::new(list_area.x, list_area.y + row as u16, list_area.width, 1);
+            draw_input_line(frame, row_area, input, "", &styles, true, false, None);
+
+            if input.text().is_empty() {
+                frame.buffer_mut().set_stringn(
+                    row_area.x + 2,
+                    row_area.y,
+                    placeholder,
+                    usize::from(row_area.width.saturating_sub(2)),
+                    styles.muted,
+                );
+            }
+        }
 
         // Renaming types over the focused name, as renaming a section types over its tab.
         if let TemplateFocus::Renaming(input) = &picker.focus
@@ -1930,7 +1980,7 @@ fn draw_templates(frame: &mut Frame, area: Rect, app: &mut App) {
     picker.entries_scroll = scroll;
     let visible_rows = scroll..(scroll + entry_rows).min(total_rows);
 
-    if focused.is_some() && total_rows == 0 {
+    if focused.is_some() && naming.is_none() && total_rows == 0 {
         let message = if editor.is_some() {
             " Press a to add an entry"
         } else {

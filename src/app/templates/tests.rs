@@ -498,6 +498,91 @@ fn a_new_template_needs_a_unique_name_and_opens_ready_for_entries() {
 }
 
 #[test]
+fn a_template_from_a_section_keeps_every_task_body() {
+    let fixture = Fixture::new();
+    let mut app = saved_app(
+        &fixture,
+        &[
+            "Home: dishes",
+            "Work: email",
+            "Home: Note: water plants",
+            "loose",
+            "Home: laundry",
+        ],
+        vec![template("Daily", &["a"])],
+    );
+    app.tasks[2].status = TaskStatus::Completed;
+    app.tasks[4].status = TaskStatus::Carried;
+    fixture.storage.save(&app.tasks).unwrap();
+    let before = app.tasks.clone();
+    app.select_tab(SectionView::Named("home".to_owned()));
+
+    press(&mut app, &fixture, KeyCode::Char('i'));
+    press(&mut app, &fixture, KeyCode::Char('A'));
+    assert!(matches!(picker(&app).focus, TemplateFocus::FromSection(_)));
+
+    type_text(&mut app, &fixture, "daily");
+    assert_eq!(notice(&app), Some("Template name already taken"));
+    press(&mut app, &fixture, KeyCode::Enter);
+    assert!(matches!(picker(&app).focus, TemplateFocus::FromSection(_)));
+
+    for _ in 0.."daily".len() {
+        press(&mut app, &fixture, KeyCode::Backspace);
+    }
+
+    type_text(&mut app, &fixture, "Chores");
+    press(&mut app, &fixture, KeyCode::Enter);
+
+    assert_eq!(names(&app.templates), ["Chores", "Daily"]);
+    assert_eq!(entries(&app), ["dishes", "Note: water plants", "laundry"]);
+    assert_eq!(fixture.storage.load_templates().unwrap(), app.templates);
+    assert_eq!(picker(&app).focus, TemplateFocus::List);
+    assert_eq!(app.focused_template(), Some(0));
+    assert_eq!(notice(&app), Some("Saved Home as Chores (3 tasks)"));
+    assert_eq!(app.tasks, before);
+    assert!(!app.can_undo());
+
+    // Applied back on the tab, the entries rejoin the section with their own text.
+    press(&mut app, &fixture, KeyCode::Enter);
+    assert_eq!(
+        texts(&app)[5..],
+        ["Home: dishes", "Home: Note: water plants", "Home: laundry"]
+    );
+}
+
+#[test]
+fn a_template_from_a_section_needs_a_section_and_esc_cancels() {
+    for view in [SectionView::All, SectionView::Unsectioned] {
+        let fixture = Fixture::new();
+        let mut app = saved_app(&fixture, &["Home: dishes", "loose"], vec![]);
+        app.select_tab(view.clone());
+
+        press(&mut app, &fixture, KeyCode::Char('i'));
+        press(&mut app, &fixture, KeyCode::Char('A'));
+
+        assert_eq!(picker(&app).focus, TemplateFocus::List, "{view:?}");
+        assert_eq!(
+            notice(&app),
+            Some("Open a section to make a template from it")
+        );
+        assert!(app.templates.is_empty());
+    }
+
+    let fixture = Fixture::new();
+    let mut app = saved_app(&fixture, &["Home: dishes"], vec![]);
+    app.select_tab(SectionView::Named("home".to_owned()));
+
+    press(&mut app, &fixture, KeyCode::Char('i'));
+    press(&mut app, &fixture, KeyCode::Char('A'));
+    type_text(&mut app, &fixture, "Chores");
+    press(&mut app, &fixture, KeyCode::Esc);
+
+    assert_eq!(picker(&app).focus, TemplateFocus::List);
+    assert!(app.templates.is_empty());
+    assert!(fixture.storage.load_templates().unwrap().is_empty());
+}
+
+#[test]
 fn renaming_keeps_the_place_and_may_change_only_the_case() {
     let fixture = Fixture::new();
     let mut app = saved_app(
