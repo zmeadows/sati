@@ -1,7 +1,9 @@
+use std::num::NonZeroU16;
 use std::ops::Range;
 
 use ratatui::{
     Frame,
+    buffer::CellDiffOption,
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -13,6 +15,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{App, Mode};
 use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
+use crate::links::{self, Link};
 use crate::model::{SectionView, Task, TaskStatus, input_section_name};
 use crate::styles::Styles;
 
@@ -388,11 +391,13 @@ fn fitting_tabs(widths: &[usize], start: usize, width: usize) -> usize {
     end
 }
 
-// Prepared once per draw; the row mapping is moved back to App for navigation. Each line is one
-// visual row, and `task_index_by_row` gives the task index drawn on each (none for an add row).
+// Prepared once per draw; the row mappings are moved back to App for navigation and clicks.
+// Each line is one visual row, `task_index_by_row` gives the task index drawn on each (none for
+// an add row), and `link_targets_by_row` the link cells on each.
 struct TaskLayout {
     lines: Vec<Line<'static>>,
     task_index_by_row: Vec<Option<usize>>,
+    link_targets_by_row: Vec<Vec<(Range<u16>, String)>>,
     input_row: Option<usize>,
     selected_task_index: Option<usize>,
 }
@@ -404,11 +409,13 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
     let TaskLayout {
         lines,
         task_index_by_row,
+        link_targets_by_row,
         input_row,
         ..
     } = layout;
 
     app.viewport.task_index_by_row = task_index_by_row;
+    app.viewport.link_targets_by_row = link_targets_by_row;
     let total_rows = lines.len();
 
     if lines.is_empty() {
@@ -429,6 +436,11 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         ),
         area,
     );
+    mark_hyperlinks(
+        frame,
+        area,
+        &app.viewport.link_targets_by_row[visible_rows.clone()],
+    );
     draw_scrollbar(
         frame,
         area,
@@ -437,6 +449,37 @@ fn draw_tasks(frame: &mut Frame, app: &mut App, area: Rect) {
         app.appearance.styles().muted,
     );
     draw_inline_input(frame, app, area, input_row, visible_rows);
+}
+
+// Turn each drawn link cell into an OSC 8 hyperlink, so the terminal can open it itself when
+// sati leaves it the mouse. Every cell carries its own complete sequence, so redrawing any
+// subset of them stays correct; `ForcedWidth` tells ratatui the cell's real width, since the
+// escape sequences would otherwise count. Terminals without OSC 8 ignore the sequences.
+fn mark_hyperlinks(frame: &mut Frame, area: Rect, rows: &[Vec<(Range<u16>, String)>]) {
+    for (offset, targets) in rows.iter().enumerate() {
+        let y = area.y + offset as u16;
+
+        for (columns, url) in targets {
+            let mut column = columns.start;
+
+            while column < columns.end.min(area.width) {
+                let cell = &mut frame.buffer_mut()[(area.x + column, y)];
+                let symbol = cell.symbol();
+                let width = symbol.width() as u16;
+
+                // A wide glyph's trailing cell has no symbol of its own; it is stepped over.
+                let Some(forced) = NonZeroU16::new(width) else {
+                    column += 1;
+                    continue;
+                };
+
+                let linked = links::osc8_wrapped(url, symbol);
+                cell.set_symbol(&linked)
+                    .set_diff_option(CellDiffOption::ForcedWidth(forced));
+                column += width;
+            }
+        }
+    }
 }
 
 // When the rows don't fit, draw a thumb on the right border showing how much is visible and
@@ -478,8 +521,9 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
 
     let mut lines = Vec::new();
     let mut task_index_by_row = Vec::new();
+    let mut link_targets_by_row = Vec::new();
     let mut input_row = None;
-    let text_width = usize::from(width.saturating_sub(6));
+    let text_width = usize::from(width).saturating_sub(TASK_PREFIX_WIDTH);
 
     for index in 0..=app.tasks.len() {
         if let Some(position) = inline
@@ -488,6 +532,8 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
             input_row = Some(lines.len());
             lines.push(Line::default());
             task_index_by_row.push(editing.then_some(index));
+            // The input shows links as typed, so its row has no link cells.
+            link_targets_by_row.push(Vec::new());
 
             if editing {
                 continue;
@@ -502,18 +548,14 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
             continue;
         }
 
-        // Inside a section tab every task shares the prefix, so show only the body.
+        // Inside a section tab every task shares the prefix, so it shows only the body.
         let in_section = matches!(app.view, SectionView::Named(_));
-
-        let shown = if in_section {
-            task.text.clone()
-        } else {
-            task.full_text()
-        };
-
-        let text: String = shown
-            .chars()
-            .map(|c| if c.is_control() { ' ' } else { c })
+        let display = app.display_text(index);
+        let text = display.text.as_str();
+        let link_ranges: Vec<Range<usize>> = display
+            .links
+            .iter()
+            .map(|link| link.range.clone())
             .collect();
 
         // Draw the "Work:" part of the composed text as a bold heading; the section comes
@@ -524,6 +566,7 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
             task.section.as_deref()
         };
 
+        // A section name has no colon or space, so no link starts inside "Work: ".
         let section_heading_end = section_prefix.map_or(0, |prefix| {
             let end = prefix.len();
             text.grapheme_indices(true)
@@ -535,12 +578,12 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
         let searching = app.search_query().is_some();
         let matches = app
             .search_query()
-            .map_or_else(Vec::new, |query| crate::search::match_ranges(&text, query));
+            .map_or_else(Vec::new, |query| crate::search::match_ranges(text, query));
 
         let wrapped = if app.wrap && text_width > 0 {
-            wrap_text(&text, text_width)
+            wrap_text(text, text_width)
         } else {
-            vec![(0..text.len(), text.as_str())]
+            vec![(0..text.len(), text)]
         };
 
         let completed = task.status == TaskStatus::Completed;
@@ -561,8 +604,9 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
             Color::Reset
         };
 
-        for (row, (source, text)) in wrapped.into_iter().enumerate() {
+        for (row, (source, row_text)) in wrapped.into_iter().enumerate() {
             task_index_by_row.push(Some(index));
+            link_targets_by_row.push(link_columns(text, source.clone(), &display.links));
 
             let prefix = if row > 0 {
                 "     "
@@ -618,10 +662,11 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
             }
 
             line.spans.extend(task_spans(
-                text,
+                row_text,
                 source.start,
                 section_heading_end,
                 &matches,
+                &link_ranges,
                 text_style,
                 heading_style,
                 match_color,
@@ -633,9 +678,37 @@ fn prepare_task_layout(app: &App, width: u16) -> TaskLayout {
     TaskLayout {
         lines,
         task_index_by_row,
+        link_targets_by_row,
         input_row,
         selected_task_index: selected,
     }
+}
+
+// The cells before task text on every row: the focus marker and the checkbox, or their blank
+// indent on a wrapped row.
+const TASK_PREFIX_WIDTH: usize = 6;
+
+// The columns of each link's cells on a row drawing `source` of `text`, counted from the
+// row's left edge.
+fn link_columns(text: &str, source: Range<usize>, links: &[Link]) -> Vec<(Range<u16>, String)> {
+    let mut targets = Vec::new();
+
+    for link in links {
+        let start = link.range.start.max(source.start);
+        let end = link.range.end.min(source.end);
+
+        if start >= end {
+            continue;
+        }
+
+        let first = TASK_PREFIX_WIDTH + text[source.start..start].width();
+        let last = first + text[start..end].width();
+        let column = |cells: usize| u16::try_from(cells).unwrap_or(u16::MAX);
+
+        targets.push((column(first)..column(last), link.url.clone()));
+    }
+
+    targets
 }
 
 fn update_task_viewport(app: &mut App, layout: &TaskLayout, height: u16) -> Range<usize> {
@@ -820,11 +893,13 @@ fn wrap_text(text: &str, width: usize) -> Vec<(Range<usize>, &str)> {
     lines
 }
 
+#[allow(clippy::too_many_arguments)]
 fn task_spans(
     text: &str,
     offset: usize,
     section_heading_end: usize,
     matches: &[Range<usize>],
+    links: &[Range<usize>],
     base: Style,
     heading: Style,
     match_color: Color,
@@ -864,6 +939,10 @@ fn task_spans(
 
         if in_heading {
             next = next.add_modifier(Modifier::BOLD);
+        }
+
+        if links.iter().any(|range| range.contains(&source)) {
+            next = next.add_modifier(Modifier::UNDERLINED);
         }
 
         if index > start && next != style {
@@ -1086,6 +1165,7 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
     ]),
     ("Other", &[
         ("Search", "/", "Ctrl+F, Ctrl+S"),
+        ("Open links in task", "v", ""),
         ("Toggle wrapping", "w", ""),
         ("Next / previous theme", "t / T", ""),
         ("Keyboard shortcuts", "?", ""),

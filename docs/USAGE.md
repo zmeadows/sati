@@ -16,6 +16,17 @@ A section tab is a view of the same list, not a separate list. It hides the pref
 
 `s` then a digit jumps to a tab by position (`s1` is `[*]`, `s0` the tenth), and `` ` `` finds a tab by fuzzy name. Switching to a tab that doesn't contain the selected task selects its first unfinished task. `'` returns to the tab and task you were on before your last jump; press it again to go back. `E` renames the current section on every task in it, and `L` / `H` move its tab without reordering any tasks.
 
+## Links
+
+A task can link to web pages in two ways:
+
+- `[title](https://example.com/page)` shows as an underlined `title`.
+- A bare `https://` or `http://` URL, such as one you paste, shows shortened to its host and the start of its path, like `github.com/zmeadows/sati/issu…`.
+
+Only `http` and `https` links are recognized; anything else stays as typed. Editing a task (`e`) shows its text exactly as stored, and copying, pasting, and `tasks.json` all keep it that way. Search matches what a row shows, so it finds a link's title but not the URL behind it.
+
+Click a link to open it in your default browser (clicking elsewhere on the task still checks it off), or press `v` to open every link in the selected task. sati also marks links as terminal hyperlinks (OSC 8), so with `--no-mouse` the terminal's own link click works in terminals that support them; tmux needs `set -as terminal-features ',*:hyperlinks'`. `sati export` and `c` write links as Markdown links.
+
 ## Carryover and clearing
 
 sati is meant to be cleared regularly. Both clearing commands act on the current tab, or the whole list on `[*]`:
@@ -73,5 +84,5 @@ In PowerShell, first run `[Console]::OutputEncoding = [System.Text.Encoding]::UT
 
 - **macOS:** `Alt` shortcuts need Option to send Meta. Enable "Use Option as Meta key" in Terminal.app, or set the Option key to "Esc+" in iTerm2.
 - **`Ctrl+S`** searches unless your terminal or multiplexer intercepts it; `/` and `Ctrl+F` also search.
-- **Mouse:** sati captures the mouse by default. To select and copy text with it instead, use `--no-mouse` or `mouse = false`.
+- **Mouse:** sati captures the mouse by default. To select and copy text with it instead, use `--no-mouse` or `mouse = false`; links then open with the terminal's own link click, often Ctrl+click or Cmd+click.
 - **Pasting on Windows:** pasted text arrives as ordinary keystrokes. Open a prompt (`a`, `e`, or `/`) before pasting, and paste one line at a time: in the checklist, pasted letters run as shortcuts, and a line break acts as `Enter`. Keep Windows Terminal's multi-line paste warning on.

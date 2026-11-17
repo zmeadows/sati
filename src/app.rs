@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
@@ -12,6 +13,7 @@ use uuid::Uuid;
 use crate::Result;
 use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
+use crate::links::DisplayText;
 use crate::model::{
     SectionView, Task, TaskStatus, input_section_name, input_task_body, invalid_section_name,
     parse_task_input, reconcile_active_view, reconcile_section_order, section_tabs_of,
@@ -191,6 +193,9 @@ pub(crate) struct ViewportState {
     // The task index on each visual row of the task list, for paging and clicks; an inline
     // add row has none.
     pub(crate) task_index_by_row: Vec<Option<usize>>,
+    // Parallel to `task_index_by_row`: each row's link cells, as columns from the list's left
+    // edge, and where they lead.
+    pub(crate) link_targets_by_row: Vec<Vec<(Range<u16>, String)>>,
     // The list rows that fit, for paging.
     pub(crate) height: u16,
     // Clickable tab regions.
@@ -259,6 +264,7 @@ impl App {
                 scroll: 0,
                 reveal_selection: true,
                 task_index_by_row: Vec::new(),
+                link_targets_by_row: Vec::new(),
                 height: 0,
                 tab_targets: Vec::new(),
                 tab_scroll: 0,
@@ -338,14 +344,20 @@ impl App {
             .collect()
     }
 
-    // Search matches what a tab shows, so a section tab ignores its own prefix.
-    fn search_text(&self, index: usize) -> std::borrow::Cow<'_, str> {
+    // What a task's row shows, and so what search matches: only the body inside a section tab,
+    // where every task shares the prefix, and links as their titles or shortened URLs.
+    pub(crate) fn display_text(&self, index: usize) -> DisplayText {
         let task = &self.tasks[index];
 
-        match self.view {
-            SectionView::Named(_) => task.text.as_str().into(),
-            _ => task.full_text().into(),
-        }
+        let raw = match self.view {
+            SectionView::Named(_) => task.text.clone(),
+            _ => task.full_text(),
+        };
+
+        // Task validation rules out control characters; keep any from breaking the row anyway.
+        let raw: String = raw.chars().map(single_line_character).collect();
+
+        crate::links::display_text(&raw)
     }
 
     // Keep a loaded view valid; see `model::reconcile_active_view`.
@@ -998,7 +1010,7 @@ impl App {
         let anchor = original.unwrap_or(0).min(self.tasks.len());
         let selected = (anchor..self.tasks.len()).chain(0..anchor).find(|&index| {
             self.task_in_active_view(index)
-                && crate::search::matches(&self.search_text(index), input.text())
+                && crate::search::matches(&self.display_text(index).text, input.text())
         });
         self.list.select(selected);
         self.viewport.reveal_selection = true;
@@ -1008,7 +1020,7 @@ impl App {
         let len = self.tasks.len();
         let matches = |&index: &usize| {
             self.task_in_active_view(index)
-                && crate::search::matches(&self.search_text(index), query)
+                && crate::search::matches(&self.display_text(index).text, query)
         };
 
         if forward {
@@ -1511,6 +1523,44 @@ impl App {
             Ok(()) => self.show_routine_message("Copy sent to terminal"),
             // Failures are always reported, even when confirmations are disabled.
             Err(error) => self.show_important_message(format!("Copy failed: {error}")),
+        }
+    }
+
+    // Opens every link in the selected task.
+    fn open_task_links(&mut self) {
+        let Some(index) = self.list.selected() else {
+            return;
+        };
+
+        let urls: Vec<String> = self
+            .display_text(index)
+            .links
+            .into_iter()
+            .map(|link| link.url)
+            .collect();
+
+        if urls.is_empty() {
+            self.show_routine_message("No link in task");
+            return;
+        }
+
+        self.open_links(&urls);
+    }
+
+    // Hands each URL to the system opener. Success only means the opener started, hence
+    // "Opening"; a failure stops before the remaining links.
+    fn open_links(&mut self, urls: &[String]) {
+        for url in urls {
+            if let Err(error) = crate::links::open(url) {
+                self.show_important_message(format!("Could not open link: {error}"));
+                return;
+            }
+        }
+
+        if urls.len() == 1 {
+            self.show_routine_message("Opening link");
+        } else {
+            self.show_routine_message(format!("Opening {} links", urls.len()));
         }
     }
 
@@ -2095,6 +2145,7 @@ impl App {
                 self.show_routine_message(if self.wrap { "Wrap on" } else { "Wrap off" });
             }
             KeyCode::Char('m') => self.toggle_carryover(storage)?,
+            KeyCode::Char('v') => self.open_task_links(),
             // Clearing several tasks takes Shift, so a stray `x` does nothing.
             KeyCode::Char('X') => self.clear_completed(storage)?,
             KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::SHIFT) => {
@@ -2259,12 +2310,25 @@ impl App {
 
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(index) = self
+                let row = self.viewport.scroll + usize::from(event.row - rows.y);
+                let column = event.column - rows.x;
+
+                // A click on a link opens it instead of checking the task off.
+                let link = self
                     .viewport
-                    .task_index_by_row
-                    .get(self.viewport.scroll + usize::from(event.row - rows.y))
-                    .copied()
-                    .flatten()
+                    .link_targets_by_row
+                    .get(row)
+                    .and_then(|targets| {
+                        targets
+                            .iter()
+                            .find(|(columns, _)| columns.contains(&column))
+                    })
+                    .map(|(_, url)| url.clone());
+
+                if let Some(url) = link {
+                    self.open_links(&[url]);
+                } else if let Some(index) =
+                    self.viewport.task_index_by_row.get(row).copied().flatten()
                 {
                     self.toggle_completion(index, storage)?;
                 }

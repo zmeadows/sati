@@ -7026,3 +7026,63 @@ fn changes_and_undo_that_move_to_another_tab_are_remembered() {
     assert_eq!(app.view, SectionView::Unsectioned);
     assert_eq!(app.list.selected(), Some(2));
 }
+
+#[test]
+fn v_opens_every_link_in_the_selected_task_without_changing_anything() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&[
+        "plain task",
+        "[docs](https://a.com/docs) then https://b.com/x.",
+    ]);
+    crate::links::tests::take_opened();
+
+    press(&mut app, &fixture, KeyCode::Char('v'));
+    assert!(crate::links::tests::take_opened().is_empty());
+    assert_eq!(notice(&app), Some("No link in task"));
+
+    press(&mut app, &fixture, KeyCode::Char('j'));
+    let before = task_state(&app);
+    press(&mut app, &fixture, KeyCode::Char('v'));
+
+    assert_eq!(
+        crate::links::tests::take_opened(),
+        ["https://a.com/docs", "https://b.com/x"]
+    );
+    assert_eq!(notice(&app), Some("Opening 2 links"));
+    assert_eq!(task_state(&app), before);
+    assert!(!fixture.task_path().exists());
+
+    // Opening launches a program, so a held key doesn't repeat it.
+    repeat(&mut app, &fixture, KeyCode::Char('v'), KeyModifiers::NONE);
+    assert!(crate::links::tests::take_opened().is_empty());
+}
+
+#[test]
+fn search_matches_link_titles_and_shortened_urls_but_not_hidden_urls() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&[
+        "[docs](https://hidden.example/x)",
+        "https://www.shown.example/",
+    ]);
+
+    press(&mut app, &fixture, KeyCode::Char('/'));
+
+    for character in "hidden".chars() {
+        press(&mut app, &fixture, KeyCode::Char(character));
+    }
+    assert_eq!(app.list.selected(), None);
+
+    for (query, expected) in [("docs", Some(0)), ("shown.example", Some(1)), ("www", None)] {
+        press(
+            &mut app,
+            &fixture,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+
+        for character in query.chars() {
+            press(&mut app, &fixture, KeyCode::Char(character));
+        }
+
+        assert_eq!(app.list.selected(), expected, "{query:?}");
+    }
+}

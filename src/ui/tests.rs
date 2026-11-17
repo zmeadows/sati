@@ -818,6 +818,7 @@ fn semantic_styles_and_reverse_highlights_preserve_modifier_hierarchy() {
         0,
         0,
         std::slice::from_ref(&(1..2)),
+        &[],
         Styles::default().muted.add_modifier(Modifier::ITALIC),
         Styles::default().heading,
         Color::Reset,
@@ -3416,4 +3417,153 @@ fn disabling_the_help_hint_hides_only_the_hint_and_question_mark_still_opens_hel
 
     assert!(matches!(app.mode, Mode::Help { .. }));
     assert!(screen(&terminal).contains("Keyboard shortcuts"));
+}
+
+fn left_click(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+#[test]
+fn links_show_their_titles_underlined_as_osc8_hyperlinks() {
+    let url = "https://ratatui.rs/";
+    let mut app = app_with_texts(&["Read [the docs](https://ratatui.rs/) now"]);
+    let mut terminal = test_terminal(40, 5);
+    let rows = render(&mut terminal, &mut app);
+
+    // Columns count from the list's left edge: six prefix cells, then "Read ".
+    assert_eq!(
+        app.viewport.link_targets_by_row,
+        [vec![(11..19, url.to_owned())]]
+    );
+
+    let buffer = terminal.backend().buffer();
+    let y = rows.y;
+
+    for (offset, symbol) in "the docs".chars().enumerate() {
+        let cell = &buffer[(rows.x + 11 + offset as u16, y)];
+
+        assert_eq!(
+            cell.symbol(),
+            crate::links::osc8_wrapped(url, &symbol.to_string())
+        );
+        assert_eq!(
+            cell.diff_option,
+            CellDiffOption::ForcedWidth(NonZeroU16::MIN)
+        );
+        assert!(cell.modifier.contains(Modifier::UNDERLINED));
+    }
+
+    for x in [rows.x + 10, rows.x + 19] {
+        let cell = &buffer[(x, y)];
+        assert_eq!(cell.symbol(), " ");
+        assert_eq!(cell.diff_option, CellDiffOption::None);
+        assert!(!cell.modifier.contains(Modifier::UNDERLINED));
+    }
+
+    assert!(!screen(&terminal).contains("]("));
+}
+
+#[test]
+fn editing_shows_the_link_syntax_as_typed() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let mut app = app_with_texts(&["Read [the docs](https://ratatui.rs/)"]);
+    let mut terminal = test_terminal(60, 5);
+    press_keys(&mut app, &fixture, "e");
+    render(&mut terminal, &mut app);
+
+    assert!(screen(&terminal).contains("Read [the docs](https://ratatui.rs/)"));
+    assert_eq!(app.viewport.link_targets_by_row, [vec![]]);
+}
+
+#[test]
+fn wrapped_and_wide_links_map_every_cell_they_cover() {
+    let url = "https://x.com".to_owned();
+
+    // An 8-cell text column breaks "a abcdef ghij" after "abcdef".
+    let mut app = app_with_texts(&["a [abcdef ghij](https://x.com)"]);
+    let mut terminal = test_terminal(16, 5);
+    render(&mut terminal, &mut app);
+
+    assert_eq!(
+        app.viewport.link_targets_by_row,
+        [vec![(8..14, url.clone())], vec![(6..10, url.clone())]]
+    );
+
+    // A wide glyph's first cell carries the link at its real width; its trailing cell is left
+    // for ratatui to skip.
+    let mut app = app_with_texts(&["[日本](https://x.com)"]);
+    let mut terminal = test_terminal(30, 5);
+    let rows = render(&mut terminal, &mut app);
+    let buffer = terminal.backend().buffer();
+
+    assert_eq!(
+        app.viewport.link_targets_by_row,
+        [vec![(6..10, url.clone())]]
+    );
+
+    for (column, symbol) in [(6, "日"), (8, "本")] {
+        let cell = &buffer[(rows.x + column, rows.y)];
+        assert_eq!(cell.symbol(), crate::links::osc8_wrapped(&url, symbol));
+        assert_eq!(
+            cell.diff_option,
+            CellDiffOption::ForcedWidth(NonZeroU16::new(2).unwrap())
+        );
+        assert_eq!(
+            buffer[(rows.x + column + 1, rows.y)].diff_option,
+            CellDiffOption::None
+        );
+    }
+}
+
+#[test]
+fn unwrapped_links_past_the_edge_are_cut_off_with_the_row() {
+    let mut app = app_with_texts(&["ab https://example.com/far/away and https://b.com"]);
+    app.wrap = false;
+    let mut terminal = test_terminal(20, 4);
+    let rows = render(&mut terminal, &mut app);
+    let buffer = terminal.backend().buffer();
+
+    // The row has 18 cells; the first link starts at 9 and the second is entirely past them.
+    assert_eq!(rows.width, 18);
+    assert_eq!(app.viewport.link_targets_by_row[0].len(), 2);
+
+    let linked: Vec<u16> = (0..rows.width)
+        .filter(|&x| buffer[(rows.x + x, rows.y)].diff_option != CellDiffOption::None)
+        .collect();
+    assert_eq!(linked, (9..18).collect::<Vec<_>>());
+}
+
+#[test]
+fn clicking_a_link_opens_it_without_checking_off_the_task() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let mut app = app_with_texts(&["Read [the docs](https://ratatui.rs/) now"]);
+    let mut terminal = test_terminal(40, 5);
+    let rows = render(&mut terminal, &mut app);
+    crate::links::tests::take_opened();
+
+    app.handle_mouse(left_click(rows.x + 11, rows.y), rows, &fixture.storage)
+        .unwrap();
+
+    assert_eq!(crate::links::tests::take_opened(), ["https://ratatui.rs/"]);
+    assert_eq!(app.tasks[0].status, TaskStatus::Pending);
+    assert!(!fixture.task_path().exists());
+
+    // The rest of the row still checks the task off, on either side of the link.
+    for (column, status) in [
+        (rows.x + 10, TaskStatus::Completed),
+        (rows.x + 19, TaskStatus::Pending),
+    ] {
+        app.handle_mouse(left_click(column, rows.y), rows, &fixture.storage)
+            .unwrap();
+        assert_eq!(app.tasks[0].status, status);
+    }
+
+    assert!(crate::links::tests::take_opened().is_empty());
 }

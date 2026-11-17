@@ -31,7 +31,7 @@ Every key is optional. [`config_defaults.toml`](config_defaults.toml) is a compl
 
 - `status_messages = false` hides routine messages, such as undo descriptions and "Cleared 3 tasks". Errors and validation notices are always shown, each for `status_message_duration_ms`.
 - `show_help_hint = false` hides the `? for help` hint in the bottom-right corner; `?` still works.
-- `mouse = false` leaves the mouse to the terminal, which disables clicking tasks and tabs and wheel scrolling.
+- `mouse = false` leaves the mouse to the terminal, which disables clicking tasks, tabs, and links and wheel scrolling. Links can still be opened with `v`, or with the terminal's own link click where supported.
 - When both flags of a pair are given, the last one wins.
 
 ## Themes

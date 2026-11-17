@@ -6,11 +6,13 @@ use std::{
 
 use crate::{
     Result,
+    links::{self, Segment},
     model::{SectionView, Task, TaskStatus, section_tabs_of, view_includes_task},
     storage::Storage,
 };
 
 // Each task as typed ("Work: fix bug"), or only its body when every task is from one section.
+// Text is escaped so it reads literally, except that links stay working Markdown links.
 pub fn markdown(tasks: &[Task], include_sections: bool) -> String {
     let mut output = String::new();
 
@@ -29,17 +31,41 @@ pub fn markdown(tasks: &[Task], include_sections: bool) -> String {
             task.text.clone()
         };
 
-        for character in text.chars() {
-            if "\\`*_{}[]<>!&#|~+-.()".contains(character) {
-                output.push('\\');
+        for segment in links::segments(&text) {
+            match segment {
+                Segment::Plain(plain) => push_escaped(&mut output, plain),
+                // A bare URL is its own text. Backslashes keep the destination's parentheses
+                // from ending it early.
+                Segment::Link { title, url } => {
+                    output.push('[');
+                    push_escaped(&mut output, title.unwrap_or(url));
+                    output.push_str("](");
+
+                    for character in url.chars() {
+                        if matches!(character, '\\' | '(' | ')') {
+                            output.push('\\');
+                        }
+                        output.push(character);
+                    }
+
+                    output.push(')');
+                }
             }
-            output.push(character);
         }
 
         output.push('\n');
     }
 
     output
+}
+
+fn push_escaped(output: &mut String, text: &str) {
+    for character in text.chars() {
+        if "\\`*_{}[]<>!&#|~+-.()".contains(character) {
+            output.push('\\');
+        }
+        output.push(character);
+    }
 }
 
 // Exports every task, the tasks of `section` (matched case-insensitively), or with
@@ -202,6 +228,22 @@ mod tests {
         assert_eq!(
             markdown(&tasks[2..3], false),
             "- [ ] Review \\*PR\\* \\& \\<notes\\> \\[x\\] \\\\ \\`code\\`\n"
+        );
+    }
+
+    #[test]
+    fn links_export_as_markdown_links_with_escaped_text() {
+        let tasks = [Task::new(
+            "Read [the *docs*](https://a.com/x_(y)) and https://b.com/a_b. [x] (y)",
+        )];
+
+        assert_eq!(
+            markdown(&tasks, true),
+            concat!(
+                r"- [ ] Read [the \*docs\*](https://a.com/x_\(y\)) and ",
+                r"[https://b\.com/a\_b](https://b.com/a_b)\. \[x\] \(y\)",
+                "\n"
+            )
         );
     }
 
