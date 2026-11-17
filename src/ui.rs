@@ -16,7 +16,7 @@ use crate::app::templates::{
     EntryInput, TemplateEditor, TemplateFocus, TemplateViewport, entry_insertion_index,
     template_matches,
 };
-use crate::app::{App, Mode};
+use crate::app::{App, Mode, MoveTarget};
 use crate::config::{BorderStyle, TaskMarkerStyle};
 use crate::input::TextInput;
 use crate::links::{self, Link};
@@ -73,7 +73,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let mut rows = block.inner(list_area);
     frame.render_widget(block, list_area);
 
-    if !tabs.is_empty() && list_area.height >= 2 {
+    // The move picker types into the strip even before there are any sections to show.
+    let moving = matches!(app.mode, Mode::MovingTask(_) | Mode::ConfirmNewSection(_));
+
+    if (!tabs.is_empty() || moving) && list_area.height >= 2 {
         // Tabs sit on the top border between the corners.
         let strip_width = list_area.width.saturating_sub(2);
         let strip = Rect::new(list_area.x + 1, list_area.y, strip_width, 1);
@@ -145,6 +148,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
         draw_confirmation(frame, area, &styles, app.border_style, &question);
     }
 
+    if let Mode::ConfirmNewSection(picker) = &app.mode
+        && let Some(MoveTarget::New(name)) = picker.targets.get(picker.focused)
+    {
+        let question = format!("Move to new section {name}?");
+        draw_confirmation(frame, area, &styles, app.border_style, &question);
+    }
+
     if matches!(app.mode, Mode::Help { .. }) {
         draw_help(frame, area, app);
     }
@@ -193,6 +203,9 @@ fn showing_section_jump(app: &App) -> bool {
 // The prompt drawn before a section name being renamed, like the inline edit row's.
 const RENAME_LABEL: &str = "rename";
 
+// The prompt drawn before the move picker's query.
+const MOVE_LABEL: &str = "move to";
+
 // The section picker's input grows with its query up to a third of the tab strip (but at
 // least this many cells), leaving the rest for matching tabs.
 const PICKER_INPUT_SHARE: usize = 3;
@@ -204,7 +217,8 @@ const MIN_TAB_LABEL_WIDTH: usize = 2;
 // Draw section tabs on the box's top border (`strip`). Every tab keeps the same width
 // whichever one is active, so labels never move; the active tab only changes color.
 // While renaming, the active tab becomes the name input and grows with it. The section
-// picker replaces [*] with its query and shows only the matching tabs, best first.
+// picker replaces [*] with its query and shows only the matching tabs, best first; the move
+// picker does the same after a "move to" label, with its targets and the focused one active.
 // Returns each drawn tab's clickable area.
 fn draw_section_tabs(
     frame: &mut Frame,
@@ -214,11 +228,40 @@ fn draw_section_tabs(
 ) -> Vec<(Rect, SectionView)> {
     let styles = *app.appearance.styles();
     let mut tabs = tabs.to_vec();
-    let picking = matches!(app.mode, Mode::PickingSectionTab { .. });
 
-    if let Mode::PickingSectionTab { input, matches, .. } = &app.mode {
+    // The picker typed into the strip, if any: its query, label, whether it has the cursor,
+    // the tabs it shows, and which of them is active.
+    let picker = match &app.mode {
+        Mode::PickingSectionTab { input, matches, .. } => {
+            let shown: Vec<(SectionView, String)> = matches
+                .iter()
+                .filter_map(|view| tabs.iter().find(|(tab, _)| tab == view).cloned())
+                .collect();
+            let active = shown.iter().position(|(view, _)| *view == app.view);
+
+            Some((input.clone(), "", true, shown, active))
+        }
+        Mode::MovingTask(picker) | Mode::ConfirmNewSection(picker) => {
+            let shown = move_target_tabs(&picker.targets, &tabs);
+            let active = (!shown.is_empty()).then_some(picker.focused);
+            let typing = matches!(app.mode, Mode::MovingTask(_));
+
+            Some((picker.input.clone(), MOVE_LABEL, typing, shown, active))
+        }
+        _ => None,
+    };
+
+    let picking = picker.is_some();
+    let mut picker_active = None;
+
+    if let Some((input, label, typing, shown, active)) = picker {
         let width = usize::from(strip.width);
-        let prompt_width = 2 + Line::raw("› ").width() + 1;
+        let prompt = if label.is_empty() {
+            "› ".to_owned()
+        } else {
+            format!("{label} › ")
+        };
+        let prompt_width = 2 + Line::raw(prompt).width() + 1;
         let wanted = prompt_width + input.text().width();
 
         // Leave room after the input for at least a shortened match (a leading cell, the
@@ -241,10 +284,10 @@ fn draw_section_tabs(
             draw_input_line(
                 frame,
                 Rect::new(x + 1, strip.y, (input_width as u16).saturating_sub(2), 1),
-                input,
-                "",
+                &input,
+                label,
                 &styles,
-                true,
+                typing,
                 false,
                 None,
             );
@@ -254,16 +297,21 @@ fn draw_section_tabs(
         let used = (TAB_MARKER + input_width).min(width) as u16;
         strip = Rect::new(strip.x + used, strip.y, strip.width - used, 1);
 
-        tabs = matches
-            .iter()
-            .filter_map(|view| tabs.iter().find(|(tab, _)| tab == view).cloned())
-            .collect();
+        tabs = shown;
+        picker_active = active;
     }
 
-    // Outside the picker the view is always one of the tabs. In the picker it may not be a
-    // match (it opened on [*], or nothing matches), and then no tab is highlighted.
-    let found = tabs.iter().position(|(view, _)| *view == app.view);
-    let active = if picking { found } else { found.or(Some(0)) };
+    // Outside the pickers the view is always one of the tabs. In the section picker it may
+    // not be a match (it opened on [*], or nothing matches), and then no tab is highlighted.
+    let active = if picking {
+        picker_active
+    } else {
+        Some(
+            tabs.iter()
+                .position(|(view, _)| *view == app.view)
+                .unwrap_or(0),
+        )
+    };
 
     let mut widths: Vec<usize> = tabs.iter().map(|(_, label)| label.width() + 2).collect();
     let width = usize::from(strip.width);
@@ -389,6 +437,33 @@ fn draw_section_tabs(
     }
 
     targets
+}
+
+// The move picker's targets as tabs: a section's own tab label, [-], or `+Name` for a new
+// section. A new section's view is only for drawing: tab clicks act in Normal mode alone, and
+// the next draw replaces these targets.
+fn move_target_tabs(
+    targets: &[MoveTarget],
+    tabs: &[(SectionView, String)],
+) -> Vec<(SectionView, String)> {
+    targets
+        .iter()
+        .map(|target| match target {
+            MoveTarget::Existing {
+                view: SectionView::Unsectioned,
+                ..
+            } => (SectionView::Unsectioned, "[-]".to_owned()),
+            MoveTarget::Existing { view, name } => {
+                let label = tabs
+                    .iter()
+                    .find(|(tab, _)| tab == view)
+                    .map_or_else(|| name.clone(), |(_, label)| label.clone());
+
+                (view.clone(), label)
+            }
+            MoveTarget::New(name) => (SectionView::Named(name.to_lowercase()), format!("+{name}")),
+        })
+        .collect()
 }
 
 // The end (exclusive) of the tabs that fit from `start`: one leading cell, then each tab
@@ -1171,6 +1246,7 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
         ("Add task above", "O", ""),
         ("Edit task", "e", "Alt+E"),
         ("Move task down / up", "J / K", "Alt+↓ / Alt+↑"),
+        ("Move task to section", "M", ""),
         ("Toggle carryover", "m", ""),
         ("Delete task", "d, Delete", ""),
         ("Clear completed", "X", ""),

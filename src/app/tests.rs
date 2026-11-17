@@ -415,8 +415,12 @@ fn copy_key_remains_text_or_is_ignored_outside_normal_mode() {
             | Mode::Editing { input, .. }
             | Mode::Searching { input, .. }
             | Mode::RenamingSection { input }
-            | Mode::PickingSectionTab { input, .. } => assert_eq!(input.text(), "c"),
-            Mode::ConfirmClearNonCarried | Mode::Help { .. } | Mode::Templates(_) => {}
+            | Mode::PickingSectionTab { input, .. }
+            | Mode::MovingTask(TaskMove { input, .. }) => assert_eq!(input.text(), "c"),
+            Mode::ConfirmClearNonCarried
+            | Mode::ConfirmNewSection(_)
+            | Mode::Help { .. }
+            | Mode::Templates(_) => {}
             Mode::Normal => panic!("copy changed mode"),
         }
 
@@ -7085,4 +7089,274 @@ fn search_matches_link_titles_and_shortened_urls_but_not_hidden_urls() {
 
         assert_eq!(app.list.selected(), expected, "{query:?}");
     }
+}
+
+fn move_targets(app: &App) -> Vec<MoveTarget> {
+    let Mode::MovingTask(picker) = &app.mode else {
+        panic!("expected the move picker");
+    };
+
+    picker.targets.clone()
+}
+
+fn existing(view: SectionView, name: &str) -> MoveTarget {
+    MoveTarget::Existing {
+        view,
+        name: name.into(),
+    }
+}
+
+#[test]
+fn shift_m_opens_a_move_picker_without_the_tasks_own_section() {
+    let fixture = Fixture::new();
+    let mut app = picker_app();
+
+    app.list.select(None);
+    press(&mut app, &fixture, KeyCode::Char('M'));
+    assert_eq!(app.mode, Mode::Normal);
+
+    app.list.select(Some(0));
+    press(&mut app, &fixture, KeyCode::Char('M'));
+
+    assert_eq!(
+        move_targets(&app),
+        [
+            existing(SectionView::Unsectioned, "unsectioned"),
+            existing(named("home"), "Home"),
+            existing(named("wishlist"), "Wishlist"),
+        ]
+    );
+    assert_eq!(app.view, SectionView::All);
+
+    // Shift+m opens it too, and an unsectioned task is offered only named sections.
+    press(&mut app, &fixture, KeyCode::Esc);
+    app.list.select(Some(3));
+    press(
+        &mut app,
+        &fixture,
+        KeyEvent::new(KeyCode::Char('m'), KeyModifiers::SHIFT),
+    );
+
+    assert_eq!(
+        move_targets(&app),
+        [
+            existing(named("home"), "Home"),
+            existing(named("wishlist"), "Wishlist"),
+            existing(named("work"), "Work"),
+        ]
+    );
+}
+
+#[test]
+fn moving_a_task_puts_it_last_in_the_found_section_follows_it_and_undoes_in_one_step() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["Work: a", "Wishlist: b", "Wishlist: c", "Home: d", "plain"]);
+    app.list.select(Some(0));
+    let id = app.tasks[0].id;
+
+    press(&mut app, &fixture, KeyCode::Char('M'));
+    type_keys(&mut app, &fixture, "wl");
+    press(&mut app, &fixture, KeyCode::Enter);
+
+    // Right after the section's last task, not at the end of the whole list.
+    assert_eq!(
+        texts(&app),
+        [
+            "Wishlist: b",
+            "Wishlist: c",
+            "Wishlist: a",
+            "Home: d",
+            "plain"
+        ]
+    );
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.tasks[2].id, id);
+    assert_eq!(app.view, named("wishlist"));
+    assert_eq!(app.list.selected(), Some(2));
+    assert_eq!(notice(&app), Some("Moved to Wishlist"));
+    assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+
+    press(&mut app, &fixture, KeyCode::Char('u'));
+
+    assert_eq!(
+        texts(&app),
+        ["Work: a", "Wishlist: b", "Wishlist: c", "Home: d", "plain"]
+    );
+    assert_eq!(app.list.selected(), Some(0));
+    assert_eq!(app.view, SectionView::All);
+    assert!(!app.can_undo());
+}
+
+#[test]
+fn moving_a_task_to_a_section_without_tasks_puts_it_at_the_end_of_the_list() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["Work: a", "Home: b", "Work: c"]);
+    app.list.select(Some(1));
+
+    press(&mut app, &fixture, KeyCode::Char('M'));
+    type_keys(&mut app, &fixture, "uns");
+    press(&mut app, &fixture, KeyCode::Enter);
+
+    assert_eq!(texts(&app), ["Work: a", "Work: c", "b"]);
+    assert_eq!(app.list.selected(), Some(2));
+
+    app.list.select(Some(0));
+    press(&mut app, &fixture, KeyCode::Char('M'));
+    type_keys(&mut app, &fixture, "Errands");
+    press(&mut app, &fixture, KeyCode::Enter);
+    press(&mut app, &fixture, KeyCode::Enter);
+
+    assert_eq!(texts(&app), ["Work: c", "b", "Errands: a"]);
+    assert_eq!(app.list.selected(), Some(2));
+}
+
+#[test]
+fn moving_a_task_to_unsectioned_clears_its_section() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["Work: a", "Home: b"]);
+    app.list.select(Some(1));
+
+    press(&mut app, &fixture, KeyCode::Char('M'));
+    type_keys(&mut app, &fixture, "uns");
+    press(&mut app, &fixture, KeyCode::Enter);
+
+    assert_eq!(app.tasks[1].section, None);
+    assert_eq!(app.view, SectionView::Unsectioned);
+    assert_eq!(app.list.selected(), Some(1));
+    assert_eq!(app.section_order, ["work"]);
+}
+
+#[test]
+fn a_new_section_name_asks_before_creating_the_section() {
+    let fixture = Fixture::new();
+    let mut app = picker_app();
+    app.list.select(Some(3));
+
+    press(&mut app, &fixture, KeyCode::Char('M'));
+    type_keys(&mut app, &fixture, "Errands");
+    assert_eq!(move_targets(&app), [MoveTarget::New("Errands".into())]);
+
+    press(&mut app, &fixture, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::ConfirmNewSection(_)));
+    assert!(fixture.storage.load().unwrap().is_empty());
+
+    // A held Enter does not confirm.
+    repeat(&mut app, &fixture, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(matches!(app.mode, Mode::ConfirmNewSection(_)));
+
+    // Esc returns to the picker with the query kept.
+    press(&mut app, &fixture, KeyCode::Esc);
+    let Mode::MovingTask(picker) = &app.mode else {
+        panic!("expected the move picker");
+    };
+    assert_eq!(picker.input.text(), "Errands");
+
+    press(&mut app, &fixture, KeyCode::Enter);
+    press(&mut app, &fixture, KeyCode::Enter);
+
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.tasks[3].section.as_deref(), Some("Errands"));
+    assert_eq!(
+        app.section_order.last().map(String::as_str),
+        Some("errands")
+    );
+    assert_eq!(app.view, named("errands"));
+    assert_eq!(app.list.selected(), Some(3));
+    assert_eq!(fixture.storage.load().unwrap(), app.tasks);
+}
+
+#[test]
+fn a_new_name_that_fuzzy_matches_a_section_is_offered_last() {
+    let fixture = Fixture::new();
+    let ctrl_n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+    let mut app = app_with_texts(&["Homework: a", "Chores: b"]);
+    app.list.select(Some(1));
+
+    press(&mut app, &fixture, KeyCode::Char('M'));
+    type_keys(&mut app, &fixture, "Home");
+
+    assert_eq!(
+        move_targets(&app),
+        [
+            existing(named("homework"), "Homework"),
+            MoveTarget::New("Home".into())
+        ]
+    );
+
+    press(&mut app, &fixture, ctrl_n);
+    press(&mut app, &fixture, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::ConfirmNewSection(_)));
+
+    // Focus wraps around in both directions.
+    press(&mut app, &fixture, KeyCode::Esc);
+    press(&mut app, &fixture, KeyCode::Down);
+    press(&mut app, &fixture, KeyCode::Enter);
+    assert_eq!(app.tasks[1].section.as_deref(), Some("Homework"));
+}
+
+#[test]
+fn an_existing_section_named_in_any_case_comes_first_and_is_not_offered_as_new() {
+    let fixture = Fixture::new();
+    let mut app = app_with_texts(&["Workout: a", "Work: b", "plain"]);
+    app.list.select(Some(2));
+
+    press(&mut app, &fixture, KeyCode::Char('M'));
+    type_keys(&mut app, &fixture, "WORK");
+
+    assert_eq!(
+        move_targets(&app),
+        [
+            existing(named("work"), "Work"),
+            existing(named("workout"), "Workout")
+        ]
+    );
+
+    // The task's own section is no target and no new name either.
+    press(&mut app, &fixture, KeyCode::Esc);
+    app.list.select(Some(1));
+    press(&mut app, &fixture, KeyCode::Char('M'));
+    type_keys(&mut app, &fixture, "work");
+
+    assert_eq!(move_targets(&app), [existing(named("workout"), "Workout")]);
+}
+
+#[test]
+fn invalid_names_are_never_offered_as_new_sections() {
+    let fixture = Fixture::new();
+    let mut app = picker_app();
+    app.list.select(Some(3));
+
+    press(&mut app, &fixture, KeyCode::Char('M'));
+    type_keys(&mut app, &fixture, "zz top");
+    assert!(move_targets(&app).is_empty());
+
+    press(&mut app, &fixture, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::MovingTask(_)));
+    assert_eq!(
+        notice(&app),
+        Some("Section names are one word without colons")
+    );
+
+    for _ in 0..6 {
+        press(&mut app, &fixture, KeyCode::Backspace);
+    }
+    type_keys(&mut app, &fixture, "zz:");
+    assert!(move_targets(&app).is_empty());
+}
+
+#[test]
+fn cancelling_the_move_picker_changes_nothing() {
+    let fixture = Fixture::new();
+    let mut app = picker_app();
+    app.list.select(Some(0));
+    let before = task_state(&app);
+
+    press(&mut app, &fixture, KeyCode::Char('M'));
+    type_keys(&mut app, &fixture, "ho");
+    press(&mut app, &fixture, KeyCode::Esc);
+
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(task_state(&app), before);
+    assert_eq!(app.view, SectionView::All);
+    assert!(fixture.storage.load().unwrap().is_empty());
 }

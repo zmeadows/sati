@@ -3903,3 +3903,92 @@ fn the_mouse_scrolls_and_picks_in_the_panel_under_it() {
     assert_eq!(editor.selected, Some(3));
     assert_eq!(app.tasks.len(), 2);
 }
+
+#[test]
+fn the_move_picker_types_into_the_tab_bar_and_accents_the_focused_target() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let press = |app: &mut App, code: KeyCode| {
+        app.handle_key(
+            ratatui::crossterm::event::KeyEvent::new(code, KeyModifiers::NONE),
+            &fixture.storage,
+        )
+        .unwrap();
+    };
+    // The cell where `label` starts on the top row.
+    let label_x = |terminal: &Terminal<TestBackend>, label: &str| -> u16 {
+        let top = row_text(terminal, 0);
+        let byte = top
+            .find(label)
+            .unwrap_or_else(|| panic!("{label:?} in {top:?}"));
+        top[..byte].width() as u16
+    };
+
+    let mut app = app_with_texts(&["Work: a", "Home: b", "plain"]);
+    app.list.select(Some(0));
+    press(&mut app, KeyCode::Char('M'));
+
+    let mut terminal = test_terminal(60, 20);
+    render(&mut terminal, &mut app);
+    let top = row_text(&terminal, 0);
+
+    assert!(top.contains("move to ›"), "{top:?}");
+    assert!(top.contains(" [-] ") && top.contains(" Home "), "{top:?}");
+    assert!(
+        !top.contains("Work"),
+        "the task's own section is no target: {top:?}"
+    );
+    // The view stays put, so the task being moved is still on screen.
+    assert_eq!(
+        row_text(&terminal, 2),
+        format!("│› [ ] Work: a{}│", " ".repeat(45))
+    );
+
+    let x = label_x(&terminal, "[-]");
+    assert_eq!(terminal.backend().buffer()[(x, 0)].fg, DEFAULT_ACCENT);
+
+    press(&mut app, KeyCode::Tab);
+    render(&mut terminal, &mut app);
+    let x = label_x(&terminal, "Home");
+    assert_eq!(terminal.backend().buffer()[(x, 0)].fg, DEFAULT_ACCENT);
+    let x = label_x(&terminal, "[-]");
+    assert_ne!(terminal.backend().buffer()[(x, 0)].fg, DEFAULT_ACCENT);
+
+    for character in "Errands".chars() {
+        press(&mut app, KeyCode::Char(character));
+    }
+    render(&mut terminal, &mut app);
+    assert!(row_text(&terminal, 0).contains(" +Errands "));
+
+    press(&mut app, KeyCode::Enter);
+    render(&mut terminal, &mut app);
+    assert!(screen(&terminal).contains("Move to new section Errands?"));
+    assert!(row_text(&terminal, 0).contains("move to ›"));
+
+    press(&mut app, KeyCode::Esc);
+    for (width, height) in [(1, 1), (3, 2), (10, 3), (20, 4)] {
+        let mut terminal = test_terminal(width, height);
+        render(&mut terminal, &mut app);
+    }
+}
+
+#[test]
+fn the_move_picker_shows_the_tab_bar_even_without_sections() {
+    let fixture = crate::storage::tests::Fixture::new();
+    let mut app = app_with_texts(&["a", "b"]);
+    app.list.select(Some(0));
+
+    for code in [KeyCode::Char('M'), KeyCode::Char('J'), KeyCode::Char('o')] {
+        app.handle_key(
+            ratatui::crossterm::event::KeyEvent::new(code, KeyModifiers::NONE),
+            &fixture.storage,
+        )
+        .unwrap();
+    }
+
+    let mut terminal = test_terminal(60, 8);
+    render(&mut terminal, &mut app);
+    let top = row_text(&terminal, 0);
+
+    assert!(top.contains("move to › Jo"), "{top:?}");
+    assert!(top.contains(" +Jo "), "{top:?}");
+}

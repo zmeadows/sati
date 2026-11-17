@@ -111,6 +111,11 @@ pub enum Mode {
         original: NavigationCheckpoint,
     },
     ConfirmClearNonCarried,
+    // Choosing a section to move the selected task to, in a dialog over the checklist (`M`).
+    MovingTask(TaskMove),
+    // Asking before the move creates the section the picker's focused `MoveTarget::New`
+    // names. Cancelling returns to the picker as it was.
+    ConfirmNewSection(TaskMove),
     // The read-only keyboard reference opened with `?`. Drawing keeps `scroll` within
     // `max_scroll` (the offset that shows the last line) and records `page`, the content rows
     // that fit, so the scroll keys never depend on the terminal size directly.
@@ -131,11 +136,35 @@ impl Mode {
             | Mode::Editing { input, .. }
             | Mode::Searching { input, .. }
             | Mode::RenamingSection { input }
-            | Mode::PickingSectionTab { input, .. } => Some(input),
+            | Mode::PickingSectionTab { input, .. }
+            | Mode::MovingTask(TaskMove { input, .. }) => Some(input),
             Mode::Templates(picker) => picker.text_input_mut(),
-            Mode::Normal | Mode::ConfirmClearNonCarried | Mode::Help { .. } => None,
+            Mode::Normal
+            | Mode::ConfirmClearNonCarried
+            | Mode::ConfirmNewSection(_)
+            | Mode::Help { .. } => None,
         }
     }
+}
+
+// The section picker for moving the task at `index`. `targets` are found for `matched_query`,
+// which tells edits of the query apart from cursor moves; `focused` indexes `targets`.
+#[derive(Debug, PartialEq)]
+pub struct TaskMove {
+    index: usize,
+    pub input: TextInput,
+    pub targets: Vec<MoveTarget>,
+    pub focused: usize,
+    matched_query: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MoveTarget {
+    // [-] or a named section, with the name it is shown and matched by: "unsectioned" for
+    // [-], else the tab label.
+    Existing { view: SectionView, name: String },
+    // A section no task uses yet, spelled as typed.
+    New(String),
 }
 
 // Where navigation stood when the section picker opened. Previews change the view,
@@ -658,6 +687,197 @@ impl App {
         self.viewport.scroll = original.scroll;
         self.viewport.tab_scroll = original.tab_scroll;
         self.viewport.reveal_selection = original.reveal_selection;
+    }
+
+    // Open the move picker for the selected task. Nothing changes until a target is accepted.
+    fn start_task_move(&mut self) {
+        let Some(index) = self.list.selected() else {
+            return;
+        };
+
+        self.mode = Mode::MovingTask(TaskMove {
+            index,
+            input: TextInput::default(),
+            targets: self.task_move_targets(index, ""),
+            focused: 0,
+            matched_query: String::new(),
+        });
+    }
+
+    // Where the task at `index` can move for `query`: fuzzy-matching sections other than its
+    // own, best first, then the typed name when it is a valid name no section has yet. A
+    // section named exactly (in any case) comes first. [-] is offered to any sectioned task,
+    // even when no task is unsectioned yet.
+    fn task_move_targets(&self, index: usize, query: &str) -> Vec<MoveTarget> {
+        let own_view = match &self.tasks[index].section {
+            Some(section) => SectionView::Named(section.to_lowercase()),
+            None => SectionView::Unsectioned,
+        };
+
+        let mut candidates = vec![(SectionView::Unsectioned, UNSECTIONED_NAME.to_owned())];
+
+        for (view, label) in self.section_tabs() {
+            if matches!(view, SectionView::Named(_)) {
+                candidates.push((view, label));
+            }
+        }
+
+        candidates.retain(|(view, _)| *view != own_view);
+
+        let query = query.trim();
+        let names: Vec<&str> = candidates.iter().map(|(_, name)| name.as_str()).collect();
+        let mut ranked = crate::search::fuzzy_rank(query, &names);
+
+        let exact = ranked
+            .iter()
+            .position(|&found| candidates[found].1.to_lowercase() == query.to_lowercase());
+
+        if let Some(position) = exact {
+            let found = ranked.remove(position);
+            ranked.insert(0, found);
+        }
+
+        let mut targets: Vec<MoveTarget> = ranked
+            .into_iter()
+            .map(|found| {
+                let (view, name) = candidates[found].clone();
+                MoveTarget::Existing { view, name }
+            })
+            .collect();
+
+        // `section_order` lists exactly the keys that tasks use, the task's own included.
+        if !invalid_section_name(query) && !self.section_order.contains(&query.to_lowercase()) {
+            targets.push(MoveTarget::New(query.to_owned()));
+        }
+
+        targets
+    }
+
+    // After the move picker's query changes, find the targets again and focus the best one.
+    // Cursor moves leave the query, and so the focus, alone.
+    fn refresh_task_move(&mut self) {
+        let Mode::MovingTask(picker) = &self.mode else {
+            return;
+        };
+
+        if picker.input.text() == picker.matched_query {
+            return;
+        }
+
+        let query = picker.input.text().to_owned();
+        let targets = self.task_move_targets(picker.index, &query);
+
+        if let Mode::MovingTask(picker) = &mut self.mode {
+            picker.targets = targets;
+            picker.focused = 0;
+            picker.matched_query = query;
+        }
+    }
+
+    // Enter in the move picker: an existing section takes the task at once, and a new one
+    // asks first.
+    fn accept_task_move(&mut self, storage: &Storage) -> Result<()> {
+        let Mode::MovingTask(picker) = &self.mode else {
+            return Ok(());
+        };
+
+        let index = picker.index;
+
+        match picker.targets.get(picker.focused).cloned() {
+            Some(MoveTarget::Existing { view, name }) => {
+                self.move_task_to_section(index, view, &name, storage)?;
+            }
+            Some(MoveTarget::New(_)) => {
+                if let Mode::MovingTask(picker) = std::mem::replace(&mut self.mode, Mode::Normal) {
+                    self.mode = Mode::ConfirmNewSection(picker);
+                }
+            }
+            // Nothing matches, so the query can't be a new name either; say why.
+            None => {
+                let query = picker.input.text().trim();
+
+                if query.is_empty() {
+                    self.show_important_message("Type a section name");
+                } else if invalid_section_name(query) {
+                    self.show_important_message("Section names are one word without colons");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_confirm_new_section_key(&mut self, key: KeyEvent, storage: &Storage) -> Result<()> {
+        match key.code {
+            KeyCode::Enter => {
+                let Mode::ConfirmNewSection(picker) = &self.mode else {
+                    return Ok(());
+                };
+
+                let Some(MoveTarget::New(name)) = picker.targets.get(picker.focused).cloned()
+                else {
+                    return Ok(());
+                };
+
+                let index = picker.index;
+                let view = SectionView::Named(name.to_lowercase());
+                self.move_task_to_section(index, view, &name, storage)?;
+            }
+            KeyCode::Esc => {
+                if let Mode::ConfirmNewSection(picker) =
+                    std::mem::replace(&mut self.mode, Mode::Normal)
+                {
+                    self.mode = Mode::MovingTask(picker);
+                }
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    // Give the task at `index` the section `view` names (`name` spells a named one), put it
+    // last in that section, and follow it to that tab. The task keeps its identity. It goes
+    // right after the section's last task, or to the end of the list when the section has no
+    // tasks yet, as a new section's tab joins at the end.
+    fn move_task_to_section(
+        &mut self,
+        index: usize,
+        view: SectionView,
+        name: &str,
+        storage: &Storage,
+    ) -> Result<()> {
+        let section = match view {
+            SectionView::Named(_) => Some(name.to_owned()),
+            SectionView::Unsectioned | SectionView::All => None,
+        };
+
+        let mut tasks = self.tasks.clone();
+        let mut task = tasks.remove(index);
+        task.section = section;
+
+        let destination = match tasks
+            .iter()
+            .rposition(|other| view_includes_task(&view, other))
+        {
+            Some(last) => last + 1,
+            None => tasks.len(),
+        };
+        tasks.insert(destination, task);
+
+        self.commit_checklist_change(
+            tasks,
+            self.section_order.clone(),
+            view,
+            Some(destination),
+            format!("move task to {name}"),
+            storage,
+        )?;
+
+        self.mode = Mode::Normal;
+        self.show_routine_message(format!("Moved to {name}"));
+
+        Ok(())
     }
 
     // Move the current section tab `count` places. [*] and [-] stay where they are, and the
@@ -1653,12 +1873,17 @@ impl App {
                 | Mode::Editing { .. }
                 | Mode::Searching { .. }
                 | Mode::RenamingSection { .. }
-                | Mode::PickingSectionTab { .. } => {
+                | Mode::PickingSectionTab { .. }
+                | Mode::MovingTask(_) => {
                     self.handle_text_input_key(key, storage)?;
                     false
                 }
                 Mode::ConfirmClearNonCarried => {
                     self.handle_confirm_clear_non_carried_key(key, storage)?;
+                    false
+                }
+                Mode::ConfirmNewSection(_) => {
+                    self.handle_confirm_new_section_key(key, storage)?;
                     false
                 }
                 Mode::Help { .. } => {
@@ -1674,6 +1899,7 @@ impl App {
 
         self.refresh_search(previous_query.as_deref());
         self.refresh_section_picker();
+        self.refresh_task_move();
         self.refresh_template_filter(previous_filter.as_deref());
         self.explain_rename_problem();
         self.explain_template_name_problem();
@@ -1793,12 +2019,21 @@ impl App {
             {
                 true
             }
+            Mode::MovingTask(_)
+                if matches!(
+                    key.code,
+                    KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down
+                ) =>
+            {
+                true
+            }
             Mode::Adding(_, _)
             | Mode::Editing { .. }
             | Mode::Searching { .. }
             | Mode::RenamingSection { .. }
-            | Mode::PickingSectionTab { .. } => repeats_while_typing(key.code),
-            Mode::ConfirmClearNonCarried => false,
+            | Mode::PickingSectionTab { .. }
+            | Mode::MovingTask(_) => repeats_while_typing(key.code),
+            Mode::ConfirmClearNonCarried | Mode::ConfirmNewSection(_) => false,
             Mode::Templates(picker) => picker.repeat_allowed(key),
             // Holding a scroll key keeps scrolling; `?` and Esc open or close once per press.
             Mode::Help { .. } => {
@@ -1970,6 +2205,34 @@ impl App {
             }
         }
 
+        if let Mode::MovingTask(picker) = &mut self.mode {
+            // Other keys edit the query below, like any other input.
+            let count = picker.targets.len();
+
+            match key.code {
+                KeyCode::Tab | KeyCode::Down => {
+                    if count > 0 {
+                        picker.focused = (picker.focused + 1) % count;
+                    }
+
+                    return Ok(());
+                }
+                KeyCode::BackTab | KeyCode::Up => {
+                    if count > 0 {
+                        picker.focused = (picker.focused + count - 1) % count;
+                    }
+
+                    return Ok(());
+                }
+                KeyCode::Enter => return self.accept_task_move(storage),
+                KeyCode::Esc => {
+                    self.mode = Mode::Normal;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
         if matches!(self.mode, Mode::Adding(..) | Mode::Editing { .. }) {
             match key.code {
                 KeyCode::Tab | KeyCode::BackTab => {
@@ -2057,8 +2320,10 @@ impl App {
             }
             Mode::Searching { .. }
             | Mode::PickingSectionTab { .. }
+            | Mode::MovingTask(_)
             | Mode::Normal
             | Mode::ConfirmClearNonCarried
+            | Mode::ConfirmNewSection(_)
             | Mode::Help { .. }
             | Mode::Templates(_) => return Ok(()),
         }
@@ -2175,6 +2440,10 @@ impl App {
                 self.wrap = !self.wrap;
                 self.viewport.reveal_selection = true;
                 self.show_routine_message(if self.wrap { "Wrap on" } else { "Wrap off" });
+            }
+            KeyCode::Char('M') => self.start_task_move(),
+            KeyCode::Char('m') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.start_task_move()
             }
             KeyCode::Char('m') => self.toggle_carryover(storage)?,
             KeyCode::Char('v') => self.open_task_links(),
@@ -2302,6 +2571,7 @@ impl App {
 
         self.refresh_search(previous_query.as_deref());
         self.refresh_section_picker();
+        self.refresh_task_move();
         self.refresh_template_filter(previous_filter.as_deref());
         self.explain_rename_problem();
         self.explain_template_name_problem();
