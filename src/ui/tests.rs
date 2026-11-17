@@ -1038,7 +1038,7 @@ fn copy_feedback_uses_the_border_without_changing_the_viewport() {
             app.border_style = border_style;
             let mut terminal = test_terminal(width, 12);
             let before = render(&mut terminal, &mut app);
-            app.request_clipboard_copy(&mut Vec::new());
+            app.copy_list_to_clipboard(&mut Vec::new());
 
             for notice in [
                 "Copy sent to terminal",

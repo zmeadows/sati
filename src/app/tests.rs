@@ -262,7 +262,7 @@ fn routine_and_important_status_messages_use_the_configured_duration() {
     assert!(expires_within_duration(&app));
 
     app.status_messages = false;
-    app.request_clipboard_copy(&mut BrokenOutput);
+    app.copy_list_to_clipboard(&mut BrokenOutput);
 
     assert!(notice(&app).is_some_and(|message| message.starts_with("Copy failed:")));
     assert!(expires_within_duration(&app));
@@ -293,9 +293,13 @@ fn disabled_status_messages_hide_confirmations_but_still_report_copy_failures() 
     assert!(app.status_message.is_none());
 
     let mut output = Vec::new();
-    app.request_clipboard_copy(&mut output);
+    app.copy_list_to_clipboard(&mut output);
     let mut expected = Vec::new();
-    crate::export::write_osc52_clipboard_request(&app.tasks, &mut expected).unwrap();
+    crate::export::write_osc52_clipboard_request(
+        &crate::export::markdown(&app.tasks, true),
+        &mut expected,
+    )
+    .unwrap();
 
     assert_eq!(output, expected);
     assert!(app.status_message.is_none());
@@ -305,7 +309,7 @@ fn disabled_status_messages_hide_confirmations_but_still_report_copy_failures() 
         assert!(app.status_message.is_none(), "{key}");
     }
 
-    app.request_clipboard_copy(&mut BrokenOutput);
+    app.copy_list_to_clipboard(&mut BrokenOutput);
 
     assert!(
         app.status_message
@@ -341,9 +345,13 @@ fn clipboard_output_and_errors_leave_tasks_selection_and_histories_unchanged() {
     let saved = fixture.storage.load().unwrap();
     app.viewport.scroll = 2;
     let mut output = Vec::new();
-    app.request_clipboard_copy(&mut output);
+    app.copy_list_to_clipboard(&mut output);
     let mut expected = Vec::new();
-    crate::export::write_osc52_clipboard_request(&tasks, &mut expected).unwrap();
+    crate::export::write_osc52_clipboard_request(
+        &crate::export::markdown(&tasks, true),
+        &mut expected,
+    )
+    .unwrap();
 
     assert_eq!(output, expected);
     assert_eq!(
@@ -351,14 +359,16 @@ fn clipboard_output_and_errors_leave_tasks_selection_and_histories_unchanged() {
         Some("Copy sent to terminal")
     );
 
-    for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+    for (code, kind) in [
+        (KeyCode::Char('c'), KeyEventKind::Repeat),
+        (KeyCode::Char('c'), KeyEventKind::Release),
+        (KeyCode::Char('C'), KeyEventKind::Repeat),
+        (KeyCode::Char('C'), KeyEventKind::Release),
+    ] {
         press(
             &mut app,
             &fixture,
-            KeyEvent {
-                kind,
-                ..KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)
-            },
+            KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind),
         );
 
         assert_eq!(
@@ -367,7 +377,7 @@ fn clipboard_output_and_errors_leave_tasks_selection_and_histories_unchanged() {
         );
     }
 
-    app.request_clipboard_copy(&mut BrokenOutput);
+    app.copy_list_to_clipboard(&mut BrokenOutput);
     assert_eq!(
         app.status_message.as_ref().map(StatusMessage::message),
         Some("Copy failed: output unavailable")
@@ -409,6 +419,7 @@ fn copy_key_remains_text_or_is_ignored_outside_normal_mode() {
     ] {
         app.mode = mode;
         press(&mut app, &fixture, KeyCode::Char('c'));
+        press(&mut app, &fixture, KeyCode::Char('C'));
 
         match &app.mode {
             Mode::Adding(input, _)
@@ -416,7 +427,7 @@ fn copy_key_remains_text_or_is_ignored_outside_normal_mode() {
             | Mode::Searching { input, .. }
             | Mode::RenamingSection { input }
             | Mode::PickingSectionTab { input, .. }
-            | Mode::MovingTask(TaskMove { input, .. }) => assert_eq!(input.text(), "c"),
+            | Mode::MovingTask(TaskMove { input, .. }) => assert_eq!(input.text(), "cC"),
             Mode::ConfirmClearNonCarried
             | Mode::ConfirmNewSection(_)
             | Mode::ConfirmPaste(_)
@@ -1728,17 +1739,60 @@ fn copying_in_a_tab_copies_only_its_tasks_with_full_text() {
     ] {
         app.select_tab(view);
         let mut output = Vec::new();
-        app.request_clipboard_copy(&mut output);
+        app.copy_list_to_clipboard(&mut output);
 
         let tasks: Vec<_> = shown
             .iter()
             .map(|&index| app.tasks[index].clone())
             .collect();
         let mut expected = Vec::new();
-        crate::export::write_osc52_clipboard_request(&tasks, &mut expected).unwrap();
+        crate::export::write_osc52_clipboard_request(
+            &crate::export::markdown(&tasks, true),
+            &mut expected,
+        )
+        .unwrap();
 
         assert_eq!(output, expected);
     }
+}
+
+#[test]
+fn copying_a_task_copies_its_stored_text_without_the_prefix_inside_its_tab() {
+    let mut app = app_with_texts(&["Work: read [the RFC](https://example.com/rfc)", "plain"]);
+    let osc52 = |contents: &str| {
+        let mut expected = Vec::new();
+        crate::export::write_osc52_clipboard_request(contents, &mut expected).unwrap();
+        expected
+    };
+
+    for (view, index, expected) in [
+        (
+            SectionView::All,
+            0,
+            "Work: read [the RFC](https://example.com/rfc)",
+        ),
+        (
+            SectionView::Named("work".into()),
+            0,
+            "read [the RFC](https://example.com/rfc)",
+        ),
+        (SectionView::Unsectioned, 1, "plain"),
+    ] {
+        app.select_tab(view);
+        app.list.select(Some(index));
+        let mut output = Vec::new();
+        app.copy_task_to_clipboard(&mut output);
+
+        assert_eq!(output, osc52(expected));
+        assert_eq!(notice(&app), Some("Copy sent to terminal"));
+    }
+
+    let mut empty = App::new(Vec::new());
+    let mut output = Vec::new();
+    empty.copy_task_to_clipboard(&mut output);
+
+    assert!(output.is_empty());
+    assert_eq!(notice(&empty), Some("Nothing to copy"));
 }
 
 fn input_text(app: &App) -> &str {

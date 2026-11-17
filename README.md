@@ -92,7 +92,7 @@ sati export work            # only the Work section
 sati export --unsectioned   # only tasks without a section
 ```
 
-In the checklist, `c` copies the current tab as Markdown through the terminal. If your terminal doesn't support that, see [Export and clipboard](docs/USAGE.md#export-and-clipboard).
+In the checklist, `C` copies the current tab as Markdown through the terminal, and `c` copies the selected task's text. If your terminal doesn't support that, see [Export and clipboard](docs/USAGE.md#export-and-clipboard).
 
 ## Documentation
 

@@ -1768,15 +1768,36 @@ impl App {
         self.insert_task(text, placement, "paste task", storage)
     }
 
-    pub fn request_clipboard_copy(&mut self, output: &mut impl std::io::Write) {
+    // Copies the active view's tasks to the system clipboard as a Markdown checklist.
+    pub fn copy_list_to_clipboard(&mut self, output: &mut impl std::io::Write) {
         // Inside a tab, copy only what that tab shows.
         let visible: Vec<Task> = self
             .active_view_task_indices()
             .into_iter()
             .map(|index| self.tasks[index].clone())
             .collect();
+        let contents = crate::export::markdown(&visible, true);
 
-        match crate::export::write_osc52_clipboard_request(&visible, output) {
+        self.send_to_clipboard(&contents, output);
+    }
+
+    // Copies the selected task's text, exactly as stored, to the system clipboard. Like its row,
+    // it leaves out the section prefix inside that section's tab.
+    pub fn copy_task_to_clipboard(&mut self, output: &mut impl std::io::Write) {
+        let Some(task) = self.list.selected().and_then(|index| self.tasks.get(index)) else {
+            self.show_routine_message("Nothing to copy");
+            return;
+        };
+        let contents = match self.view {
+            SectionView::Named(_) => task.text.clone(),
+            SectionView::All | SectionView::Unsectioned => task.full_text(),
+        };
+
+        self.send_to_clipboard(&contents, output);
+    }
+
+    fn send_to_clipboard(&mut self, contents: &str, output: &mut impl std::io::Write) {
+        match crate::export::write_osc52_clipboard_request(contents, output) {
             Ok(()) => self.show_routine_message("Copy sent to terminal"),
             // Failures are always reported, even when confirmations are disabled.
             Err(error) => self.show_important_message(format!("Copy failed: {error}")),
@@ -2512,7 +2533,11 @@ impl App {
                     storage,
                 )?;
             }
-            KeyCode::Char('c') => self.request_clipboard_copy(&mut std::io::stdout().lock()),
+            KeyCode::Char('C') => self.copy_list_to_clipboard(&mut std::io::stdout().lock()),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.copy_list_to_clipboard(&mut std::io::stdout().lock());
+            }
+            KeyCode::Char('c') => self.copy_task_to_clipboard(&mut std::io::stdout().lock()),
             KeyCode::Char('q') => return Ok(true),
             KeyCode::Char('u') => self.undo(storage)?,
             KeyCode::Char('b') => self.show_ages = !self.show_ages,

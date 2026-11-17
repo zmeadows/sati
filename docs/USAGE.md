@@ -12,7 +12,7 @@ Once any task has a section, tabs appear on the top border:
 - `[-]` shows tasks without a section, when there are any.
 - Each section follows with its own tab. A new section starts at the right end, and a section disappears with its last task.
 
-A section tab is a view of the same list, not a separate list. It hides the prefix, and movement, reordering, search, clearing, and `c` apply only to its tasks. Adding a task from a section tab suggests that section, and while the input is empty or a single partial word, `Tab` cycles through matching sections.
+A section tab is a view of the same list, not a separate list. It hides the prefix, and movement, reordering, search, clearing, and `C` apply only to its tasks. Adding a task from a section tab suggests that section, and while the input is empty or a single partial word, `Tab` cycles through matching sections.
 
 `s` then a digit jumps to a tab by position (`s1` is `[*]`, `s0` the tenth), and `` ` `` finds a tab by fuzzy name. Switching to a tab that doesn't contain the selected task selects its first unfinished task. `'` returns to the tab and task you were on before your last jump; press it again to go back. `E` renames the current section on every task in it, and `L` / `H` move its tab without reordering any tasks. `M` moves the selected task to the bottom of a section you find by name, or to a new one after you confirm its name, and follows it to that tab.
 
@@ -25,7 +25,7 @@ A task can link to web pages in two ways:
 
 Only `http` and `https` links are recognized; anything else stays as typed. Editing a task (`e`) shows its text exactly as stored, and copying, pasting, and `tasks.json` all keep it that way. Search matches what a row shows, so it finds a link's title but not the URL behind it.
 
-Click a link to open it in your default browser (clicking elsewhere on the task still checks it off), or press `v` to open every link in the selected task. sati also marks links as terminal hyperlinks (OSC 8), so with `--no-mouse` the terminal's own link click works in terminals that support them; tmux needs `set -as terminal-features ',*:hyperlinks'`. `sati export` and `c` write links as Markdown links.
+Click a link to open it in your default browser (clicking elsewhere on the task still checks it off), or press `v` to open every link in the selected task. sati also marks links as terminal hyperlinks (OSC 8), so with `--no-mouse` the terminal's own link click works in terminals that support them; tmux needs `set -as terminal-features ',*:hyperlinks'`. `sati export` and `C` write links as Markdown links.
 
 ## Templates
 
@@ -79,7 +79,7 @@ Pasting several lines into the checklist, or into a new task's prompt, asks whet
 
 `sati export` writes Markdown to stdout and errors to stderr. It only reads `tasks.json`, so it is safe to run while sati is open. Completed tasks become `- [x]` items; pending and carried tasks become `- [ ]`. When exporting a section, its tasks are written without their prefix.
 
-`c` sends the current tab's Markdown to the terminal with OSC 52. The terminal must allow clipboard writes, and a multiplexer such as tmux must pass them through. sati can't detect whether that worked: "Copy sent to terminal" means only that it was sent. If it doesn't work, pipe an export into a clipboard tool:
+`C` sends the current tab's Markdown to the terminal with OSC 52, and `c` sends only the selected task's text, exactly as stored and without its section prefix inside a section tab. The terminal must allow clipboard writes, and a multiplexer such as tmux must pass them through. sati can't detect whether that worked: "Copy sent to terminal" means only that it was sent. If it doesn't work, pipe an export into a clipboard tool:
 
 | Platform | Command |
 | --- | --- |

@@ -156,11 +156,10 @@ fn unknown_section(
     }
 }
 
-// Asks the terminal to put `tasks` on the clipboard as Markdown. Success means only that the
-// request was written; the terminal may ignore it, and nothing reports whether it did.
-pub fn write_osc52_clipboard_request(tasks: &[Task], output: &mut impl Write) -> io::Result<()> {
+// Asks the terminal to put `contents` on the clipboard. Success means only that the request
+// was written; the terminal may ignore it, and nothing reports whether it did.
+pub fn write_osc52_clipboard_request(contents: &str, output: &mut impl Write) -> io::Result<()> {
     const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let contents = markdown(tasks, true);
     let mut sequence = String::from("\x1b]52;c;");
 
     for chunk in contents.as_bytes().chunks(3) {
@@ -271,21 +270,17 @@ mod tests {
         }];
 
         let mut output = Output::default();
-        write_osc52_clipboard_request(&tasks, &mut output).unwrap();
+        write_osc52_clipboard_request(&markdown(&tasks, true), &mut output).unwrap();
         assert_eq!(output.bytes, b"\x1b]52;c;LSBbIF0g5pel5pys6KqeCg==\x07");
         assert!(output.flushed);
 
         let mut empty = Vec::new();
-        write_osc52_clipboard_request(&[], &mut empty).unwrap();
+        write_osc52_clipboard_request("", &mut empty).unwrap();
         assert_eq!(empty, b"\x1b]52;c;\x07");
 
-        for (text, expected) in [
-            ("a", "LSBbIF0gYQo="),
-            ("ab", "LSBbIF0gYWIK"),
-            ("abc", "LSBbIF0gYWJjCg=="),
-        ] {
+        for (text, expected) in [("a", "YQ=="), ("ab", "YWI="), ("abc", "YWJj")] {
             let mut output = Vec::new();
-            write_osc52_clipboard_request(&[Task::new(text)], &mut output).unwrap();
+            write_osc52_clipboard_request(text, &mut output).unwrap();
 
             assert_eq!(output, format!("\x1b]52;c;{expected}\x07").as_bytes());
         }

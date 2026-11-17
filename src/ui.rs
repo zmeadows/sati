@@ -1415,7 +1415,8 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
         ("Paste below / above", "p / P", "Ctrl+Y (below)"),
         ("Undo", "u", "Ctrl+Z"),
         ("Redo", "", "Ctrl+R"),
-        ("Copy list as Markdown", "c", ""),
+        ("Copy task text", "c", ""),
+        ("Copy list as Markdown", "C", ""),
     ]),
     ("Templates", &[
         ("Open templates", "i", "Alt+I"),
