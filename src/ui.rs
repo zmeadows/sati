@@ -29,8 +29,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
     let styles = *app.appearance.styles();
     frame.render_widget(Block::default().style(styles.normal), area);
 
-    // The templates screen and the task finder replace the checklist, and handle their own
-    // clicks.
+    // The templates screen, the task finder, and the keyboard reference replace the
+    // checklist, and handle their own clicks.
+    if matches!(app.mode, Mode::Help { .. }) {
+        app.viewport.tab_targets.clear();
+        draw_help(frame, area, app);
+        return Rect::default();
+    }
+
     if matches!(app.mode, Mode::Templates(_)) {
         app.viewport.tab_targets.clear();
         draw_templates(frame, area, app);
@@ -165,10 +171,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Rect {
 
     if let Mode::ConfirmPaste(pasted) = &app.mode {
         draw_paste_confirmation(frame, area, &styles, app, &pasted.tasks);
-    }
-
-    if matches!(app.mode, Mode::Help { .. }) {
-        draw_help(frame, area, app);
     }
 
     rows
@@ -1474,7 +1476,7 @@ const HELP_GROUPS: &[(&str, &[HelpRow])] = &[
 // each action's keys go on the line under it instead.
 const HELP_WIDE_MIN_WIDTH: u16 = 65;
 
-// Below either minimum there is no usable modal, so the reference asks for more room.
+// Below either minimum there is no usable layout, so the reference asks for more room.
 const HELP_MIN_WIDTH: u16 = 35;
 const HELP_MIN_HEIGHT: u16 = 5;
 
@@ -1488,10 +1490,10 @@ const HELP_PADDING: usize = 1;
 const HELP_COLUMN_GAP: usize = 2;
 const HELP_KEYS_INDENT: usize = 3;
 
-// Borders on both sides of the modal.
+// Borders on both sides of the reference.
 const HELP_BORDERS: usize = 2;
 
-// Draw the keyboard reference centered over the checklist, scrolled to the offset in
+// Draw the keyboard reference in place of the checklist, scrolled to the offset in
 // `Mode::Help`. The layout is picked from the terminal size on every draw, so resizing
 // simply switches it; the offset is then clamped to the lines of whichever layout is shown.
 fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -1514,38 +1516,11 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let action_width = bindings().map(|(action, ..)| action.width()).max();
     let keys_width = bindings().map(|(_, keys, _)| keys.width()).max();
-    let alternative_width = bindings()
-        .map(|(.., alternative)| alternative.width())
-        .max();
     let action_width = action_width.unwrap_or(0);
     let keys_width = keys_width.unwrap_or(0);
-    let alternative_width = alternative_width.unwrap_or(0);
 
-    // Size the modal to its widest row, with the same padding on the right as on the left
-    // when there is room for it.
     let wide = area.width >= HELP_WIDE_MIN_WIDTH;
-
-    let row_width = if wide {
-        HELP_PADDING
-            + action_width
-            + HELP_COLUMN_GAP
-            + keys_width
-            + HELP_COLUMN_GAP
-            + alternative_width
-    } else {
-        bindings()
-            .map(|(action, keys, alternative)| {
-                let action_line = HELP_PADDING + action.width();
-                let keys_line = HELP_KEYS_INDENT + joined_keys(keys, alternative).width();
-                action_line.max(keys_line)
-            })
-            .max()
-            .unwrap_or(0)
-    };
-
-    let natural_width = row_width + HELP_PADDING + HELP_BORDERS;
-    let width = area.width.min(natural_width as u16);
-    let inner_width = usize::from(width).saturating_sub(HELP_BORDERS);
+    let inner_width = usize::from(area.width) - HELP_BORDERS;
 
     let padding = " ".repeat(HELP_PADDING);
     let keys_indent = " ".repeat(HELP_KEYS_INDENT);
@@ -1589,24 +1564,6 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
         }
     }
 
-    // Keep a row free above and below when there is room, so the reference reads as a modal.
-    let available_height = if area.height >= HELP_MIN_HEIGHT + 2 {
-        area.height - 2
-    } else {
-        area.height
-    };
-    let height = available_height.min((lines.len() + HELP_BORDERS) as u16);
-
-    let dialog = Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y + (area.height - height) / 2,
-        width,
-        height,
-    );
-
-    frame.render_widget(Clear, dialog);
-    frame.render_widget(Block::default().style(styles.normal), dialog);
-
     let mut block = Block::bordered()
         .border_type(border_type(app.border_style))
         .border_style(styles.border)
@@ -1616,12 +1573,12 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &mut App) {
             Span::styled(" ", styles.border),
         ]));
 
-    if HELP_CLOSE_HINT.width() + HELP_BORDERS <= usize::from(width) {
+    if HELP_CLOSE_HINT.width() + HELP_BORDERS <= usize::from(area.width) {
         block = block.title_bottom(Line::styled(HELP_CLOSE_HINT, styles.muted).right_aligned());
     }
 
-    let inner = block.inner(dialog);
-    frame.render_widget(block, dialog);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
     // Clamp the offset to this layout and size, and record the page for Page Up/Down.
     let visible_rows = usize::from(inner.height);

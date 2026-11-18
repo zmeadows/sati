@@ -3132,38 +3132,31 @@ fn help_state(app: &App) -> (usize, usize, usize) {
 }
 
 #[test]
-fn the_reference_is_a_centered_titled_modal_that_never_mentions_page_keys() {
+fn the_reference_fills_the_screen_in_place_of_the_checklist_and_never_mentions_page_keys() {
     for border_style in [BorderStyle::Square, BorderStyle::Rounded] {
         let mut app = app_with_texts(&["a", "b"]);
         app.border_style = border_style;
         app.mode = help_mode();
         let mut terminal = test_terminal(100, 200);
 
-        render(&mut terminal, &mut app);
+        let rows = render(&mut terminal, &mut app);
         let screen = screen(&terminal);
-
-        let top = screen
-            .lines()
-            .position(|line| line.contains("Keyboard shortcuts"))
-            .unwrap();
-        let bottom = screen
-            .lines()
-            .position(|line| line.contains("? or Esc to close"))
-            .unwrap();
-        let top_line: Vec<char> = screen.lines().nth(top).unwrap().chars().collect();
-        let (open, close) = if border_style == BorderStyle::Rounded {
-            ('╭', '╮')
+        let lines: Vec<&str> = screen.lines().collect();
+        let (top_left, bottom_right) = if border_style == BorderStyle::Rounded {
+            ("╭─ Keyboard shortcuts ", "? or Esc to close╯")
         } else {
-            ('┌', '┐')
+            ("┌─ Keyboard shortcuts ", "? or Esc to close┘")
         };
-        let left = top_line.iter().position(|c| *c == open).unwrap();
-        let right = top_line.iter().rposition(|c| *c == close).unwrap();
 
-        assert!(top.abs_diff(199 - bottom) <= 1, "vertically centered");
+        assert!(lines[0].starts_with(top_left), "{}", lines[0]);
+        assert!(lines[199].ends_with(bottom_right), "{}", lines[199]);
         assert!(
-            left > 0 && left.abs_diff(99 - right) <= 1,
-            "horizontally centered"
+            lines[1].starts_with(&format!("│ {}", HELP_GROUPS[0].0)),
+            "{}",
+            lines[1]
         );
+        assert!(!screen.contains("[ ] a"));
+        assert_eq!(rows, Rect::default());
         assert!(screen.contains("Next / previous tab    l / h, Tab / Shift+Tab  Alt+F / Alt+B"));
         assert!(screen.contains("Cancel                 Esc                     Ctrl+G"));
 
@@ -3171,7 +3164,7 @@ fn the_reference_is_a_centered_titled_modal_that_never_mentions_page_keys() {
             assert!(!screen.contains(unlisted), "{unlisted}");
         }
 
-        assert_eq!(help_state(&app), (0, 0, bottom - top - 1));
+        assert_eq!(help_state(&app), (0, 0, 198));
     }
 }
 
@@ -3329,12 +3322,12 @@ fn closing_the_reference_redraws_the_checklist_exactly_as_before() {
     press_keys(&mut app, &fixture, "?");
     render(&mut terminal, &mut app);
     press_keys(&mut app, &fixture, "j");
-    let help_rows = render(&mut terminal, &mut app);
+    render(&mut terminal, &mut app);
     press_keys(&mut app, &fixture, "?");
     let after_rows = render(&mut terminal, &mut app);
 
     assert_eq!(screen(&terminal), before);
-    assert_eq!((help_rows, after_rows), (rows, rows));
+    assert_eq!(after_rows, rows);
     assert_eq!(app.list.selected(), Some(20));
 }
 

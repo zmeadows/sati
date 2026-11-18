@@ -2750,8 +2750,8 @@ impl App {
         self.pending_count = None;
         self.pending_section_jump = None;
 
-        // The keyboard reference covers the checklist: the wheel scrolls it, and clicks never
-        // reach the tasks or tabs underneath.
+        // The keyboard reference replaces the checklist: the wheel scrolls it, and clicks do
+        // nothing.
         if matches!(self.mode, Mode::Help { .. }) {
             match event.kind {
                 MouseEventKind::ScrollDown => self.scroll_help(true, 1),
